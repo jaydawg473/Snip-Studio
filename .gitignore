@@ -1,0 +1,37 @@
+# Generated binaries and packages
+*.exe
+*.dll
+*.pdb
+*.zip
+*.msi
+dist/
+release*/
+preview*/
+qa*/
+installer/output/
+
+# Captures, media, preferences, and development output
+checks/
+tmp/
+output/
+reports/
+*.mp4
+*.wav
+*.pdf
+preferences.xml
+*.tmp
+*.log
+
+# Publisher-only signing and verification output
+Sign-Release.ps1
+*Signature Verification.json
+SHA256SUMS.txt
+.publication-audit.txt
+
+# Editor and OS state
+.vs/
+.vscode/
+bin/
+obj/
+Thumbs.db
+Desktop.ini

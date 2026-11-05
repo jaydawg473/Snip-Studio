@@ -1,0 +1,12 @@
+SNIP STUDIO - RELEASE VALIDATION NOTES
+
+Build success, source review, data/export checks, visual checks, device checks,
+installation, and user acceptance are separate forms of evidence.
+
+Consult the corresponding release notes for the checks actually performed.
+A local unsigned source build does not inherit the publisher's release
+signature or establish live device, Windows Share, printer, HDR, or installer
+behavior on another computer.
+
+The source does not include private signing credentials, local screenshots,
+test recordings, or generated development binaries.
