@@ -93,6 +93,9 @@ namespace SnipStudio
         private Timer scrollTimer;
         private Timer recognitionTimer;
         private PointF zoomOriginOffset;
+        private bool zoomViewActive;
+        private PointF zoomViewOrigin;
+        private Point zoomNativeScrollPosition;
         private PointF zoomAnchorViewport, zoomAnchorImage;
         private float zoomTarget;
         private double zoomVelocity;
@@ -212,12 +215,22 @@ namespace SnipStudio
 
         private void ZoomBy(float factor, Point viewportPoint)
         {
+            ZoomByAt(factor, viewportPoint, Stopwatch.GetTimestamp());
+        }
+
+        // The clock boundary is separate so the production retarget/frame path
+        // can be checked deterministically without pumping a native timer loop.
+        private void ZoomByAt(float factor, Point viewportPoint, long now)
+        {
             if (!HasImage || factor <= 0 || Single.IsNaN(factor) || Single.IsInfinity(factor)) return;
             ChangeViewIntent();
-            long now = Stopwatch.GetTimestamp();
             if (ScrollAnimationActive) AdvanceScroll(now);
             bool continuing = ZoomAnimationActive;
-            if (continuing) AdvanceZoom(now);
+            if (continuing)
+            {
+                AdvanceZoom(now);
+                continuing = ZoomAnimationActive;
+            }
             float pending = continuing ? zoomTarget : zoom;
             // An opposite wheel direction should respond now, without first
             // finishing the destination queued by the previous direction.
@@ -230,16 +243,19 @@ namespace SnipStudio
             {
                 CancelGesture();
                 fit = false;
-                updatingView = true;
-                try { PositionViewOrigin(currentOrigin); }
-                finally { updatingView = false; }
+                // Native scrollbars move in whole pixels and can change the
+                // viewport when their range changes. Keep rendering in one
+                // floating coordinate space for this animation instead.
+                zoomViewOrigin = currentOrigin;
+                zoomNativeScrollPosition = AutoScrollPosition;
+                zoomViewActive = true;
                 zoomVelocity = 0;
             }
             zoomTarget = target;
             zoomAnchorViewport = viewportPoint;
             zoomAnchorImage = imagePoint;
             zoomFrameTimestamp = now;
-            if (Math.Abs(zoomTarget - zoom) < 0.00001f) { StopZoomAnimation(); ApplyZoom(target, viewportPoint, imagePoint); return; }
+            if (Math.Abs(zoomTarget - zoom) < 0.00001f) { ApplyZoom(target, viewportPoint, imagePoint); StopZoomAnimation(); return; }
             if (zoomTimer == null)
             {
                 // Request frequent UI frames. Progress follows Stopwatch time,
@@ -265,13 +281,14 @@ namespace SnipStudio
             zoomVelocity = motion.Velocity;
             float next = (float)Math.Exp(motion.Position);
             double extent = Math.Max(ImageSize.Width, ImageSize.Height);
-            if (Math.Abs(next - zoomTarget) * extent < 0.1 && Math.Abs(zoomVelocity * next) * extent < 2)
+            bool finished = Math.Abs(next - zoomTarget) * extent < 0.1 && Math.Abs(zoomVelocity * next) * extent < 2;
+            if (finished)
             {
-                zoomTimer.Stop();
                 next = zoomTarget;
                 zoomVelocity = 0;
             }
             ApplyZoom(next, zoomAnchorViewport, zoomAnchorImage);
+            if (finished) StopZoomAnimation();
         }
 
         private void ScrollByWheel(int delta, bool horizontal)
@@ -361,7 +378,9 @@ namespace SnipStudio
             try
             {
                 zoom = Math.Max(0.01f, Math.Min(8f, value));
-                PositionViewOrigin(ViewportTransform.OriginForAnchor(imageAnchor, viewportAnchor, zoom));
+                PointF origin = ViewportTransform.OriginForAnchor(imageAnchor, viewportAnchor, zoom);
+                if (zoomViewActive) zoomViewOrigin = origin;
+                else PositionViewOrigin(origin);
             }
             finally { updatingView = false; }
             Invalidate();
@@ -414,10 +433,31 @@ namespace SnipStudio
 
         private void StopZoomAnimation()
         {
-            if (zoomTimer == null || !zoomTimer.Enabled) return;
-            zoomTimer.Stop();
+            bool wasActive = ZoomAnimationActive || zoomViewActive;
+            if (zoomTimer != null) zoomTimer.Stop();
             zoomVelocity = 0;
-            Invalidate();
+            if (zoomViewActive)
+            {
+                PointF origin = zoomViewOrigin;
+                zoomViewActive = false;
+                if (HasImage && !disposingCanvas)
+                {
+                    bool wasUpdating = updatingView;
+                    updatingView = true;
+                    try { PositionViewOrigin(origin); }
+                    finally { updatingView = wasUpdating; }
+                }
+            }
+            if (wasActive) Invalidate();
+        }
+
+        private void FollowNativeScrollDuringZoom()
+        {
+            if (!zoomViewActive) return;
+            Point current = AutoScrollPosition;
+            zoomViewOrigin = new PointF(zoomViewOrigin.X + current.X - zoomNativeScrollPosition.X,
+                zoomViewOrigin.Y + current.Y - zoomNativeScrollPosition.Y);
+            zoomNativeScrollPosition = current;
         }
 
         private void StopScrollAnimation()

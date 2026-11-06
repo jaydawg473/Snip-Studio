@@ -258,13 +258,24 @@ namespace SnipStudio
                 catch (Exception ex) { ShowFailure("The recording was saved, but an automatic action could not finish", ex); }
                 if (taskbarFailure != null) ShowFailure("The recording was saved, but ended early because Windows could not keep a taskbar hidden", taskbarFailure);
                 if (restoreFailure != null) ShowFailure("The recording was saved, but Windows could not confirm taskbar restoration", restoreFailure);
-                using (VideoReviewForm review = new VideoReviewForm(recordingPath, preferences)) review.ShowDialog(this);
+                // An approved application exit waits for finalization, but
+                // does not open an optional review that would block Setup.
+                if (!closeAfterRecording)
+                    using (VideoReviewForm review = new VideoReviewForm(recordingPath, preferences)) review.ShowDialog(this);
             }
             else
             {
                 ShowFailure("Recording could not be saved. Your snip is unchanged",
                     failure ?? new InvalidOperationException("The recording did not finish successfully."));
                 if (restoreFailure != null) ShowFailure("Windows could not confirm taskbar restoration", restoreFailure);
+                if (closeAfterRecording)
+                {
+                    // Do not finish an approved update exit after a failed
+                    // recording save. Keep this editor available for review.
+                    closeAfterRecording = false;
+                    forceExit = false;
+                    Program.CancelApplicationExit();
+                }
             }
             if (closeAfterRecording && !IsDisposed) { closeAfterRecording = false; Close(); }
         }

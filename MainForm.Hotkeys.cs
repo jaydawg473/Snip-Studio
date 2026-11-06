@@ -205,7 +205,12 @@ namespace SnipStudio
             return true;
         }
 
-        private void ExitFromTray()
+        internal void ExitFromTray()
+        {
+            ExitFromTray(null);
+        }
+
+        internal void ExitFromTray(IEnumerable<MainForm> trackedEditors)
         {
             if (ModalOpenCount() != 0)
             {
@@ -214,15 +219,26 @@ namespace SnipStudio
             }
             Program.RequestApplicationExit();
             List<MainForm> windows = new List<MainForm>();
+            if (trackedEditors != null)
+                foreach (MainForm main in trackedEditors)
+                    if (main != null && !main.IsDisposed && !windows.Contains(main)) windows.Add(main);
+            // The context can own never-shown capture editors that have a
+            // native handle but are not in Application.OpenForms yet.
+            if (!IsDisposed && !windows.Contains(this)) windows.Add(this);
             foreach (Form form in Application.OpenForms)
             {
                 MainForm main = form as MainForm;
-                if (main != null && !main.IsDisposed) { main.forceExit = true; windows.Add(main); }
+                if (main != null && !main.IsDisposed && !windows.Contains(main)) windows.Add(main);
             }
+            foreach (MainForm main in windows) main.forceExit = true;
             foreach (MainForm main in windows)
             {
                 if (main.IsDisposed) continue;
-                main.ShowFromTray();
+                // Empty never-shown listener/capture editors need no visual
+                // round-trip. Show any real work before its normal prompts.
+                if (main.Visible || main.canvas.HasImage || main.recordingSession ||
+                    main.scrollingCaptureActive || main.IsCaptureProcessingPending)
+                    main.ShowFromTray();
                 main.Close();
                 // Close may remain pending while a video finalizes. A non-recording,
                 // non-closing window means the user canceled an unsaved-work prompt.

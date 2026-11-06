@@ -1,6 +1,6 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.5.4
+# Snip Studio 0.5.5
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
@@ -20,6 +20,8 @@ Capture across monitors, annotate images, edit recognized text, and export the r
 Source-font matching is an **estimate** from screenshot pixels and installed fonts. Line replacement uses a selectable solid fill; complex backgrounds are not reconstructed. Ambiguous overlapping text is guarded. Exports flatten annotations; notes remain editable in the open editor. PDFs are not searchable text documents or editable forms, and transparency becomes white.
 
 Ctrl+wheel zooms toward the pointer by default; the wheel alone scrolls. Settings can switch to plain-wheel zoom, remember or reset capture delay, and preview screenshot-border color and thickness inline.
+
+The 0.5.5 wheel animation keeps its drawing position separate from native scrollbar updates until the motion finishes or is interrupted. This addresses jitter during rapid wheel input and direction changes while retaining pointer anchoring. Component checks passed; physical wheel feel and painting still need live acceptance.
 
 The More menu anchors to its button and clamps its position to that monitor's working area. Oversized menus use native scrolling. Left/right toolbars contribute their complete measured height to the editor minimum, bounded by the working area; shorter displays keep a scrolling fallback. Physical monitor/DPI placement and pointer dragging still need live acceptance.
 
@@ -55,6 +57,8 @@ Taskbar hiding applies to screenshots and video. Hide taskbars and Keep main mon
 
 Requires Windows 10 or 11 and .NET Framework 4.8. Use a complete signed per-user release installer or extract a portable ZIP. Setup does not launch the app. Its optional sign-in component is unchecked by default. Save work and choose **Exit Snip Studio** before an upgrade; the installer does not force-close running copies.
 
+The 0.5.5 installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and diagnostic checks never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
+
 Closing an editor closes that snip. **Keep capture shortcuts after closing** is on by default, leaving a small notification-area listener for Ctrl+Alt+S and Print Screen. Choose **Exit** from its menu to stop the listener, or disable that preference to exit with the last editor. Keeping the full editor hidden in the notification area is a separate opt-in. Windows can reserve Print Screen; Snip Studio does not silently change Windows' routing.
 
 Build the application in PowerShell on Windows:
@@ -68,7 +72,7 @@ The C# 5 build uses the installed Windows Framework compiler and WinRT metadata,
 Selected `checks/Verify-*.ps1` sources cover menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
 ```powershell
-powershell.exe -STA -NoProfile -File .\checks\Verify-MenuPlacement.ps1 -ReleaseFolder release-0.5.4-signed -ExpectedVersion 0.5.4.0
+powershell.exe -STA -NoProfile -File .\checks\Verify-MenuPlacement.ps1 -ReleaseFolder release-0.5.5-signed -ExpectedVersion 0.5.5.0
 ```
 
 The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
@@ -79,6 +83,8 @@ See [installer packaging](installer/README.md) for the signed-release inputs. Pr
 
 Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Sharing, external-editor opening, and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-`VALIDATION.txt` records 658 focused checks against the signed 0.5.4 application: menu placement, complete side-toolbar height, removal-selection movement/deletion/Undo, preview rendering, fullscreen layout, view preservation and startup compatibility. These used the application as a library; they did not display an editor or popup, capture a desktop, inject native input or use user preferences. Earlier scrolling suites are identified as historical. Physical monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior and full installation/upgrade/uninstall still need acceptance. HDR correction remains experimental.
+The 0.5.5 application has a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` records these results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
+
+Historically, 658 focused checks passed against signed **0.5.4**; those results and earlier scrolling suites do not verify 0.5.5. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
 
 An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.

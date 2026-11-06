@@ -1,3 +1,59 @@
+SNIP STUDIO 0.5.5 - APPROVED UPDATE CLOSE AND ZOOM FRAME GEOMETRY, 2026-11-06
+
+Signed application SHA256:
+D116F580ADCB69F504E17424DF1A7460A5A69D6B42941F26B278DB954A2978A5
+Authenticode: Valid, timestamped Automation Forge LLC.
+
+Wheel animation now keeps a floating render origin and leaves native scrollbar
+range, position and viewport alone during each frame. It reconciles the native
+state once at completion/interruption and preserves pointer anchoring, reversal,
+late-event retargeting and the first native scrollbar-thumb movement. The old
+signed0.5.4 reproduced11changing-native-state frames. Preview interpolation
+selection is unchanged; physical smoothness is not claimed proven.
+
+Setup now asks Yes/No/Cancel before closing an exact-path installed copy when
+its files are in use; default No and silent/CHECKREADY paths do not close.
+The cooperative registered-message protocol acknowledges and defers normal
+app exit until after the native handler returns. Duplicate requests coalesce;
+a capability probe queues no exit. Normal save/cancel and deferred capture/
+recording finalization apply. The full tracked editor set, including hidden
+editors, is considered. Recording close skips optional review only after save;
+a recording-save failure cancels exit and preserves the editor.
+
+Legacy apps without this protocol receive a process-only Restart Manager
+normal shutdown request, registered with the validated PID and creation time.
+Flags are zero; no forced shutdown, global input or arbitrary process kill is
+used. An older shortcut listener may remain open. Setup stays blocked until
+its resource query proves both application/runtime files are free; otherwise
+manual Exit/Retry/Cancel is available. Other file-locking programs are not
+included in the shutdown session. Legacy RM's own OS timeout is distinct from
+the additional15second process-exit poll.
+
+590 checks passed against the exact signed application bytes above:
+-181actual wheel-frame/anchor checks; native scrollbar state stays unchanged
+ during animation and image anchor drift is bounded under0.01pixel in fixtures.
+-34cooperative protocol/deferred dispatch/coalescing/idle-lifetime checks and
+ signed call metadata for tracked-editor normal exit. No native broker ran.
+-25pure view-motion,10view-preservation,207side-toolbar layout,45removal-box
+ movement and88shortcut/lifetime/text-replacement regressions.
+Separately,38NSIS source-policy checks passed, including6negative in-memory
+mutations. Source checks establish guarded structure, not interactive behavior.
+
+No user app, native shutdown request, capture, visible editor/menu, injected
+input, user preferences or registry mutation was used by these app checks.
+WinForms timers/layout may create hidden timer/child-control handles. Only
+controlled synthetic geometry and lifecycle behavior were exercised.
+
+All114unchanged translation payloads match reviewed hashes; Node retains its
+original Valid OpenJS signature. Portable entries and final signatures are
+checked separately. Final compiled-installer CHECKREADY evidence is retained
+beside Setup and does not constitute a real install or approved-close trial.
+
+NOT LIVE VERIFIED: physical wheel feel/painting/DPI, actual approval/No/Cancel
+buttons, native broker/process discovery, real save-cancel/recording exit,
+legacy RM close, full install/upgrade/uninstall or endpoint-security acceptance.
+
+HISTORICAL RELEASE RECORDS FOLLOW
 SNIP STUDIO 0.5.4 - MENU, TOOLBAR HEIGHT AND REMOVAL SELECTION, 2026-11-06
 
 Signed application SHA256:

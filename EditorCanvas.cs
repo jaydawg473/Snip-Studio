@@ -202,6 +202,7 @@ namespace SnipStudio
         {
             get
             {
+                if (zoomViewActive) return zoomViewOrigin;
                 float width = ImageSize.Width * zoom, height = ImageSize.Height * zoom;
                 float x = fit ? (ClientSize.Width - width) / 2f : CanvasMargin + AutoScrollPosition.X + zoomOriginOffset.X;
                 float y = fit ? (ClientSize.Height - height) / 2f : CanvasMargin + AutoScrollPosition.Y + zoomOriginOffset.Y;
@@ -667,7 +668,11 @@ namespace SnipStudio
         protected override void OnScroll(ScrollEventArgs se)
         {
             if (!updatingView && preserveLayoutDepth == 0) ChangeViewIntent();
-            if (!updatingView) StopViewAnimations();
+            if (!updatingView)
+            {
+                FollowNativeScrollDuringZoom();
+                StopViewAnimations();
+            }
             base.OnScroll(se);
             Invalidate();
             if (!updatingView) RaiseViewChanged();

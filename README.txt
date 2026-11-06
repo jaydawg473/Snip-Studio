@@ -1,16 +1,13 @@
-SNIP STUDIO 0.5.4 — AUTOMATION FORGE
+SNIP STUDIO 0.5.5 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Install with "SnipStudio-0.5.4-Setup.exe", then open Snip Studio from the
+Install with "SnipStudio-0.5.5-Setup.exe", then open Snip Studio from the
 Start menu. Installation is for your Windows account, with an optional desktop
 shortcut. It does not launch the app or enable Windows startup automatically.
 The optional "Start Snip Studio at Windows sign-in" installer component is
 unchecked by default. It uses the saved background preferences at sign-in;
 installation itself does not start the listener or editor.
-Installer 0.5.4 corrects the file-use API call for the existing NSIS 3.04 compiler. Before changing installed
-files, it checks whether Snip Studio is using them. Save your work and choose
-More > Exit Snip Studio (or Exit from its tray menu), then Retry. Cancel leaves
-the existing installation in place. The installer never force-closes the app.
+When installed Snip Studio files are in use, Setup asks Yes/No/Cancel before attempting to close that installed copy. No is the default. Yes requests a normal exit with save/cancel prompts and recording finalization; it never forces termination. No or Cancel stops without replacing files. Setup waits, then checks file locks again. Older versions may not exit their shortcut listener automatically; if files stay in use, choose Exit from the tray and Retry. Silent installation and /CHECKREADY never close applications.
 Uninstalling keeps your screenshots, recordings, and preferences.
 
 For portable use, extract the ZIP and run "Snip Studio.exe". Keep the matching
@@ -61,7 +58,7 @@ In Move, select an arrow and drag its tip or tail handle to rotate or resize it.
 The color palette offers swatches, recent ink colors, and exact hex values.
 Click the Exact color square to open the honeycomb picker with RGB, hex,
 brightness, and current/new previews. Cancel leaves the previous color intact.
-Wheel zoom and scroll use short animated transitions. Ctrl + mouse wheel
+Wheel zoom and scroll use short animated transitions. Zoom frames keep their floating image origin separate from native scrollbar state, reconciling the scrollbar range only when the burst ends or is interrupted. Ctrl + mouse wheel
 zooms toward the pointer by default; the wheel alone
 scrolls. Turn off Hold Ctrl to zoom with the mouse wheel in Settings if you
 prefer plain-wheel zoom. Actual size (100%) is available in More > Zoom.
@@ -232,6 +229,5 @@ Icon sources and the optional regeneration tool are in assets/ and tools/.
 
 An independent Automation Forge app; not affiliated with Microsoft.
 
-0.5.4 VERIFICATION STATUS
-658 focused signed-library checks passed for menu positioning, complete side-toolbar height, moving a removal selection without changing pixels, deletion/Undo, preview rendering, fullscreen layout, view preservation and startup compatibility.
-The prior0.5.3 build passed621 scrolling and related checks; those are historical rather than claimed rerun here. See VALIDATION.txt for exact current coverage. No editor, popup, capture, native input or user settings were used by the current checks. Live multi-monitor/DPI positioning, pointer dragging and full installation/upgrade/uninstall still need user acceptance.
+0.5.5 VERIFICATION STATUS
+590 signed-library app checks passed, including 181 deterministic wheel-frame checks and 34 cooperative-updater-exit protocol/lifecycle checks. 38 installer source-policy checks passed. The previous signed0.5.4 reproduced per-frame native scrollbar churn. These checks do not establish physical wheel feel, native close prompts, recording shutdown or full installation/upgrade/uninstall; those still need acceptance. See VALIDATION.txt for exact coverage and limits.

@@ -12,6 +12,26 @@ using System.Windows.Forms;
 
 namespace SnipStudio
 {
+    // Separate from command-line/image-opening IPC: Setup probes this protocol
+    // read-only before it asks the user whether to request a normal app exit.
+    internal static class InstallerExitProtocol
+    {
+        internal const string MessageName = "AutomationForge.SnipStudio.RequestInstallerExit.v1";
+        internal const int Magic = 0x5355;
+        internal const int Probe = 1;
+        internal const int Request = 0;
+
+        internal static bool IsValid(IntPtr magic, IntPtr operation)
+        {
+            return magic == new IntPtr(Magic) && (operation == new IntPtr(Probe) || operation == new IntPtr(Request));
+        }
+
+        internal static bool RequestsExit(IntPtr magic, IntPtr operation)
+        {
+            return IsValid(magic, operation) && operation == new IntPtr(Request);
+        }
+    }
+
     internal enum ShortcutForwardResult { NotForwarded, Forwarded, IncompatibleHost }
 
     // Legacy listeners have no runtime-version handshake. This policy compares
@@ -76,6 +96,8 @@ namespace SnipStudio
         private readonly Queue<string> receivedOrder = new Queue<string>();
         private Mutex instanceMutex;
         private bool ownsMutex, disposed, idleEnabled, dispatchPosted, idleDispatchPending, printScreenRegistered, captureRegistered;
+        private bool installerExitPending, installerExitDispatching;
+        private uint installerExitMessage;
         private BrokerWindow window;
         private NotifyIcon trayIcon;
         private Icon trayImage;
@@ -103,6 +125,7 @@ namespace SnipStudio
                     try { ownsMutex = instanceMutex.WaitOne(0, false); }
                     catch (AbandonedMutexException) { ownsMutex = true; }
                     if (!ownsMutex) { instanceMutex.Dispose(); instanceMutex = null; return; }
+                    installerExitMessage = RegisterWindowMessage(InstallerExitProtocol.MessageName);
                     window = new BrokerWindow(this);
                     window.CreateBroker(BrokerCaption);
                     processPrimary = this;
@@ -365,7 +388,22 @@ namespace SnipStudio
         private void DispatchOne()
         {
             dispatchPosted = false;
-            if (disposed || pending.Count == 0) return;
+            if (disposed) return;
+            if (installerExitPending)
+            {
+                installerExitPending = false;
+                if (pending.Count != 0) ScheduleDispatch();
+                installerExitDispatching = true;
+                try
+                {
+                    // Runs after the registered-message handler has returned its
+                    // ACK, so save/cancel dialogs never block Setup's message send.
+                    if (ExitRequested != null) ExitRequested();
+                }
+                finally { installerExitDispatching = false; }
+                return;
+            }
+            if (pending.Count == 0) return;
             ShortcutStartupRequest request = pending.Dequeue();
             // Post the next request before invoking application code, which can
             // enter a modal loop. No construction occurs during WM_COPYDATA.
@@ -375,6 +413,16 @@ namespace SnipStudio
                 if (CaptureRequested != null) CaptureRequested();
             }
             else if (request.Kind == ShortcutStartupRequest.RequestKind.Open && OpenRequested != null) OpenRequested(request.ImagePath);
+        }
+
+        private bool AcceptInstallerExit(IntPtr magic, IntPtr operation)
+        {
+            if (disposed || !InstallerExitProtocol.IsValid(magic, operation)) return false;
+            if (!InstallerExitProtocol.RequestsExit(magic, operation)) return true;
+            if (installerExitPending || installerExitDispatching) return true;
+            installerExitPending = true;
+            ScheduleDispatch();
+            return true;
         }
 
         private void ReleaseHotkeys()
@@ -419,6 +467,7 @@ namespace SnipStudio
             ReleaseHotkeys();
             RemoveTray();
             pending.Clear();
+            installerExitPending = false;
             if (window != null) { window.DestroyBroker(); window = null; }
             lock (PrimaryLock)
             {
@@ -438,6 +487,12 @@ namespace SnipStudio
             internal void DestroyBroker() { if (Handle != IntPtr.Zero) DestroyHandle(); }
             protected override void WndProc(ref Message message)
             {
+                if (owner.installerExitMessage != 0 && (uint)message.Msg == owner.installerExitMessage)
+                {
+                    message.Result = owner.AcceptInstallerExit(message.WParam, message.LParam)
+                        ? new IntPtr(InstallerExitProtocol.Magic) : IntPtr.Zero;
+                    return;
+                }
                 if (message.Msg == WmCopyData)
                 {
                     message.Result = owner.AcceptCopyData(message.LParam) ? new IntPtr(Acknowledged) : IntPtr.Zero;
@@ -459,6 +514,8 @@ namespace SnipStudio
         private struct CopyData { internal IntPtr Magic; internal int ByteCount; internal IntPtr Data; }
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern IntPtr FindWindowEx(IntPtr parent, IntPtr after, string className, string caption);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern uint RegisterWindowMessage(string message);
         [DllImport("user32.dll", SetLastError = true)]
         private static extern IntPtr SendMessageTimeout(IntPtr window, int message, IntPtr wParam, ref CopyData lParam,
             uint flags, uint timeout, out UIntPtr result);

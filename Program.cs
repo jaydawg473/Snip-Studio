@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.5.4.0")]
-[assembly: AssemblyFileVersion("0.5.4.0")]
+[assembly: AssemblyVersion("0.5.5.0")]
+[assembly: AssemblyFileVersion("0.5.5.0")]
 
 namespace SnipStudio
 {
@@ -137,7 +137,7 @@ namespace SnipStudio
             preferences = initialPreferences.Clone();
             shortcuts.OpenRequested += OpenFromShortcut;
             shortcuts.CaptureRequested += CaptureFromShortcut;
-            shortcuts.ExitRequested += RequestExit;
+            shortcuts.ExitRequested += RequestGracefulExit;
         }
 
         internal void RememberPreferences(Preferences value) { preferences = value.Clone(); }
@@ -194,6 +194,22 @@ namespace SnipStudio
                 foreach (Form form in new List<Form>(auxiliaryWindows))
                     if (!form.IsDisposed) form.Close();
             if (windows.Count == 0 && auxiliaryWindows.Count == 0) { exiting = true; ExitThread(); }
+        }
+
+        internal void RequestGracefulExit()
+        {
+            if (exiting || exitRequested) return;
+            List<MainForm> trackedEditors = new List<MainForm>(windows);
+            foreach (MainForm form in trackedEditors)
+            {
+                if (form.IsDisposed) continue;
+                // Reuse the explicit tray Exit path: every editor gets its
+                // existing save/cancel prompt and deferred recording/capture
+                // shutdown. A canceled prompt restores the ordinary session.
+                form.ExitFromTray(trackedEditors);
+                return;
+            }
+            RequestExit();
         }
 
         internal void TrackAuxiliaryWindow(Form form)
@@ -325,7 +341,7 @@ namespace SnipStudio
                 auxiliaryWindows.Clear();
                 shortcuts.OpenRequested -= OpenFromShortcut;
                 shortcuts.CaptureRequested -= CaptureFromShortcut;
-                shortcuts.ExitRequested -= RequestExit;
+                shortcuts.ExitRequested -= RequestGracefulExit;
                 shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
             }
             base.Dispose(disposing);

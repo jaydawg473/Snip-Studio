@@ -5,9 +5,14 @@
 !include "FileFunc.nsh"
 
 Var PreflightCheckOnly
+Var PreflightCloseApproved
+Var InstalledCloseResult
+Var InstalledCloseDetail
+Var InstalledClosePath
+Var InstalledCloseScanCount
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.4-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.5-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -23,7 +28,7 @@ Var PreflightCheckOnly
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.5.4-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-0.5.5-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -33,10 +38,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.5.4.0"
+VIProductVersion "0.5.5.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.4.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.5.4.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.5.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.5.5.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -85,13 +90,189 @@ Function .onInit
   ${EndIf}
 FunctionEnd
 
-; Query only executables in this installation. A portable copy elsewhere
-; must not block an update. Restart Manager is used only to identify use: no
-; shutdown, restart, process termination, or changes to the running app occur.
-; Keep this check before every install/uninstall file or registry mutation.
+; Both helpers are instantiated for Setup and Uninstall. Closing is limited
+; to an exact installed executable, and is reachable only after interactive
+; consent. The resource-use session below is never used for shutdown: a file
+; could also be held by Explorer, an editor, or an unrelated Node process.
+!macro DefineInstalledApplicationClose Prefix
+Function ${Prefix}RequestInstalledApplicationExit
+  System::Store "s"
+  StrCpy $InstalledCloseResult 0
+  StrCpy $InstalledCloseDetail "A running Snip Studio from this installation could not be identified. No other program was closed."
+  StrCpy $3 0 ; Owned process handle.
+  StrCpy $7 0 ; Owned GetProcessTimes buffer.
+  StrCpy $R0 0 ; Owned RM_UNIQUE_PROCESS buffer.
+  StrCpy $R1 0 ; Owned Restart Manager key buffer.
+  StrCpy $R3 0 ; Whether the separate process-only RM session started.
+  StrCmp $PreflightCheckOnly 1 close_done
+  IfSilent close_done
+  StrCmp $PreflightCloseApproved 1 0 close_done
+  GetFullPathName $InstalledClosePath "$INSTDIR\Snip Studio.exe"
+  StrCpy $InstalledCloseScanCount 0
+  StrCpy $0 0
+
+close_find_broker:
+  ; Message-only brokers are on this desktop. Bound discovery rather than
+  ; enumerating/closing arbitrary same-named executables or other sessions.
+  IntOp $InstalledCloseScanCount $InstalledCloseScanCount + 1
+  IntCmp $InstalledCloseScanCount 512 close_done 0 close_done
+  System::Call '$SYSDIR\user32.dll::FindWindowExW(p -3, p r0, p 0, p 0) p.r0'
+  StrCmp $0 0 close_done
+  StrCmp $0 "error" close_done
+  System::Call '$SYSDIR\user32.dll::GetWindowTextW(p r0, w .r1, i ${NSIS_MAX_STRLEN}) i.r4'
+  StrLen $4 "AutomationForge.SnipStudio.ShortcutHost.v1."
+  StrCpy $1 $1 $4
+  StrCmp $1 "AutomationForge.SnipStudio.ShortcutHost.v1." 0 close_find_broker
+  System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 r2) i.r4'
+  StrCmp $4 0 close_find_broker
+  StrCmp $4 "error" close_find_broker
+  StrCmp $2 0 close_find_broker
+  ; QUERY_LIMITED_INFORMATION | SYNCHRONIZE. No terminate or write access.
+  System::Call '$SYSDIR\kernel32.dll::OpenProcess(i 0x101000, i 0, i r2) p.r3'
+  StrCmp $3 0 close_find_broker
+  StrCmp $3 "error" close_find_broker
+  System::Call '$SYSDIR\kernel32.dll::QueryFullProcessImageNameW(p r3, i 0, w .r1, *i ${NSIS_MAX_STRLEN} r6) i.r4'
+  StrCmp $4 1 0 close_skip_process
+  ; NSIS StrCmp is case-insensitive, like ordinary Windows executable paths.
+  StrCmp $1 $InstalledClosePath 0 close_skip_process
+  System::Call '$SYSDIR\kernel32.dll::GetExitCodeProcess(p r3, *i 0 r5) i.r4'
+  StrCmp $4 1 0 close_done
+  StrCmp $5 259 0 close_done ; STILL_ACTIVE
+  System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 R6) i.R7'
+  StrCmp $R7 0 close_done
+  StrCmp $R7 "error" close_done
+  StrCmp $R6 $2 0 close_done
+
+  ; Probe support before sending a close request. The probe does not queue
+  ; an exit. An unresponsive/uncertain probe never falls back to another close.
+  System::Call '$SYSDIR\user32.dll::RegisterWindowMessageW(w "AutomationForge.SnipStudio.RequestInstallerExit.v1") i.R4'
+  StrCmp $R4 0 close_done
+  StrCmp $R4 "error" close_done
+  System::Call '$SYSDIR\user32.dll::SendMessageTimeoutW(p r0, i R4, p 0x5355, p 1, i 0x23, i 1000, *p 0 R8) p.R7'
+  StrCmp $R7 0 close_probe_failed
+  StrCmp $R7 "error" close_probe_failed
+  StrCmp $R8 0x5355 close_cooperative
+  StrCmp $R8 21333 close_cooperative
+  Goto close_legacy
+
+close_skip_process:
+  System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
+  StrCpy $3 0
+  Goto close_find_broker
+
+close_probe_failed:
+  StrCpy $InstalledCloseResult 3
+  StrCpy $InstalledCloseDetail "Snip Studio did not respond to the close capability check. Complete any open dialog, or choose Exit Snip Studio from its tray menu."
+  Goto close_done
+
+close_cooperative:
+  ; Hold the process handle across both requests, and pin the broker HWND's
+  ; process again so a destroyed/reused window cannot receive the close.
+  System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 R6) i.R7'
+  StrCmp $R7 0 close_done
+  StrCmp $R7 "error" close_done
+  StrCmp $R6 $2 0 close_done
+  System::Call '$SYSDIR\kernel32.dll::GetExitCodeProcess(p r3, *i 0 R6) i.R7'
+  StrCmp $R7 1 0 close_done
+  StrCmp $R6 259 0 close_done
+  System::Call '$SYSDIR\user32.dll::AllowSetForegroundWindow(i r2) i.R7'
+  System::Call '$SYSDIR\user32.dll::SendMessageTimeoutW(p r0, i R4, p 0x5355, p 0, i 0x23, i 1000, *p 0 R8) p.R7'
+  StrCpy $InstalledCloseResult 3
+  StrCpy $InstalledCloseDetail "The close request could not be confirmed. Complete any Snip Studio save or recording prompts before trying again."
+  StrCmp $R7 0 close_done
+  StrCmp $R7 "error" close_done
+  StrCmp $R8 0x5355 close_cooperative_accepted
+  StrCmp $R8 21333 close_cooperative_accepted close_done
+close_cooperative_accepted:
+  StrCpy $InstalledCloseResult 1
+  StrCpy $InstalledCloseDetail "Snip Studio is still open. Complete its save or recording prompts. If you canceled closing, Setup will not change its files."
+  Goto close_wait
+
+close_legacy:
+  ; Older releases do not understand the app's graceful-exit protocol. Use
+  ; a NEW RM session containing only this validated PID and creation time.
+  ; Never register files/services here, and never use RmForceShutdown.
+  StrCpy $InstalledCloseResult 3
+  StrCpy $InstalledCloseDetail "This older Snip Studio could not finish closing automatically. Complete its save prompts, then use Exit Snip Studio from its tray menu if needed."
+  System::Alloc 32
+  Pop $7
+  StrCmp $7 0 close_done
+  StrCmp $7 "error" close_done
+  IntOp $R6 $7 + 8
+  IntOp $R7 $7 + 16
+  IntOp $R8 $7 + 24
+  System::Call '$SYSDIR\kernel32.dll::GetProcessTimes(p r3, p r7, p R6, p R7, p R8) i.r4'
+  StrCmp $4 1 0 close_done
+  System::Call '*$7(i .r8, i .r9)'
+  ; RM_UNIQUE_PROCESS is DWORD PID + FILETIME (two DWORDs): 12 bytes.
+  System::Call '*(i r2, i r8, i r9) p.R0'
+  StrCmp $R0 0 close_done
+  StrCmp $R0 "error" close_done
+  System::Alloc 66
+  Pop $R1
+  StrCmp $R1 0 close_done
+  StrCmp $R1 "error" close_done
+  System::Call '$SYSDIR\Rstrtmgr.dll::RmStartSession(*i 0 R2, i 0, p R1) i.R5'
+  StrCmp $R5 0 0 close_done
+  StrCpy $R3 1
+  System::Call '$SYSDIR\Rstrtmgr.dll::RmRegisterResources(i R2, i 0, p 0, i 1, p R0, i 0, p 0) i.R5'
+  StrCmp $R5 0 0 close_done
+  System::Call '$SYSDIR\kernel32.dll::GetExitCodeProcess(p r3, *i 0 R6) i.R7'
+  StrCmp $R7 1 0 close_done
+  StrCmp $R6 259 0 close_done
+  System::Call '$SYSDIR\user32.dll::AllowSetForegroundWindow(i r2) i.R7'
+  ; Flags zero requests ordinary, cancellable shutdown. It is not a kill.
+  System::Call '$SYSDIR\Rstrtmgr.dll::RmShutdown(i R2, i 0, p 0) i.R5'
+  StrCmp $R5 0 0 close_done
+  StrCpy $InstalledCloseResult 2
+
+close_wait:
+  ; Poll for at most 15 seconds after the request/API call returns. Windows
+  ; controls any preceding RmShutdown duration. The final file-use query is
+  ; authoritative even after the process exits.
+  StrCpy $6 0
+close_wait_loop:
+  System::Call '$SYSDIR\kernel32.dll::WaitForSingleObject(p r3, i 0) i.r4'
+  StrCmp $4 0 close_done
+  StrCmp $4 258 0 close_done
+  IntCmp $6 60 close_done 0 close_done
+  Sleep 250
+  IntOp $6 $6 + 1
+  Goto close_wait_loop
+
+close_done:
+  ${If} $R3 == 1
+    System::Call '$SYSDIR\Rstrtmgr.dll::RmEndSession(i R2) i.R5'
+  ${EndIf}
+  ${If} $R1 != 0
+  ${AndIf} $R1 != "error"
+    System::Free $R1
+  ${EndIf}
+  ${If} $R0 != 0
+  ${AndIf} $R0 != "error"
+    System::Free $R0
+  ${EndIf}
+  ${If} $7 != 0
+  ${AndIf} $7 != "error"
+    System::Free $7
+  ${EndIf}
+  ${If} $3 != 0
+  ${AndIf} $3 != "error"
+    System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
+  ${EndIf}
+  System::Store "l"
+FunctionEnd
+!macroend
+!insertmacro DefineInstalledApplicationClose ""
+!insertmacro DefineInstalledApplicationClose "un."
+
+; Query only executables in this installation. A portable copy elsewhere must
+; not block an update. This resource session only identifies use. Keep this
+; check before every install/uninstall file or registry mutation.
 !macro DefineInstalledApplicationPreflight Prefix ActionText
 Function ${Prefix}CheckInstalledApplication
   System::Store "s"
+  StrCpy $PreflightCloseApproved 0
 preflight_retry:
   IfFileExists "$INSTDIR\Snip Studio.exe" preflight_has_resource
   IfFileExists "$INSTDIR\translation\runtime\node.exe" 0 preflight_ready
@@ -172,7 +353,18 @@ preflight_cleanup:
   ${If} $4 == 234
   ${OrIf} $5 > 0
   ${OrIf} $6 > 0
-    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "Snip Studio files are still in use from this installation.$\r$\n$\r$\nBefore ${ActionText}, save your snips and stop any recording. Right-click the Snip Studio icon near the Windows clock and choose Exit Snip Studio. Closing an editor window may leave the shortcut listener running.$\r$\n$\r$\nChoose Retry after Snip Studio has exited, or Cancel to leave this installation unchanged." /SD IDCANCEL IDRETRY preflight_retry
+    StrCmp $PreflightCloseApproved 1 preflight_close_pending
+    MessageBox MB_YESNOCANCEL|MB_ICONQUESTION|MB_DEFBUTTON2 "Snip Studio files are still in use from this installation:$\r$\n$INSTDIR$\r$\n$\r$\nAllow Setup to close Snip Studio before ${ActionText}?$\r$\n$\r$\nSave prompts may appear. Any recording must finish saving. No or Cancel stops Setup without changing files; Setup never force-closes the program." /SD IDNO IDYES preflight_request_close
+    Goto preflight_cancel
+preflight_request_close:
+    StrCpy $PreflightCloseApproved 1
+    Call ${Prefix}RequestInstalledApplicationExit
+    ; Always recheck the original file resources, even after an ACK or a
+    ; successful normal shutdown. No bytes have been replaced at this point.
+    Goto preflight_retry
+preflight_close_pending:
+    StrCpy $PreflightCloseApproved 0
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "$InstalledCloseDetail$\r$\n$\r$\nThe files are still in use. Choose Retry after closing Snip Studio, or Cancel to leave this installation unchanged. Other programs holding these files are never closed automatically." /SD IDCANCEL IDRETRY preflight_retry
   ${Else}
     StrCpy $7 "Windows returned status code $4."
     ${If} $4 == "error"
@@ -218,7 +410,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.4"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.5"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"
@@ -252,6 +444,7 @@ LangString DESC_StartupShortcuts ${LANG_ENGLISH} "Start Snip Studio when you sig
 
 Function un.onInit
   SetShellVarContext current
+  StrCpy $PreflightCheckOnly 0
 FunctionEnd
 
 Section "Uninstall"
