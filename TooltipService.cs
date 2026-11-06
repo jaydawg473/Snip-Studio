@@ -20,6 +20,7 @@ namespace SnipStudio
 
         internal static void SetEnabled(bool value)
         {
+            if (started && enabled == value) return;
             enabled = value;
             StartWatching();
             ForEachProvider(delegate(ToolTip provider) { provider.Active = value; });
@@ -42,7 +43,7 @@ namespace SnipStudio
             try { provider.Active = enabled; } catch (ObjectDisposedException) { return provider; }
             // A custom provider may have been registered after a form was bound.
             // Remove only the fallback hint, leaving the custom one untouched.
-            ForEachForm(delegate(FormBinding binding) { binding.Refresh(); });
+            if (!found) ForEachForm(delegate(FormBinding binding) { binding.Refresh(); });
             return provider;
         }
 
@@ -90,7 +91,12 @@ namespace SnipStudio
         {
             List<Form> open = new List<Form>();
             foreach (Form form in Application.OpenForms) open.Add(form);
-            foreach (Form form in open) Apply(form);
+            foreach (Form form in open)
+            {
+                bool known = false;
+                ForEachForm(delegate(FormBinding binding) { if (Object.ReferenceEquals(binding.Form, form)) known = true; });
+                if (!known) Apply(form);
+            }
         }
 
         private static void OnApplicationExit(object sender, EventArgs e)

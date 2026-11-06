@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SnipStudio
@@ -20,27 +22,54 @@ namespace SnipStudio
         private readonly NumericUpDown borderWidth = new SettingsNumericUpDown();
         private readonly Panel borderSwatch = new Panel();
         private readonly Label borderColorLabel = new Label();
-        private readonly StudioComboBox theme = new StudioComboBox();
+        private readonly InlineChoiceBox theme = new InlineChoiceBox();
+        private readonly InlineChoiceBox annotationToolbarPosition = new InlineChoiceBox();
+        private readonly BorderPreviewControl borderPreview = new BorderPreviewControl();
+        private readonly TrackBar borderThickness = new SettingsTrackBar();
+        private readonly Label borderThicknessValue = new Label();
+        private TableLayoutPanel borderDetails;
+        private StudioButton borderExpander;
+        private bool borderPreviewExpanded = true;
+        private bool synchronizingBorderWidth;
         private readonly TextBox editorPath = new TextBox();
         private readonly TextBox editorName = new TextBox();
-        private readonly StudioComboBox detectedEditors = new StudioComboBox();
+        private readonly InlineChoiceBox detectedEditors = new InlineChoiceBox();
         private readonly PictureBox detectedEditorIcon = new PictureBox();
         private StudioButton refreshEditors;
         private Label editorDiscoveryStatus;
         private bool populatingEditors;
         private int editorDiscoveryVersion;
-        private readonly StudioComboBox microphoneDevices = new StudioComboBox();
-        private readonly StudioComboBox systemAudioDevices = new StudioComboBox();
+        private readonly InlineChoiceBox microphoneDevices = new InlineChoiceBox();
+        private readonly InlineChoiceBox systemAudioDevices = new InlineChoiceBox();
         private Label audioStatus;
         private string audioEnumerationProblem = "";
         private bool refreshingAudio;
+        private bool audioDevicesLoaded, firstPaintCompleted, buildingSettings = true, reflowing, reflowQueued;
+        private int audioDiscoveryVersion, editorIconVersion, lastReflowWidth = -1;
+        private string pendingEditorIconPath;
+        private string editorIconRequestPath, displayedEditorIconPath;
+        private CancellationTokenSource editorIconCancellation;
+        private System.Windows.Forms.Timer firstPaintFallback;
+        private StudioButton refreshAudio;
+        private readonly System.Collections.Generic.List<Control> startupLayouts = new System.Collections.Generic.List<Control>();
+        private static readonly object audioDiscoveryGate = new object();
+        private static Task<AudioDiscoveryResult> audioDiscovery;
+        private static DateTime audioDiscoveryStarted;
+        private static readonly SemaphoreSlim editorIconSlot = new SemaphoreSlim(1, 1);
         private readonly System.Collections.Generic.List<Control> borderControls = new System.Collections.Generic.List<Control>();
         private readonly System.Collections.Generic.List<Label> wrappingLabels = new System.Collections.Generic.List<Label>();
         private SettingsToggle screenshotCopy, screenshotAutoSave, screenshotAskSave, multipleWindows, screenshotBorder, hdrCorrection;
-        private SettingsToggle hideTaskbars, keepPrimaryTaskbar;
+        private SettingsToggle hideTaskbars, keepPrimaryTaskbar, rememberCaptureDelay;
         private SettingsToggle recordingCopy, recordingAutoSave, recordingAskSave, defaultMic, defaultSystem;
-        private SettingsToggle compactStart, resizeToSnip, showTooltips;
-        private SettingsToggle usePrintScreen, keepRunningInTray, startupWithWindows;
+        private SettingsToggle compactStart, resizeToSnip, showTooltips, requireCtrlWheel;
+        private SettingsToggle usePrintScreen, keepShortcutsAfterClose, keepRunningInTray, startupWithWindows;
+
+        internal bool CaptureRestoreWithoutActivation { get; set; }
+
+        protected override bool ShowWithoutActivation
+        {
+            get { return CaptureRestoreWithoutActivation; }
+        }
 
         public SettingsForm(Preferences preferences)
         {
@@ -55,14 +84,30 @@ namespace SnipStudio
             ForeColor = StudioTheme.Text;
             Size = new Size(860, 850);
             MinimumSize = new Size(700, 580);
-            StartPosition = FormStartPosition.CenterParent;
+            StartPosition = FormStartPosition.CenterScreen;
             MinimizeBox = false;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             ShowIcon = false;
-            BuildLayout();
-            Populate();
-            StudioTheme.ApplyTo(this);
+            SuspendLayout();
+            try
+            {
+                DeferStartupLayout(scroll);
+                DeferStartupLayout(cards);
+                BuildLayout();
+                Populate();
+                StudioTheme.ApplyTo(this);
+            }
+            finally
+            {
+                buildingSettings = false;
+                for (int index = startupLayouts.Count - 1; index >= 0; index--) startupLayouts[index].ResumeLayout(false);
+                startupLayouts.Clear();
+                ResumeLayout(false);
+            }
+            foreach (InlineChoiceBox choices in new InlineChoiceBox[] { theme, annotationToolbarPosition, detectedEditors, microphoneDevices, systemAudioDevices })
+                choices.ExpansionChanged += delegate { Reflow(true); };
             StudioTheme.ThemeChanged += OnThemeChanged;
+            scroll.Paint += OnSettingsFirstPaint;
             Shown += delegate
             {
                 Rectangle working = Screen.FromControl(this).WorkingArea;
@@ -71,15 +116,23 @@ namespace SnipStudio
                     Size = new Size(Math.Min(Width, Math.Max(500, working.Width - 30)), Math.Min(Height, Math.Max(400, working.Height - 30)));
                     Location = new Point(working.Left + (working.Width - Width) / 2, working.Top + (working.Height - Height) / 2);
                 }
-                Reflow();
+                Reflow(true);
                 scroll.AutoScrollPosition = Point.Empty;
-                RefreshInstalledEditors();
+                // WM_PAINT is lower priority than posted delegates. Start work
+                // from the first paint instead, with a bounded visible fallback.
+                if (!firstPaintCompleted)
+                {
+                    firstPaintFallback = new System.Windows.Forms.Timer { Interval = 150 };
+                    firstPaintFallback.Tick += delegate { StartDeferredDiscovery(); };
+                    firstPaintFallback.Start();
+                }
             };
         }
 
         private void BuildLayout()
         {
             TableLayoutPanel root = new TableLayoutPanel();
+            DeferStartupLayout(root);
             root.Dock = DockStyle.Fill;
             root.ColumnCount = 1;
             root.RowCount = 3;
@@ -127,12 +180,13 @@ namespace SnipStudio
             scroll.Resize += delegate { Reflow(); };
 
             TableLayoutPanel screenshot = Card("Screen captures", "A clear path from your screen to your next task.");
+            rememberCaptureDelay = AddToggle(screenshot, "Remember capture delay", "Keep the selected delay next time you open Snip Studio. Turn this off to start new app sessions with no delay; you can still choose a delay while the app is open.");
             screenshotCopy = AddToggle(screenshot, "Automatically copy changes", "Copy the image to the clipboard after capture and after edits.");
             screenshotAutoSave = AddToggle(screenshot, "Automatically save original screenshots", "Keep an original image in the screenshot folder after each capture.");
             AddFolder(screenshot, "Screenshot folder", screenshotFolder);
             screenshotAskSave = AddToggle(screenshot, "Ask to save edited screenshots", "Prompt before closing or replacing a snip with unsaved edits.");
             multipleWindows = AddToggle(screenshot, "Open snips in separate windows", "Keep earlier snips open when starting a new capture.");
-            screenshotBorder = AddToggle(screenshot, "Add a border to screenshots", "Place an outline around new captures using the color and width below.");
+            screenshotBorder = AddToggle(screenshot, "Add a border to screenshots", "Place an outline around new captures. Turn this on to preview and choose its color and thickness. Your choices are kept when you turn it off.");
             AddBorderOptions(screenshot);
             screenshotBorder.CheckedChanged += delegate { UpdateBorderOptions(); };
             hdrCorrection = AddToggle(screenshot, "HDR screenshot color correction", "Use color correction when capturing screenshots from HDR displays.");
@@ -150,20 +204,22 @@ namespace SnipStudio
             defaultSystem = AddToggle(recording, "System audio on by default", "Start new recording setups with computer audio selected. You can change it before recording.");
             AddAudioDevicePicker(recording, "System audio playback device", systemAudioDevices);
             AddBody(recording, "Microphone audio comes from an input device. System audio records what plays through the selected output device.", true);
-            StudioButton refreshAudio = Button("Refresh audio devices", "redo", 222);
+            refreshAudio = Button("Refresh audio devices", "redo", 222);
             refreshAudio.Margin = new Padding(0, 7, 0, 3);
             refreshAudio.Click += delegate { RefreshAudioDevices(); };
             AddRow(recording, refreshAudio);
             audioStatus = AddBody(recording, "Audio devices have not been loaded yet.", true);
             audioStatus.Font = new Font("Segoe UI", 9.2f);
-            defaultMic.CheckedChanged += delegate { microphoneDevices.Enabled = defaultMic.Checked; UpdateAudioChoiceStatus(); };
-            defaultSystem.CheckedChanged += delegate { systemAudioDevices.Enabled = defaultSystem.Checked; UpdateAudioChoiceStatus(); };
+            defaultMic.CheckedChanged += delegate { microphoneDevices.Enabled = defaultMic.Checked && !refreshingAudio; UpdateAudioChoiceStatus(); };
+            defaultSystem.CheckedChanged += delegate { systemAudioDevices.Enabled = defaultSystem.Checked && !refreshingAudio; UpdateAudioChoiceStatus(); };
             microphoneDevices.SelectedIndexChanged += delegate { UpdateAudioChoiceStatus(); };
             systemAudioDevices.SelectedIndexChanged += delegate { UpdateAudioChoiceStatus(); };
 
             TableLayoutPanel appearance = Card("Workspace", "A comfortable fit for your screen and your snips.");
             AddTheme(appearance);
+            AddAnnotationToolbarPosition(appearance);
             showTooltips = AddToggle(appearance, "Show tooltips", "Explain buttons and controls when you pause over them. On by default; turn this off for fewer pop-up hints.");
+            requireCtrlWheel = AddToggle(appearance, "Hold Ctrl to zoom with the mouse wheel", "On: Ctrl + wheel zooms and the wheel alone scrolls. Off: the wheel alone zooms. Both modes zoom toward your pointer.");
             compactStart = AddToggle(appearance, "Start in a compact window", "Open with a small capture workspace instead of a large empty canvas.");
             resizeToSnip = AddToggle(appearance, "Resize the window to each snip", "Adjust the preview window to the captured image while keeping it within the screen.");
 
@@ -174,10 +230,11 @@ namespace SnipStudio
             Label shortcut = AddBody(shortcuts, "Ctrl + Alt + S", false);
             shortcut.Font = new Font(Font, FontStyle.Bold);
             shortcut.ForeColor = StudioTheme.Text;
-            AddBody(shortcuts, "Start a capture from another app while Snip Studio is open. If another app uses this shortcut, use New or Ctrl + N in Snip Studio.", true);
+            AddBody(shortcuts, "Start a capture from another app while Snip Studio or its shortcut listener is running. If another app uses this shortcut, use New or Ctrl + N in Snip Studio.", true);
             usePrintScreen = AddToggle(shortcuts, "Use Print Screen to capture", "Capture with Print Screen while Snip Studio is running. If Windows or another app reserves that key, try Ctrl + Alt + S or New.");
-            keepRunningInTray = AddToggle(shortcuts, "Keep running in the notification area", "Optional: Close hides the main window and keeps shortcuts active. Otherwise, closing the last snip exits. Use Exit Snip Studio to quit.");
-            startupWithWindows = AddToggle(shortcuts, "Start with Windows", "Start when you sign in. Starts quietly if notification-area mode is enabled; otherwise opens the main window. Off until you choose it.");
+            keepShortcutsAfterClose = AddToggle(shortcuts, "Keep capture shortcuts ready after closing", "Close the editor and release its snip; a small notification-area listener keeps Print Screen and Ctrl + Alt + S available. Print Screen must be enabled above and available in Windows. Exit Snip Studio stops the listener.");
+            keepRunningInTray = AddToggle(shortcuts, "Keep the editor in the notification area", "Optional: Close hides the editor and keeps its current snip in memory. Turn this off to close the editor and release its snip. The separate shortcut-listener option above can keep capture shortcuts ready. Use Exit Snip Studio to quit.");
+            startupWithWindows = AddToggle(shortcuts, "Start with Windows", "Start when you sign in. Starts quietly with the hidden editor when notification-area editor mode is on, or with only the shortcut listener when Keep capture shortcuts ready after closing is on. Otherwise opens the main window. Off until you choose it.");
             AddBody(shortcuts, "Print Screen behavior is controlled by Windows. Review its assignment in Windows keyboard settings; Snip Studio does not change that assignment.", true);
             StudioButton keyboard = Button("Windows keyboard settings", "settings", 252);
             keyboard.Margin = new Padding(0, 8, 0, 0);
@@ -210,14 +267,42 @@ namespace SnipStudio
             StudioButton cancel = Button("Cancel", "", 100);
             cancel.Location = new Point(150, 50);
             cancel.DialogResult = DialogResult.Cancel;
+            cancel.Click += delegate { DialogResult = DialogResult.Cancel; Close(); };
             footer.Controls.Add(cancel);
             AcceptButton = save;
             CancelButton = cancel;
         }
 
+        private void DeferStartupLayout(Control control)
+        {
+            if (!buildingSettings || startupLayouts.Contains(control)) return;
+            control.SuspendLayout();
+            startupLayouts.Add(control);
+        }
+
+        private void OnSettingsFirstPaint(object sender, PaintEventArgs e)
+        {
+            if (firstPaintCompleted || IsDisposed || Disposing) return;
+            scroll.Paint -= OnSettingsFirstPaint;
+            try { BeginInvoke((MethodInvoker)StartDeferredDiscovery); }
+            catch (InvalidOperationException) { }
+        }
+
+        private void StartDeferredDiscovery()
+        {
+            if (firstPaintCompleted || IsDisposed || Disposing) return;
+            firstPaintCompleted = true;
+            scroll.Paint -= OnSettingsFirstPaint;
+            if (firstPaintFallback != null) { firstPaintFallback.Stop(); firstPaintFallback.Dispose(); firstPaintFallback = null; }
+            RefreshAudioDevices(false);
+            RefreshInstalledEditors();
+            UpdateEditorIcon(pendingEditorIconPath);
+        }
+
         private TableLayoutPanel Card(string title, string description)
         {
             TableLayoutPanel card = new TableLayoutPanel();
+            DeferStartupLayout(card);
             card.AutoSize = true;
             card.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             card.ColumnCount = 1;
@@ -235,8 +320,9 @@ namespace SnipStudio
             return card;
         }
 
-        private static void AddRow(TableLayoutPanel table, Control control)
+        private void AddRow(TableLayoutPanel table, Control control)
         {
+            DeferStartupLayout(table);
             int row = table.RowCount++;
             table.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             table.Controls.Add(control, 0, row);
@@ -307,14 +393,48 @@ namespace SnipStudio
 
         private void AddBorderOptions(TableLayoutPanel card)
         {
-            FlowLayoutPanel row = new FlowLayoutPanel();
-            row.AutoSize = true;
-            row.Dock = DockStyle.Top;
-            row.WrapContents = true;
-            row.Margin = new Padding(0, 1, 0, 8);
-            StudioButton color = Button("Color…", "color", 112);
-            color.Click += delegate
+            borderExpander = Button("Hide border preview", "", 220);
+            borderExpander.Height = 36;
+            borderExpander.Margin = new Padding(0, 0, 0, 6);
+            borderExpander.AccessibleDescription = "Expand or collapse the live screenshot border preview and its color and thickness controls.";
+            AddRow(card, borderExpander);
+            borderDetails = new TableLayoutPanel();
+            borderDetails.AutoSize = true;
+            borderDetails.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            borderDetails.Dock = DockStyle.Top;
+            borderDetails.ColumnCount = 1;
+            borderDetails.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            borderDetails.Margin = new Padding(0, 0, 0, 16);
+            borderDetails.BackColor = StudioTheme.Surface;
+            borderExpander.Click += delegate
             {
+                borderPreviewExpanded = !borderPreviewExpanded;
+                UpdateBorderOptions();
+            };
+            borderPreview.Dock = DockStyle.Top;
+            borderPreview.Margin = new Padding(0, 0, 0, 12);
+            AddRow(borderDetails, borderPreview);
+
+            TableLayoutPanel colorRow = new TableLayoutPanel();
+            colorRow.AutoSize = true;
+            colorRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            colorRow.Dock = DockStyle.Top;
+            colorRow.ColumnCount = 3;
+            colorRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            colorRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            colorRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            colorRow.Margin = new Padding(0, 0, 0, 10);
+            Label colorCaption = new Label { Text = "Color", AutoSize = true, ForeColor = StudioTheme.Text, Margin = new Padding(0, 10, 8, 0) };
+            colorRow.Controls.Add(colorCaption, 0, 0);
+            borderColorLabel.AutoSize = true;
+            borderColorLabel.ForeColor = StudioTheme.Muted;
+            borderColorLabel.Margin = new Padding(0, 10, 14, 0);
+            colorRow.Controls.Add(borderColorLabel, 1, 0);
+            StudioButton color = Button("Choose color", "color", 150);
+            color.Margin = Padding.Empty;
+            color.AccessibleName = "Choose screenshot border color";
+            color.AccessibleDescription = "Choose the border color. The sample image updates immediately; Save applies it to future captures.";
+            color.Click += delegate {
                 using (ColorPaletteDialog dialog = new ColorPaletteDialog(Color.FromArgb(edited.ScreenshotBorderArgb), null))
                 {
                     if (dialog.ShowDialog(this) != DialogResult.OK) return;
@@ -322,39 +442,62 @@ namespace SnipStudio
                     UpdateBorderSwatch();
                 }
             };
-            row.Controls.Add(color);
+            colorRow.Controls.Add(color, 2, 0);
             borderControls.Add(color);
-            borderSwatch.Size = new Size(28, 28);
-            borderSwatch.Margin = new Padding(4, 6, 6, 0);
+            borderSwatch.Size = new Size(30, 30);
+            borderSwatch.Margin = new Padding(0, 4, 10, 0);
             borderSwatch.BorderStyle = BorderStyle.FixedSingle;
             borderSwatch.Tag = "PreserveColor";
-            row.Controls.Add(borderSwatch);
-            borderColorLabel.AutoSize = true;
-            borderColorLabel.ForeColor = StudioTheme.Muted;
-            borderColorLabel.Margin = new Padding(0, 11, 18, 0);
-            row.Controls.Add(borderColorLabel);
-            Label widthLabel = new Label();
-            widthLabel.Text = "Width";
-            widthLabel.AutoSize = true;
-            widthLabel.ForeColor = StudioTheme.Muted;
-            widthLabel.Margin = new Padding(0, 11, 7, 0);
-            row.Controls.Add(widthLabel);
+            // The swatch is part of the color button's adjacent readout and is
+            // retained as a separate accessible, theme-preserved color sample.
+            FlowLayoutPanel colorValue = new FlowLayoutPanel { AutoSize = true, WrapContents = false, Margin = Padding.Empty };
+            colorRow.Controls.Remove(borderColorLabel);
+            borderColorLabel.Margin = new Padding(0, 10, 14, 0);
+            colorValue.Controls.Add(borderSwatch);
+            colorValue.Controls.Add(borderColorLabel);
+            colorRow.Controls.Add(colorValue, 1, 0);
+            AddRow(borderDetails, colorRow);
+
+            TableLayoutPanel widthRow = new TableLayoutPanel();
+            widthRow.AutoSize = true;
+            widthRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            widthRow.Dock = DockStyle.Top;
+            widthRow.ColumnCount = 3;
+            widthRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            widthRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            widthRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            widthRow.Margin = new Padding(0, 0, 0, 2);
+            Label widthLabel = new Label { Text = "Thickness", AutoSize = true, ForeColor = StudioTheme.Text, Margin = new Padding(0, 10, 18, 0) };
+            widthRow.Controls.Add(widthLabel, 0, 0);
             borderWidth.Minimum = 1;
             borderWidth.Maximum = 20;
-            borderWidth.Width = 66;
-            borderWidth.BackColor = StudioTheme.Input;
-            borderWidth.ForeColor = StudioTheme.Text;
-            borderWidth.Margin = new Padding(0, 7, 5, 0);
             borderWidth.AccessibleName = "Screenshot border width in pixels";
-            row.Controls.Add(borderWidth);
-            borderControls.Add(borderWidth);
-            Label pixels = new Label();
-            pixels.Text = "px";
-            pixels.AutoSize = true;
-            pixels.ForeColor = StudioTheme.Muted;
-            pixels.Margin = new Padding(0, 11, 0, 0);
-            row.Controls.Add(pixels);
-            AddRow(card, row);
+            borderThickness.Minimum = 1;
+            borderThickness.Maximum = 20;
+            borderThickness.TickStyle = TickStyle.None;
+            borderThickness.AutoSize = false;
+            borderThickness.Height = 38;
+            borderThickness.Dock = DockStyle.Fill;
+            borderThickness.Margin = new Padding(0, 0, 12, 0);
+            borderThickness.MinimumSize = new Size(80, 38);
+            borderThickness.AccessibleName = "Screenshot border thickness";
+            borderThickness.AccessibleDescription = "Drag or use the arrow keys to choose a border from 1 to 20 pixels. Mouse-wheel scrolling moves the settings page without changing this value.";
+            borderThickness.ValueChanged += delegate
+            {
+                if (synchronizingBorderWidth) return;
+                borderWidth.Value = borderThickness.Value;
+            };
+            borderWidth.ValueChanged += delegate { UpdateBorderWidth(); };
+            widthRow.Controls.Add(borderThickness, 1, 0);
+            borderThicknessValue.AutoSize = true;
+            borderThicknessValue.ForeColor = StudioTheme.Text;
+            borderThicknessValue.TextAlign = ContentAlignment.MiddleRight;
+            borderThicknessValue.Margin = new Padding(0, 10, 0, 0);
+            borderThicknessValue.AccessibleName = "Selected border thickness";
+            widthRow.Controls.Add(borderThicknessValue, 2, 0);
+            AddRow(borderDetails, widthRow);
+            AddRow(card, borderDetails);
+            UpdateBorderWidth();
         }
 
         private void AddTheme(TableLayoutPanel card)
@@ -368,7 +511,20 @@ namespace SnipStudio
             AddRow(card, theme);
         }
 
-        private void AddAudioDevicePicker(TableLayoutPanel card, string label, StudioComboBox choices)
+        private void AddAnnotationToolbarPosition(TableLayoutPanel card)
+        {
+            Label label = AddBody(card, "Annotation toolbar position", false);
+            label.Font = new Font(Font, FontStyle.Bold);
+            AddBody(card, "Choose where Move, Pen, Highlighter and the other annotation and editing tools appear around your snip.", true);
+            annotationToolbarPosition.Items.AddRange(new object[] { "Top", "Right", "Bottom", "Left" });
+            annotationToolbarPosition.Width = 240;
+            annotationToolbarPosition.Margin = new Padding(0, 3, 0, 12);
+            annotationToolbarPosition.AccessibleName = "Annotation toolbar position";
+            annotationToolbarPosition.AccessibleDescription = "Choose Top, Right, Bottom or Left for the annotation and editing toolbar. Save applies this choice.";
+            AddRow(card, annotationToolbarPosition);
+        }
+
+        private void AddAudioDevicePicker(TableLayoutPanel card, string label, InlineChoiceBox choices)
         {
             Label heading = AddBody(card, label, false);
             heading.Font = new Font("Segoe UI", 9.3f, FontStyle.Bold);
@@ -381,36 +537,98 @@ namespace SnipStudio
             AddRow(card, choices);
         }
 
-        private void RefreshAudioDevices()
+        private sealed class AudioDiscoveryResult
         {
+            internal System.Collections.Generic.IList<AudioDeviceInfo> Microphones, Playback;
+            internal string Problem = "";
+        }
+
+        private static Task<AudioDiscoveryResult> GetAudioDiscovery(bool force)
+        {
+            lock (audioDiscoveryGate)
+            {
+                // Share a still-running native query instead of accumulating
+                // workers if a driver is slow or Settings is reopened quickly.
+                if (audioDiscovery == null || (audioDiscovery.IsCompleted &&
+                    (force || (DateTime.UtcNow - audioDiscoveryStarted).TotalSeconds >= 30)))
+                {
+                    audioDiscoveryStarted = DateTime.UtcNow;
+                    audioDiscovery = Task.Run<AudioDiscoveryResult>(delegate
+                    {
+                        AudioDiscoveryResult result = new AudioDiscoveryResult();
+                        try { result.Microphones = AudioCaptureMixer.GetMicrophoneDevices(); }
+                        catch (Exception error) { result.Problem = "Microphones could not be listed: " + error.Message; }
+                        try { result.Playback = AudioCaptureMixer.GetSystemAudioDevices(); }
+                        catch (Exception error) { result.Problem += (result.Problem.Length > 0 ? " " : "") + "Playback devices could not be listed: " + error.Message; }
+                        return result;
+                    });
+                }
+                return audioDiscovery;
+            }
+        }
+
+        private async void RefreshAudioDevices(bool force = true)
+        {
+            if (refreshingAudio || IsDisposed || Disposing) return;
+            int version = ++audioDiscoveryVersion;
             AudioChoice oldMic = microphoneDevices.SelectedItem as AudioChoice;
             AudioChoice oldSystem = systemAudioDevices.SelectedItem as AudioChoice;
             string micId = oldMic == null ? (edited.DefaultMicrophoneDeviceId ?? "") : oldMic.Id;
             string systemId = oldSystem == null ? (edited.DefaultSystemAudioDeviceId ?? "") : oldSystem.Id;
-            string problem = "";
             refreshingAudio = true;
-            try { FillAudioChoices(microphoneDevices, AudioCaptureMixer.GetMicrophoneDevices(), micId, oldMic); }
-            catch (Exception error)
-            {
-                FillAudioChoices(microphoneDevices, null, micId, oldMic);
-                problem = "Microphones could not be listed: " + error.Message;
-            }
-            try { FillAudioChoices(systemAudioDevices, AudioCaptureMixer.GetSystemAudioDevices(), systemId, oldSystem); }
-            catch (Exception error)
-            {
-                FillAudioChoices(systemAudioDevices, null, systemId, oldSystem);
-                problem += (problem.Length > 0 ? " " : "") + "Playback devices could not be listed: " + error.Message;
-            }
-            microphoneDevices.Enabled = defaultMic.Checked;
-            systemAudioDevices.Enabled = defaultSystem.Checked;
-            audioEnumerationProblem = problem;
-            refreshingAudio = false;
+            microphoneDevices.Enabled = systemAudioDevices.Enabled = false;
+            refreshAudio.Enabled = false;
             UpdateAudioChoiceStatus();
+            try
+            {
+                Task<AudioDiscoveryResult> discovery = GetAudioDiscovery(force);
+                Task completed = await Task.WhenAny(discovery, Task.Delay(5000));
+                if (IsDisposed || Disposing || version != audioDiscoveryVersion) return;
+                if (!Object.ReferenceEquals(completed, discovery))
+                {
+                    audioEnumerationProblem = "Audio devices are taking longer than expected to respond.";
+                    return;
+                }
+                AudioDiscoveryResult result = await discovery;
+                if (IsDisposed || Disposing || version != audioDiscoveryVersion) return;
+                FillAudioChoices(microphoneDevices, result.Microphones, micId, oldMic);
+                FillAudioChoices(systemAudioDevices, result.Playback, systemId, oldSystem);
+                audioEnumerationProblem = result.Problem;
+                audioDevicesLoaded = true;
+            }
+            catch (Exception)
+            {
+                if (IsDisposed || Disposing || version != audioDiscoveryVersion) return;
+                audioEnumerationProblem = "Audio devices could not be listed.";
+            }
+            finally
+            {
+                if (!IsDisposed && !Disposing && version == audioDiscoveryVersion)
+                {
+                    refreshingAudio = false;
+                    microphoneDevices.Enabled = defaultMic.Checked;
+                    systemAudioDevices.Enabled = defaultSystem.Checked;
+                    refreshAudio.Enabled = true;
+                    UpdateAudioChoiceStatus();
+                }
+            }
         }
 
         private void UpdateAudioChoiceStatus()
         {
-            if (audioStatus == null || refreshingAudio) return;
+            if (audioStatus == null) return;
+            if (refreshingAudio)
+            {
+                audioStatus.Text = "Loading audio devices in the background. Your saved source choices are kept.";
+                audioStatus.ForeColor = StudioTheme.Muted;
+                return;
+            }
+            if (!audioDevicesLoaded && String.IsNullOrEmpty(audioEnumerationProblem))
+            {
+                audioStatus.Text = "Your saved sources are kept. The device list loads after Settings opens.";
+                audioStatus.ForeColor = StudioTheme.Muted;
+                return;
+            }
             bool missingMic = microphoneDevices.SelectedItem is AudioChoice && !((AudioChoice)microphoneDevices.SelectedItem).Available;
             bool missingSystem = systemAudioDevices.SelectedItem is AudioChoice && !((AudioChoice)systemAudioDevices.SelectedItem).Available;
             int micCount = 0, systemCount = 0;
@@ -424,8 +642,11 @@ namespace SnipStudio
             audioStatus.ForeColor = String.IsNullOrEmpty(audioEnumerationProblem) && !missingMic && !missingSystem && !noActiveDevice ? StudioTheme.Muted : StudioTheme.Accent;
         }
 
-        private static void FillAudioChoices(StudioComboBox target, System.Collections.Generic.IList<AudioDeviceInfo> devices, string selectedId, AudioChoice previous)
+        private static void FillAudioChoices(InlineChoiceBox target, System.Collections.Generic.IList<AudioDeviceInfo> devices, string selectedId, AudioChoice previous)
         {
+            target.BeginUpdate();
+            try
+            {
             target.Items.Clear();
             target.Items.Add(new AudioChoice("", "Windows default", true));
             int selectedIndex = String.IsNullOrEmpty(selectedId) ? 0 : -1;
@@ -444,9 +665,24 @@ namespace SnipStudio
                 selectedIndex = target.Items.Add(new AudioChoice(selectedId, name, false));
             }
             target.SelectedIndex = selectedIndex;
+            }
+            finally { target.EndUpdate(); }
         }
 
-        private static string SelectedAudioDeviceId(StudioComboBox choices)
+        private static void SeedAudioChoice(InlineChoiceBox choices, string selectedId)
+        {
+            choices.BeginUpdate();
+            try
+            {
+                choices.Items.Clear();
+                choices.Items.Add(new AudioChoice("", "Windows default", true));
+                choices.SelectedIndex = String.IsNullOrEmpty(selectedId) ? 0
+                    : choices.Items.Add(new AudioChoice(selectedId, "Saved device", false, true));
+            }
+            finally { choices.EndUpdate(); }
+        }
+
+        private static string SelectedAudioDeviceId(InlineChoiceBox choices)
         {
             AudioChoice selected = choices.SelectedItem as AudioChoice;
             return selected == null ? "" : selected.Id;
@@ -457,13 +693,17 @@ namespace SnipStudio
             internal readonly string Id;
             internal readonly string Name;
             internal readonly bool Available;
+            internal readonly bool PendingVerification;
             internal AudioChoice(string id, string name, bool available)
+                : this(id, name, available, false) { }
+            internal AudioChoice(string id, string name, bool available, bool pendingVerification)
             {
                 Id = id ?? "";
                 Name = name;
                 Available = available;
+                PendingVerification = pendingVerification;
             }
-            public override string ToString() { return Available ? Name : "Unavailable — " + Name; }
+            public override string ToString() { return PendingVerification ? Name + " — not yet checked" : Available ? Name : "Unavailable — " + Name; }
         }
 
         private void AddExternalEditor(TableLayoutPanel card)
@@ -571,6 +811,7 @@ namespace SnipStudio
         {
             bool previous = populatingEditors;
             populatingEditors = true;
+            detectedEditors.BeginUpdate();
             try
             {
                 // Read current fields after discovery: a manual choice made
@@ -580,13 +821,15 @@ namespace SnipStudio
                 int detected = 0;
                 if (found != null)
                     foreach (InstalledEditor app in found)
-                        if (app != null && File.Exists(app.ExecutablePath)) { detectedEditors.Items.Add(app); detected++; }
+                        // Discovery already checks paths on its worker. Validate
+                        // again only if the user actually selects an app.
+                        if (app != null && !String.IsNullOrEmpty(app.ExecutablePath)) { detectedEditors.Items.Add(app); detected++; }
                 SelectEditorFromFields();
                 editorDiscoveryStatus.Text = detected > 0
                     ? "Choose a detected app, or use Choose app for a portable or unlisted editor."
                     : "No image editors were detected. Use Choose app to select an installed or portable editor.";
             }
-            finally { populatingEditors = previous; }
+            finally { detectedEditors.EndUpdate(); populatingEditors = previous; }
         }
 
         private void ChooseDetectedEditor()
@@ -609,6 +852,7 @@ namespace SnipStudio
         {
             bool previous = populatingEditors;
             populatingEditors = true;
+            detectedEditors.BeginUpdate();
             try
             {
                 if (detectedEditors.Items.Count == 0)
@@ -630,19 +874,83 @@ namespace SnipStudio
                 detectedEditors.SelectedIndex = selected;
                 UpdateEditorIcon(editorPath.Text);
             }
-            finally { populatingEditors = previous; }
+            finally { detectedEditors.EndUpdate(); populatingEditors = previous; }
         }
 
-        private void UpdateEditorIcon(string path)
+        private static async Task<Image> ReadEditorIconAsync(string path, CancellationToken cancellationToken)
         {
-            Image replacement = null;
+            await editorIconSlot.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
-                if (File.Exists(path))
-                    using (Icon icon = Icon.ExtractAssociatedIcon(path))
-                        if (icon != null) replacement = icon.ToBitmap();
+                cancellationToken.ThrowIfCancellationRequested();
+                return await Task.Run<Image>(delegate
+                {
+                    try
+                    {
+                        if (File.Exists(path))
+                            using (Icon icon = Icon.ExtractAssociatedIcon(path))
+                                if (icon != null) return icon.ToBitmap();
+                    }
+                    catch (Exception) { }
+                    return null;
+                }).ConfigureAwait(false);
             }
-            catch (Exception) { }
+            finally { editorIconSlot.Release(); }
+        }
+
+        private async void UpdateEditorIcon(string path)
+        {
+            pendingEditorIconPath = path ?? "";
+            if (!firstPaintCompleted || IsDisposed || Disposing) return;
+            if (String.Equals(displayedEditorIconPath, pendingEditorIconPath, StringComparison.OrdinalIgnoreCase) && detectedEditorIcon.Image != null) return;
+            if (editorIconCancellation != null && String.Equals(editorIconRequestPath, pendingEditorIconPath, StringComparison.OrdinalIgnoreCase)) return;
+            int version = ++editorIconVersion;
+            if (editorIconCancellation != null) editorIconCancellation.Cancel();
+            editorIconRequestPath = pendingEditorIconPath;
+            ReplaceEditorIcon(null);
+            if (String.IsNullOrEmpty(pendingEditorIconPath)) return;
+            CancellationTokenSource cancellation = new CancellationTokenSource();
+            editorIconCancellation = cancellation;
+            try
+            {
+                Task<Image> loading = ReadEditorIconAsync(pendingEditorIconPath, cancellation.Token);
+                if (!Object.ReferenceEquals(await Task.WhenAny(loading, Task.Delay(3000)), loading))
+                {
+                    // Shell/icon calls cannot always be interrupted. Keep the
+                    // UI bounded and dispose a late bitmap on the worker.
+                    cancellation.Cancel();
+                    DisposeLateEditorIcon(loading);
+                    return;
+                }
+                Image replacement = await loading;
+                if (IsDisposed || Disposing || version != editorIconVersion || cancellation.IsCancellationRequested)
+                {
+                    if (replacement != null) replacement.Dispose();
+                    return;
+                }
+                displayedEditorIconPath = editorIconRequestPath;
+                ReplaceEditorIcon(replacement);
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception) { } // An optional application icon must not close Settings.
+            finally
+            {
+                if (Object.ReferenceEquals(editorIconCancellation, cancellation)) editorIconCancellation = null;
+                cancellation.Dispose();
+            }
+        }
+
+        private static void DisposeLateEditorIcon(Task<Image> loading)
+        {
+            loading.ContinueWith(delegate(Task<Image> result)
+            {
+                if (result.Status == TaskStatus.RanToCompletion && result.Result != null) result.Result.Dispose();
+                else if (result.IsFaulted) GC.KeepAlive(result.Exception);
+            }, TaskScheduler.Default);
+        }
+
+        private void ReplaceEditorIcon(Image replacement)
+        {
             Image previous = detectedEditorIcon.Image;
             detectedEditorIcon.Image = replacement;
             if (previous != null) previous.Dispose();
@@ -698,6 +1006,7 @@ namespace SnipStudio
 
         private void Populate()
         {
+            rememberCaptureDelay.Checked = edited.RememberCaptureDelay;
             screenshotCopy.Checked = edited.AutoCopyScreenshotChanges;
             screenshotAutoSave.Checked = edited.AutoSaveOriginalScreenshots;
             screenshotFolder.Text = edited.ScreenshotFolder ?? "";
@@ -715,16 +1024,23 @@ namespace SnipStudio
             recordingAskSave.Checked = edited.AskSaveEditedRecordings;
             defaultMic.Checked = edited.DefaultMicrophone;
             defaultSystem.Checked = edited.DefaultSystemAudio;
-            RefreshAudioDevices();
+            SeedAudioChoice(microphoneDevices, edited.DefaultMicrophoneDeviceId);
+            SeedAudioChoice(systemAudioDevices, edited.DefaultSystemAudioDeviceId);
+            UpdateAudioChoiceStatus();
             compactStart.Checked = edited.StartCompact;
             showTooltips.Checked = edited.ShowTooltips;
+            requireCtrlWheel.Checked = edited.RequireCtrlForWheelZoom;
             resizeToSnip.Checked = edited.ResizeToSnip;
             usePrintScreen.Checked = edited.UsePrintScreen;
+            keepShortcutsAfterClose.Checked = edited.KeepShortcutsAfterClose;
             keepRunningInTray.Checked = edited.KeepRunningInTray;
             startupWithWindows.Checked = edited.StartupWithWindows;
             editorPath.Text = edited.EditorApplicationPath ?? "";
             editorName.Text = edited.EditorApplicationName ?? "Paint";
             theme.SelectedIndex = edited.Theme == "Light" ? 1 : edited.Theme == "System" ? 2 : 0;
+            annotationToolbarPosition.SelectedIndex = String.Equals(edited.AnnotationToolbarPosition, "Right", StringComparison.OrdinalIgnoreCase) ? 1 :
+                String.Equals(edited.AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase) ? 2 :
+                String.Equals(edited.AnnotationToolbarPosition, "Left", StringComparison.OrdinalIgnoreCase) ? 3 : 0;
             UpdateBorderSwatch();
             UpdateBorderOptions();
             SelectEditorFromFields();
@@ -735,17 +1051,67 @@ namespace SnipStudio
             Color color = Color.FromArgb(edited.ScreenshotBorderArgb);
             borderSwatch.BackColor = Color.FromArgb(255, color);
             borderColorLabel.Text = "#" + color.R.ToString("X2") + color.G.ToString("X2") + color.B.ToString("X2");
+            borderPreview.OutlineColor = color;
+        }
+
+        private void UpdateBorderWidth()
+        {
+            if (synchronizingBorderWidth) return;
+            synchronizingBorderWidth = true;
+            try
+            {
+                int width = (int)borderWidth.Value;
+                if (borderThickness.Value != width) borderThickness.Value = width;
+                borderThicknessValue.Text = width.ToString() + " px";
+                borderPreview.OutlineWidth = width;
+            }
+            finally { synchronizingBorderWidth = false; }
         }
 
         private void UpdateBorderOptions()
         {
-            if (screenshotBorder == null) return;
-            foreach (Control control in borderControls) control.Enabled = screenshotBorder.Checked;
+            if (screenshotBorder == null || borderDetails == null || borderExpander == null) return;
+            TableLayoutPanel card = borderDetails.Parent as TableLayoutPanel;
+            if (card != null) card.SuspendLayout();
+            try
+            {
+                SetBorderOptionsRowVisible(borderExpander, ShouldShowBorderOptions(screenshotBorder.Checked));
+                SetBorderOptionsRowVisible(borderDetails, ShouldShowBorderDetails(screenshotBorder.Checked, borderPreviewExpanded));
+                borderExpander.Text = borderPreviewExpanded ? "Hide border preview" : "Show border preview";
+                borderExpander.AccessibleName = borderExpander.Text;
+            }
+            finally { if (card != null) card.ResumeLayout(true); }
+            foreach (Control control in borderControls) control.Enabled = true;
             // Labels and the chosen swatch are information, not disabled actions.
             // Native disabled Label rendering ignores ForeColor on some themes.
             borderColorLabel.Enabled = true;
             borderColorLabel.ForeColor = StudioTheme.Muted;
             borderSwatch.Enabled = true;
+            borderPreview.Invalidate();
+            Reflow(true);
+        }
+
+        // Pure visibility decisions also allow verification without constructing
+        // a settings window or starting its asynchronous device discovery.
+        internal static bool ShouldShowBorderOptions(bool addScreenshotBorder)
+        {
+            return addScreenshotBorder;
+        }
+
+        internal static bool ShouldShowBorderDetails(bool addScreenshotBorder, bool previewExpanded)
+        {
+            return ShouldShowBorderOptions(addScreenshotBorder) && previewExpanded;
+        }
+
+        private static void SetBorderOptionsRowVisible(Control control, bool visible)
+        {
+            control.Visible = visible;
+            TableLayoutPanel card = control.Parent as TableLayoutPanel;
+            if (card == null) return;
+            int row = card.GetRow(control);
+            if (row < 0 || row >= card.RowStyles.Count) return;
+            card.RowStyles[row].SizeType = visible ? SizeType.AutoSize : SizeType.Absolute;
+            card.RowStyles[row].Height = 0;
         }
 
         private void OnThemeChanged(object sender, EventArgs e)
@@ -767,31 +1133,80 @@ namespace SnipStudio
             if (disposing)
             {
                 editorDiscoveryVersion++;
+                audioDiscoveryVersion++;
+                editorIconVersion++;
+                scroll.Paint -= OnSettingsFirstPaint;
+                if (firstPaintFallback != null) { firstPaintFallback.Stop(); firstPaintFallback.Dispose(); firstPaintFallback = null; }
+                if (editorIconCancellation != null) editorIconCancellation.Cancel();
                 StudioTheme.ThemeChanged -= OnThemeChanged;
                 if (detectedEditorIcon.Image != null) { detectedEditorIcon.Image.Dispose(); detectedEditorIcon.Image = null; }
+                if (borderWidth.Parent == null) borderWidth.Dispose();
             }
             base.Dispose(disposing);
         }
 
-        private void Reflow()
+        private void Reflow(bool force = false)
         {
-            if (scroll.ClientSize.Width <= 0) return;
-            int available = Math.Max(420, scroll.ClientSize.Width - scroll.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth);
-            cards.Width = available;
-            foreach (Control control in cards.Controls)
+            if (buildingSettings || IsDisposed || Disposing || scroll.ClientSize.Width <= 0) return;
+            if (reflowing)
             {
-                TableLayoutPanel card = control as TableLayoutPanel;
-                if (card == null) continue;
-                card.MinimumSize = new Size(available, 0);
-                card.MaximumSize = new Size(available, 0);
-                foreach (Control row in card.Controls)
+                QueueReflow();
+                return;
+            }
+            int available = Math.Max(420, scroll.ClientSize.Width - scroll.Padding.Horizontal - SystemInformation.VerticalScrollBarWidth);
+            if (!force && available == lastReflowWidth) return;
+            reflowing = true;
+            scroll.SuspendLayout();
+            cards.SuspendLayout();
+            System.Collections.Generic.List<TableLayoutPanel> suspendedCards = new System.Collections.Generic.List<TableLayoutPanel>();
+            try
+            {
+                lastReflowWidth = available;
+                if (cards.Width != available) cards.Width = available;
+                foreach (Control control in cards.Controls)
                 {
-                    SettingsToggle toggle = row as SettingsToggle;
-                    if (toggle != null) toggle.Width = Math.Max(300, available - card.Padding.Horizontal);
+                    TableLayoutPanel card = control as TableLayoutPanel;
+                    if (card == null) continue;
+                    card.SuspendLayout();
+                    suspendedCards.Add(card);
+                    Size constraint = new Size(available, 0);
+                    if (card.MinimumSize != constraint) card.MinimumSize = constraint;
+                    if (card.MaximumSize != constraint) card.MaximumSize = constraint;
+                    foreach (Control row in card.Controls)
+                    {
+                        SettingsToggle toggle = row as SettingsToggle;
+                        int width = Math.Max(300, available - card.Padding.Horizontal);
+                        if (toggle != null && toggle.Width != width) toggle.Width = width;
+                    }
+                }
+                foreach (Label label in wrappingLabels)
+                {
+                    Size constraint = new Size(Math.Max(200, available - 40 - label.Margin.Horizontal), 0);
+                    if (label.MaximumSize != constraint) label.MaximumSize = constraint;
                 }
             }
-            foreach (Label label in wrappingLabels)
-                label.MaximumSize = new Size(Math.Max(200, available - 40 - label.Margin.Horizontal), 0);
+            finally
+            {
+                for (int index = suspendedCards.Count - 1; index >= 0; index--) suspendedCards[index].ResumeLayout(true);
+                cards.ResumeLayout(true);
+                scroll.ResumeLayout(true);
+                reflowing = false;
+            }
+        }
+
+        private void QueueReflow()
+        {
+            if (reflowQueued || !IsHandleCreated || IsDisposed || Disposing) return;
+            reflowQueued = true;
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    reflowQueued = false;
+                    if (!IsDisposed && !Disposing) Reflow();
+                });
+            }
+            catch (InvalidOperationException) { reflowQueued = false; }
         }
 
         private void ChooseFolder(TextBox target, string title)
@@ -861,6 +1276,7 @@ namespace SnipStudio
                 edited.ScreenshotBorderWidth = (int)borderWidth.Value;
                 edited.HdrColorCorrection = hdrCorrection.Checked;
                 edited.HideTaskbarsDuringCapture = hideTaskbars.Checked;
+                edited.TaskbarVisibilityConfigured = true;
                 edited.KeepPrimaryTaskbarVisible = keepPrimaryTaskbar.Checked;
                 edited.AutoCopyRecordingChanges = recordingCopy.Checked;
                 edited.AutoSaveOriginalRecordings = recordingAutoSave.Checked;
@@ -871,10 +1287,15 @@ namespace SnipStudio
                 edited.DefaultMicrophoneDeviceId = SelectedAudioDeviceId(microphoneDevices);
                 edited.DefaultSystemAudioDeviceId = SelectedAudioDeviceId(systemAudioDevices);
                 edited.Theme = theme.SelectedIndex == 1 ? "Light" : theme.SelectedIndex == 2 ? "System" : "Dark";
+                edited.AnnotationToolbarPosition = annotationToolbarPosition.SelectedIndex == 1 ? "Right" :
+                    annotationToolbarPosition.SelectedIndex == 2 ? "Bottom" : annotationToolbarPosition.SelectedIndex == 3 ? "Left" : "Top";
+                edited.RememberCaptureDelay = rememberCaptureDelay.Checked;
                 edited.StartCompact = compactStart.Checked;
                 edited.ShowTooltips = showTooltips.Checked;
+                edited.RequireCtrlForWheelZoom = requireCtrlWheel.Checked;
                 edited.ResizeToSnip = resizeToSnip.Checked;
                 edited.UsePrintScreen = usePrintScreen.Checked;
+                edited.KeepShortcutsAfterClose = keepShortcutsAfterClose.Checked;
                 edited.KeepRunningInTray = keepRunningInTray.Checked;
                 edited.TrayBehaviorConfirmed = true;
                 edited.StartupWithWindows = startupWithWindows.Checked;
@@ -950,6 +1371,34 @@ namespace SnipStudio
         // The native disabled UpDownEdit can paint system black on a dark input,
         // even when NumericUpDown.ForeColor is set. Keep native spin/input behavior
         // but replace only its disabled value drawing with a theme-aware readout.
+        private sealed class SettingsTrackBar : TrackBar
+        {
+            [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
+            protected override void WndProc(ref Message message)
+            {
+                if (message.Msg == 0x020A) { ForwardWheel(message.WParam, message.LParam); return; }
+                base.WndProc(ref message);
+            }
+            protected override void OnMouseWheel(MouseEventArgs e)
+            {
+                HandledMouseEventArgs handled = e as HandledMouseEventArgs;
+                if (handled != null) handled.Handled = true;
+                Point screen = PointToScreen(e.Location);
+                int coordinates = (screen.X & 0xffff) | ((screen.Y & 0xffff) << 16);
+                ForwardWheel(new IntPtr(e.Delta << 16), new IntPtr(coordinates));
+            }
+            private void ForwardWheel(IntPtr keysAndDelta, IntPtr coordinates)
+            {
+                for (Control parent = Parent; parent != null; parent = parent.Parent)
+                {
+                    ScrollableControl target = parent as ScrollableControl;
+                    if (target == null || !target.AutoScroll) continue;
+                    SendMessage(target.Handle, 0x020A, keysAndDelta, coordinates);
+                    break;
+                }
+            }
+        }
+
         private sealed class SettingsNumericUpDown : NumericUpDown
         {
             [DllImport("user32.dll")]

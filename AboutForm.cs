@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.Drawing;
+using System.IO;
 using System.Reflection;
 using System.Windows.Forms;
 
@@ -78,7 +79,31 @@ namespace SnipStudio
             website.Margin = new Padding(0, 0, 0, 16);
             website.LinkClicked += delegate { OpenWebsite(); };
             website.AccessibleName = "Open the Automation Forge website";
-            layout.Controls.Add(website, 0, 4);
+            FlowLayoutPanel links = new FlowLayoutPanel();
+            links.FlowDirection = FlowDirection.TopDown;
+            links.WrapContents = false;
+            links.AutoSize = true;
+            links.Dock = DockStyle.Fill;
+            links.Margin = Padding.Empty;
+            links.Controls.Add(website);
+            LinkLabel licenses = new LinkLabel();
+            licenses.Text = "Open-source licenses and translation credits";
+            licenses.AutoSize = true;
+            licenses.LinkColor = licenses.ActiveLinkColor = licenses.VisitedLinkColor = StudioTheme.Accent;
+            licenses.Margin = new Padding(0, 0, 0, 8);
+            licenses.AccessibleName = "Open source licenses and translation credits";
+            licenses.LinkClicked += delegate
+            {
+                string notices = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "translation", "licenses", "NOTICES.txt");
+                try
+                {
+                    if (!File.Exists(notices)) throw new FileNotFoundException("The bundled translation notices were not found. Reinstall the complete package.");
+                    Process.Start(new ProcessStartInfo(notices) { UseShellExecute = true });
+                }
+                catch (Exception error) { MessageBox.Show(this, error.Message, "Open-source licenses", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+            };
+            links.Controls.Add(licenses);
+            layout.Controls.Add(links, 0, 4);
             Label privacy = LabelFor("Captures stay local until you choose to share them.\r\nText recognition runs on this PC.  © " + DateTime.Now.Year + " Automation Forge", 9f, FontStyle.Regular, StudioTheme.Muted);
             privacy.Margin = new Padding(0, 0, 0, 20);
             layout.Controls.Add(privacy, 0, 5);

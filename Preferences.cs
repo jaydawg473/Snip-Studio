@@ -11,6 +11,7 @@ namespace SnipStudio
     {
         public int CaptureModeIndex = 0;
         public int DelaySeconds = 0;
+        public bool RememberCaptureDelay = true;
         public int InkArgb = Color.FromArgb(220, 38, 38).ToArgb();
         public int[] RecentInkColors = new int[0];
         public int StrokeWidth = 4;
@@ -25,7 +26,8 @@ namespace SnipStudio
         public int ScreenshotBorderArgb = Color.FromArgb(77, 163, 255).ToArgb();
         public int ScreenshotBorderWidth = 2;
         public bool HdrColorCorrection = false;
-        public bool HideTaskbarsDuringCapture = false;
+        public bool HideTaskbarsDuringCapture = true;
+        public bool TaskbarVisibilityConfigured = false;
         public bool KeepPrimaryTaskbarVisible = true;
 
         public bool AutoCopyRecordingChanges = true;
@@ -38,10 +40,17 @@ namespace SnipStudio
         public string DefaultSystemAudioDeviceId = "";
 
         public string Theme = "Dark";
+        public string AnnotationToolbarPosition = "Top";
         public bool ShowTooltips = true;
+        public bool RequireCtrlForWheelZoom = true;
+        public string TranslationServerUrl = "http://127.0.0.1:5000/";
+        public string TranslationTargetLanguage = "en";
+        public string TranslationProvider = "Offline";
+        public string TranslationSourceLanguage = "";
         public bool StartCompact = true;
         public bool ResizeToSnip = true;
         public bool UsePrintScreen = true;
+        public bool KeepShortcutsAfterClose = true;
         public bool StartupWithWindows = false;
         public bool KeepRunningInTray = false;
         public bool TrayBehaviorConfirmed = false;
@@ -95,6 +104,9 @@ namespace SnipStudio
 
         private void Normalize()
         {
+            // Earlier builds saved the old default without recording a choice.
+            // Adopt the new default once; subsequent explicit Off choices persist.
+            if (!TaskbarVisibilityConfigured) HideTaskbarsDuringCapture = true;
             // Earlier releases enabled tray hiding by default and saved no opt-in
             // provenance. Make Close exit normally until the current Settings UI
             // has explicitly accepted the notification-area choice.
@@ -105,10 +117,19 @@ namespace SnipStudio
             if (String.Equals(Theme, "Light", StringComparison.OrdinalIgnoreCase)) Theme = "Light";
             else if (String.Equals(Theme, "System", StringComparison.OrdinalIgnoreCase)) Theme = "System";
             else Theme = "Dark";
+            if (String.Equals(AnnotationToolbarPosition, "Right", StringComparison.OrdinalIgnoreCase)) AnnotationToolbarPosition = "Right";
+            else if (String.Equals(AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase)) AnnotationToolbarPosition = "Bottom";
+            else if (String.Equals(AnnotationToolbarPosition, "Left", StringComparison.OrdinalIgnoreCase)) AnnotationToolbarPosition = "Left";
+            else AnnotationToolbarPosition = "Top";
             if (EditorApplicationPath == null) EditorApplicationPath = "";
             if (String.IsNullOrWhiteSpace(EditorApplicationName)) EditorApplicationName = "Paint";
             if (DefaultMicrophoneDeviceId == null) DefaultMicrophoneDeviceId = "";
             if (DefaultSystemAudioDeviceId == null) DefaultSystemAudioDeviceId = "";
+            if (String.IsNullOrWhiteSpace(TranslationServerUrl) || TranslationServerUrl.Length > 2048) TranslationServerUrl = "http://127.0.0.1:5000/";
+            if (String.IsNullOrWhiteSpace(TranslationTargetLanguage) || TranslationTargetLanguage.Length > 32) TranslationTargetLanguage = "en";
+            if (!String.Equals(TranslationProvider, "LibreTranslate", StringComparison.OrdinalIgnoreCase)) TranslationProvider = "Offline";
+            else TranslationProvider = "LibreTranslate";
+            if (TranslationSourceLanguage == null || TranslationSourceLanguage.Length > 32) TranslationSourceLanguage = "";
             if (RecentInkColors == null) RecentInkColors = new int[0];
             if (RecentInkColors.Length > 8) Array.Resize(ref RecentInkColors, 8);
         }

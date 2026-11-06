@@ -11,7 +11,16 @@ qa*/
 installer/output/
 
 # Captures, media, preferences, and development output
-checks/
+checks/*
+!checks/Verify-MenuPlacement.ps1
+!checks/Verify-SideToolbarHeight.ps1
+!checks/Verify-RemovalSelectionMove.ps1
+!checks/Verify-ScrollingSession.ps1
+!checks/Verify-ScrollingAnimation.ps1
+!checks/Verify-ScrollingCapture.ps1
+!checks/Verify-ScrollingModeIcon.ps1
+!checks/Verify-ScrollingUi.ps1
+!checks/Verify-TallScrollingChrome.ps1
 tmp/
 output/
 reports/
@@ -21,6 +30,25 @@ reports/
 preferences.xml
 *.tmp
 *.log
+*.bin
+*.spm
+*.wasm
+*.tgz
+*.tar.gz
+*.7z
+
+# Retain only pinned metadata from downloaded dependencies.
+translation-bundle/downloads/*
+!translation-bundle/downloads/bergamot-npm-metadata.json
+!translation-bundle/downloads/model-catalog-selected.json
+!translation-bundle/downloads/node-SHASUMS256.txt
+translation-bundle/runtime/runtime/
+translation-bundle/runtime/*-tiny/
+translation-bundle/runtime/bergamot/*
+!translation-bundle/runtime/bergamot/worker/
+translation-bundle/runtime/bergamot/worker/*
+!translation-bundle/runtime/bergamot/worker/translator-worker.js
+!translation-bundle/runtime/bergamot/worker/package.json
 
 # Publisher-only signing and verification output
 Sign-Release.ps1

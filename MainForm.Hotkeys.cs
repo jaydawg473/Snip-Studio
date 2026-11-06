@@ -91,7 +91,6 @@ namespace SnipStudio
             if (message.Msg != 0x0312 || message.WParam.ToInt32() != PrintScreenHotkeyId) return false;
             if (printScreenRegistered && CanStartBackgroundCapture())
             {
-                ShowFromTray();
                 StartCapture();
             }
             return true;
@@ -130,7 +129,6 @@ namespace SnipStudio
             trayMenu.Items.Add("New snip", null, delegate
             {
                 if (!CanStartBackgroundCapture()) return;
-                ShowFromTray();
                 StartCapture();
             });
             trayMenu.Items.Add("Open Snip Studio", null, delegate { ShowFromTray(); });
@@ -168,6 +166,25 @@ namespace SnipStudio
             Activate();
         }
 
+        internal void ShowFromShortcut()
+        {
+            foreach (Form form in Application.OpenForms)
+                if (form.Modal && form.Visible) { form.Activate(); return; }
+            ShowFromTray();
+        }
+
+        internal void CaptureFromShortcut()
+        {
+            CaptureFromShortcut(false);
+        }
+
+        internal void CaptureFromShortcut(bool closeEmptyOnCancel)
+        {
+            if (!CanStartBackgroundCapture()) return;
+            closeEmptyShortcutCapture = closeEmptyOnCancel && !Visible && !canvas.HasImage;
+            StartCapture();
+        }
+
         private bool TryHideToTray(FormClosingEventArgs e)
         {
             if (forceExit || !preferences.KeepRunningInTray || e.CloseReason != CloseReason.UserClosing ||
@@ -195,6 +212,7 @@ namespace SnipStudio
                 foreach (Form form in Application.OpenForms) if (form.Modal && form.Visible) { form.Activate(); break; }
                 return;
             }
+            Program.RequestApplicationExit();
             List<MainForm> windows = new List<MainForm>();
             foreach (Form form in Application.OpenForms)
             {
@@ -208,9 +226,10 @@ namespace SnipStudio
                 main.Close();
                 // Close may remain pending while a video finalizes. A non-recording,
                 // non-closing window means the user canceled an unsaved-work prompt.
-                if (!main.IsDisposed && !main.recordingSession && !main.closing)
+                if (!main.IsDisposed && !main.recordingSession && !main.scrollingCaptureActive && !main.IsCaptureProcessingPending && !main.closing)
                 {
                     foreach (MainForm remaining in windows) if (!remaining.IsDisposed) remaining.forceExit = false;
+                    Program.CancelApplicationExit();
                     return;
                 }
             }

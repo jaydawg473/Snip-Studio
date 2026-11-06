@@ -1,0 +1,110 @@
+[
+  {
+    "modelName": "German-English tiny",
+    "shortName": "de-en-tiny",
+    "type": "tiny",
+    "src": "German",
+    "trg": "English",
+    "srcTags": {
+      "de": "German"
+    },
+    "trgTag": "en",
+    "repository": "Bergamot",
+    "version": 2,
+    "API": 1,
+    "checksum": "9f70fcb17bf9572d969aee69ed34c5d8b54c896c60dfe057da37f2e51d46895f",
+    "url": "https://data.statmt.org/bergamot/models/deen/deen.student.tiny11.v2.9f70fcb17bf9572d.tar.gz",
+    "name": "German-English tiny",
+    "code": "de-en-tiny"
+  },
+  {
+    "modelName": "English-German tiny",
+    "shortName": "en-de-tiny",
+    "type": "tiny",
+    "src": "English",
+    "trg": "German",
+    "srcTags": {
+      "en": "English"
+    },
+    "trgTag": "de",
+    "repository": "Bergamot",
+    "version": 2,
+    "API": 1,
+    "checksum": "93821e13b3c511b5390f9fb79f476f738d66e3656889bf076e906897e614fed2",
+    "url": "https://data.statmt.org/bergamot/models/deen/ende.student.tiny11.v2.93821e13b3c511b5.tar.gz",
+    "name": "English-German tiny",
+    "code": "en-de-tiny"
+  },
+  {
+    "modelName": "Spanish-English tiny",
+    "shortName": "es-en-tiny",
+    "type": "tiny",
+    "src": "Spanish",
+    "trg": "English",
+    "srcTags": {
+      "es": "Spanish"
+    },
+    "trgTag": "en",
+    "repository": "Bergamot",
+    "version": 1,
+    "API": 1,
+    "checksum": "09576f06d0ad805e6851defdd63434840729c3bcc5cf19db732f00298dcdb5d9",
+    "url": "https://data.statmt.org/bergamot/models/esen/esen.student.tiny11.v1.09576f06d0ad805e.tar.gz",
+    "name": "Spanish-English tiny",
+    "code": "es-en-tiny"
+  },
+  {
+    "modelName": "English-Spanish tiny",
+    "shortName": "en-es-tiny",
+    "type": "tiny",
+    "src": "English",
+    "trg": "Spanish",
+    "srcTags": {
+      "en": "English"
+    },
+    "trgTag": "es",
+    "repository": "Bergamot",
+    "version": 1,
+    "API": 1,
+    "checksum": "a7203a8f8e9daea85698d5912f25cca6fecae3e4097b188a0c31ed2d58e13c61",
+    "url": "https://data.statmt.org/bergamot/models/esen/enes.student.tiny11.v1.a7203a8f8e9daea8.tar.gz",
+    "name": "English-Spanish tiny",
+    "code": "en-es-tiny"
+  },
+  {
+    "modelName": "French-English tiny",
+    "shortName": "fr-en-tiny",
+    "type": "tiny",
+    "src": "French",
+    "trg": "English",
+    "srcTags": {
+      "fr": "French"
+    },
+    "trgTag": "en",
+    "repository": "Bergamot",
+    "version": 1,
+    "API": 1,
+    "checksum": "dccea16d03c0a3897b4ce085db676ae4bb2777f7e2b1755c04c0f92efa894b01",
+    "url": "https://data.statmt.org/bergamot/models/fren/fren.student.tiny11.v1.dccea16d03c0a389.tar.gz",
+    "name": "French-English tiny",
+    "code": "fr-en-tiny"
+  },
+  {
+    "modelName": "English-French tiny",
+    "shortName": "en-fr-tiny",
+    "type": "tiny",
+    "src": "English",
+    "trg": "French",
+    "srcTags": {
+      "en": "English"
+    },
+    "trgTag": "fr",
+    "repository": "Bergamot",
+    "version": 1,
+    "API": 1,
+    "checksum": "805d112122af03d0fe2769eacaaaf5a9eac2c4b97e862a5b2cf0eb95862a7efb",
+    "url": "https://data.statmt.org/bergamot/models/fren/enfr.student.tiny11.v1.805d112122af03d0.tar.gz",
+    "name": "English-French tiny",
+    "code": "en-fr-tiny"
+  }
+]

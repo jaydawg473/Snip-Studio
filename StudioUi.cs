@@ -46,6 +46,7 @@ namespace SnipStudio
             bool changed = next != isDark;
             isDark = next;
             ConnectSystemEvents();
+            if (!changed) return;
             ApplyOpenWindows();
             if (changed)
             {
@@ -469,7 +470,8 @@ namespace SnipStudio
             if (String.Equals(label, "Rectangle", StringComparison.OrdinalIgnoreCase)) return "rectangle";
             if (String.Equals(label, "Freeform", StringComparison.OrdinalIgnoreCase)) return "freeform";
             if (String.Equals(label, "Window", StringComparison.OrdinalIgnoreCase)) return "window";
-            if (String.Equals(label, "Full screen", StringComparison.OrdinalIgnoreCase) || String.Equals(label, "Fullscreen", StringComparison.OrdinalIgnoreCase)) return "fullscreen";
+            if (String.Equals(label, "Scrolling", StringComparison.OrdinalIgnoreCase)) return "scrolling";
+            if (String.Equals(label, "Full screen", StringComparison.OrdinalIgnoreCase) || String.Equals(label, "Fullscreen", StringComparison.OrdinalIgnoreCase) || String.Equals(label, "All monitors", StringComparison.OrdinalIgnoreCase)) return "fullscreen";
             return null;
         }
     }

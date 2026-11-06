@@ -12,9 +12,9 @@ namespace SnipStudio
     public static class IconArtwork
     {
         public static readonly string[] Keys = new string[] {
-            "new", "rectangle", "freeform", "window", "fullscreen", "crop",
-            "pen", "highlighter", "arrow", "box", "text", "eraser", "color", "move", "pan",
-            "open", "paste", "copy", "save", "undo", "redo", "zoom-in", "zoom-out", "fit", "help", "text-scan", "print",
+            "new", "rectangle", "freeform", "window", "fullscreen", "scrolling", "crop",
+            "pen", "highlighter", "arrow", "box", "text", "eraser", "remove-area", "color", "move", "pan",
+            "open", "paste", "copy", "save", "share", "undo", "redo", "zoom-in", "zoom-out", "fit", "help", "text-scan", "print",
             "record", "stop", "microphone", "volume", "settings", "more", "camera", "clock", "video"
         };
 
@@ -147,6 +147,10 @@ namespace SnipStudio
                     p.Path("M8 3.5 L3.5 3.5 L3.5 8 M16 3.5 L20.5 3.5 L20.5 8 M3.5 16 L3.5 20.5 L8 20.5 M16 20.5 L20.5 20.5 L20.5 16");
                     p.RoundRect(7.2f, 7.2f, 9.6f, 9.6f, 1.3f);
                     break;
+                case "scrolling":
+                    p.Path("M8 3.5 L4.5 3.5 L4.5 8 M16 3.5 L19.5 3.5 L19.5 8 M4.5 16 L4.5 20.5 L8 20.5 M16 20.5 L19.5 20.5 L19.5 16");
+                    p.Path("M12 6 L12 18 M8.5 14.5 L12 18 L15.5 14.5");
+                    break;
                 case "open":
                     p.Path("M3.5 10.5 L3.5 6.2 C3.5 5.3 4.1 4.8 5 4.8 L9 4.8 L11.3 7 L18.5 7 C19.5 7 20 7.6 20 8.5 L20 10.5");
                     p.Path("M3.5 10.5 L20.5 10.5 L18.5 19 L5.5 19 Z");
@@ -160,6 +164,8 @@ namespace SnipStudio
                     p.Path("M7.8 16.3 L5.5 16.3 C4.2 16.3 3.5 15.6 3.5 14.3 L3.5 5.5 C3.5 4.2 4.2 3.5 5.5 3.5 L14.3 3.5 C15.6 3.5 16.3 4.2 16.3 5.5 L16.3 7.8");
                     p.RoundRect(7.8f, 7.8f, 12.7f, 12.7f, 2.1f);
                     break;
+                case "share":
+                    p.Path("M20 13L20 19C20 20.1 19.1 21 18 21L5 21C3.9 21 3 20.1 3 19L3 8C3 6.9 3.9 6 5 6L9 6 M13 3L21 3L21 11 M21 3L10 14"); break;
                 case "save":
                     p.Path("M5 3.5 L17 3.5 L20.5 7 L20.5 18.8 C20.5 19.9 19.9 20.5 18.8 20.5 L5.2 20.5 C4.1 20.5 3.5 19.9 3.5 18.8 L3.5 5.2 C3.5 4.1 4.1 3.5 5 3.5 Z");
                     p.Path("M7.5 3.8 L7.5 9 L16.5 9 L16.5 3.8 M7.5 20.1 L7.5 13.5 L16.5 13.5 L16.5 20.1");
@@ -176,12 +182,12 @@ namespace SnipStudio
                     p.Path("M12 3 L12 21 M3 12 L21 12 M9 6 L12 3 L15 6 M9 18 L12 21 L15 18 M6 9 L3 12 L6 15 M18 9 L21 12 L18 15");
                     break;
                 case "pen":
-                    p.Path("M4 20 L5.2 14.8 L16.2 3.8 C16.9 3.1 17.7 3.1 18.4 3.8 L20.2 5.6 C20.9 6.3 20.9 7.1 20.2 7.8 L9.2 18.8 Z");
-                    p.Path("M14 6 L18 10 M5.2 14.8 L9.2 18.8");
+                    p.Path("M4 20 L5.4 15.5 L16.8 4.1 C17.3 3.6 17.9 3.6 18.4 4.1 L19.9 5.6 C20.4 6.1 20.4 6.7 19.9 7.2 L8.5 18.6 Z");
+                    p.Path("M15.3 5.6 L18.4 8.7 M5.4 15.5 L8.5 18.6");
                     break;
                 case "highlighter":
-                    p.Path("M7.6 15.1 L4.8 18 L7 20.2 L9.9 17.4 M6.5 13.9 L14.8 5.6 C15.5 4.9 16.2 4.9 16.9 5.6 L19.6 8.3 C20.3 9 20.3 9.7 19.6 10.4 L11.3 18.7 Z");
-                    p.Path("M12.8 7.6 L17.6 12.4 M3.5 21 L14 21");
+                    p.Path("M7.5 3.5 L16.5 3.5 L16.5 13 L13.5 16 L10.5 16 L7.5 13 Z");
+                    p.Path("M7.5 7 L16.5 7 M10.5 16 L9 19 L13.5 19 L13.5 16 M4 21 L20 21");
                     break;
                 case "arrow":
                     p.Path("M4.5 19.5 L19 5 M10.5 5 L19 5 L19 13.5");
@@ -218,6 +224,10 @@ namespace SnipStudio
                 case "settings":
                     p.Path("M10.561 2.913 L13.439 2.913 L13.620 4.985 L15.815 5.894 L17.408 4.557 L19.443 6.592 L18.106 8.185 L19.015 10.380 L21.087 10.561 L21.087 13.439 L19.015 13.620 L18.106 15.815 L19.443 17.408 L17.408 19.443 L15.815 18.106 L13.620 19.015 L13.439 21.087 L10.561 21.087 L10.380 19.015 L8.185 18.106 L6.592 19.443 L4.557 17.408 L5.894 15.815 L4.985 13.620 L2.913 13.439 L2.913 10.561 L4.985 10.380 L5.894 8.185 L4.557 6.592 L6.592 4.557 L8.185 5.894 L10.380 4.985 Z");
                     p.Circle(12, 12, 3.1f);
+                    break;
+                case "remove-area":
+                    p.Path("M8 4 L4 4 L4 8 M16 4 L20 4 L20 8 M4 16 L4 20 L8 20 M16 20 L20 20 L20 16");
+                    p.Path("M11 4 L13 4 M11 20 L13 20 M4 11 L4 13 M20 11 L20 13 M8 12 L16 12");
                     break;
                 case "eraser":
                     p.Path("M3.6 13.2 L12.8 4 C13.6 3.2 14.5 3.2 15.3 4 L20 8.7 C20.8 9.5 20.8 10.4 20 11.2 L11.7 19.5 L7.2 19.5 L3.6 15.9 C2.8 15.1 2.8 14 3.6 13.2 Z");

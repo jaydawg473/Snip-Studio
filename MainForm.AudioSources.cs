@@ -85,7 +85,17 @@ namespace SnipStudio
         {
             desiredMicrophoneId = preferences.DefaultMicrophoneDeviceId ?? "";
             desiredSystemAudioId = preferences.DefaultSystemAudioDeviceId ?? "";
-            LoadAudioSources();
+            if (recordingModeSelected || audioOptionsOpen) LoadAudioSources();
+            else
+            {
+                applyingAudioSources = true;
+                try
+                {
+                    PopulateAudioChoices(microphoneDevices, null, desiredMicrophoneId);
+                    PopulateAudioChoices(systemAudioDevices, null, desiredSystemAudioId);
+                }
+                finally { applyingAudioSources = false; }
+            }
         }
 
         private void LoadAudioSources()

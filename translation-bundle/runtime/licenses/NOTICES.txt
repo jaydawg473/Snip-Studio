@@ -1,0 +1,40 @@
+Snip Studio - bundled local translation components
+Prepared 2026-11-05. These components retain their own licenses.
+
+Node.js 24.22.2, unmodified official Windows x64 binary
+Copyright OpenJS Foundation and other contributors.
+The full Node.js and bundled third-party notices are in Node-LICENSE.txt.
+Original package: https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip
+SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
+The executable retains its original OpenJS Foundation Authenticode signature.
+
+Bergamot Translator 0.4.9
+Mozilla Public License 2.0; see Bergamot-MPL-2.0.txt.
+Published npm package: @browsermt/bergamot-translator 0.4.9
+Source commit: 8cc5d0495479c9ec56eafafd6bcd7fb5b929ca98
+Source: https://github.com/browsermt/bergamot-translator/tree/8cc5d0495479c9ec56eafafd6bcd7fb5b929ca98
+The corresponding Bergamot source is included as bergamot-source-8cc5d049.tar.gz.
+The installed JavaScript files are editable source. Automation Forge changed
+worker/translator-worker.js to handle Windows file URLs correctly and refuse
+non-file fetches, and added worker/package.json to retain CommonJS loading.
+The WebAssembly engine itself is unmodified from the npm package.
+Component notices are supplied in components/.
+
+Bergamot tiny translation models, English <-> German, Spanish, and French
+Models produced by the Bergamot project are released under Creative Commons
+Attribution-ShareAlike 4.0; see CC-BY-SA-4.0.txt and Bergamot-model-policy.md.
+Project attribution and policy source:
+https://github.com/browsermt/students
+https://raw.githubusercontent.com/browsermt/students/master/LICENSE.md
+Catalog: https://translatelocally.com/models.json
+Original archive URLs and SHA256 values are retained in bundle.json for each
+language pair. Model weights, vocabularies and lexical shortlists are unchanged.
+The manifest supplies smaller runtime workspace/batch options for an interactive
+desktop session; original YAML configuration files remain beside the models.
+The six archives did not carry separate model-license files; the published
+Bergamot project model policy above supplies the stated model-license basis.
+No affiliation with or endorsement by these projects is claimed.
+
+The bridge worker.js is source shipped with Snip Studio. Translation reads only
+these installed files; it does not need a server, account, API key, model download,
+or cloud inference connection after installation.

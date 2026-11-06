@@ -19,6 +19,7 @@ namespace SnipStudio
         private FormWindowState recordingRestoreState;
         private Exception recordingFailure;
         private TaskbarVisibilityScope recordingTaskbars;
+        private CaptureVisibilityScope recordingWindows;
         private Timer recordingTaskbarTimer;
         private Exception recordingTaskbarFailure;
 
@@ -70,7 +71,7 @@ namespace SnipStudio
 
         private async void StartRecording()
         {
-            if (capturePending || recordingSession || closing || IsDisposed || Disposing) return;
+            if (!CanStartBackgroundCapture()) return;
             string destination;
             if (!ChooseRecordingDestination(out destination)) return;
 
@@ -93,10 +94,13 @@ namespace SnipStudio
             recordingPath = destination;
             recordingRestoreState = WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState;
             UpdateDocumentState();
-            Hide();
             bool started = false;
             Exception startupFailure = null;
-            try { started = await BeginRecordingAsync(destination, microphone, systemAudio, microphoneDeviceId, systemAudioDeviceId, hideTaskbars, keepPrimaryVisible); }
+            try
+            {
+                recordingWindows = CaptureVisibilityScope.HideApplicationWindows(this);
+                started = await BeginRecordingAsync(destination, microphone, systemAudio, microphoneDeviceId, systemAudioDeviceId, hideTaskbars, keepPrimaryVisible);
+            }
             catch (Exception ex) { recordingFailure = ex; startupFailure = ex; }
             if (!started)
             {
@@ -118,7 +122,7 @@ namespace SnipStudio
                     try { CloseRecordingController(); }
                     finally
                     {
-                        restoreFailure = ReleaseRecordingTaskbars();
+                        restoreFailure = ReleaseRecordingDesktop();
                         recordingSession = false;
                         capturePending = false;
                         RestoreAfterRecording();
@@ -133,7 +137,7 @@ namespace SnipStudio
 
         private async Task<bool> BeginRecordingAsync(string destination, bool microphone, bool systemAudio, string microphoneDeviceId, string systemAudioDeviceId, bool hideTaskbars, bool keepPrimaryVisible)
         {
-            await Task.Delay(220);
+            await recordingWindows.WaitUntilHiddenAsync();
             if (closing || IsDisposed || Disposing) return false;
             Rectangle? region = CaptureService.SelectRecordingRegion(hideTaskbars, keepPrimaryVisible);
             if (closing || IsDisposed || Disposing || closeAfterRecording) return false;
@@ -148,7 +152,7 @@ namespace SnipStudio
                 if (!IsDisposed && !Disposing) SetStatus("Recording canceled. Your snip is unchanged.");
                 return false;
             }
-            await Task.Delay(220);
+            await recordingWindows.WaitUntilHiddenAsync();
             if (closeAfterRecording || closing || IsDisposed || Disposing)
             {
                 if (!IsDisposed && !Disposing) SetStatus("Recording canceled. Your snip is unchanged.");
@@ -236,7 +240,7 @@ namespace SnipStudio
                 }
                 finally
                 {
-                    restoreFailure = ReleaseRecordingTaskbars();
+                    restoreFailure = ReleaseRecordingDesktop();
                     recordingSession = false;
                     stoppingRecording = false;
                     capturePending = false;
@@ -315,6 +319,18 @@ namespace SnipStudio
             catch (Exception error) { return error; }
         }
 
+        private Exception ReleaseRecordingDesktop()
+        {
+            Exception failure = null;
+            try { failure = ReleaseRecordingTaskbars(); }
+            catch (Exception error) { failure = error; }
+            CaptureVisibilityScope windows = recordingWindows;
+            recordingWindows = null;
+            try { if (windows != null) windows.Dispose(); }
+            catch (Exception error) { failure = failure == null ? error : new AggregateException(failure, error); }
+            return failure;
+        }
+
         private void StopRecordingTaskbarTimer()
         {
             if (recordingTaskbarTimer != null)
@@ -352,7 +368,7 @@ namespace SnipStudio
             }
             finally
             {
-                Exception error = ReleaseRecordingTaskbars();
+                Exception error = ReleaseRecordingDesktop();
                 if (error != null) Trace.WriteLine("Taskbar restoration: " + error.Message);
                 CloseRecordingController();
             }

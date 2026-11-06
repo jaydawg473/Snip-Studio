@@ -1,76 +1,84 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio
+# Snip Studio 0.5.4
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
-Capture across monitors, annotate images, work with recognized text, and export the result locally. The app starts compact and can resize around a new snip.
+Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
 
-## Features
+## Capture and edit
 
-- Rectangle, freeform, window, and full-desktop screenshots, including selections across monitors.
-- Movable pen strokes, highlights, arrows, boxes, and text notes, with Undo and Redo.
-- Arrow tip and tail handles for rotation and length changes.
-- Editable text notes with font-size controls. Drag a note's side handles to change its width; text wraps and its height grows.
-- Local Windows OCR. Copy recognized text, edit one recognized line, or delete a selected range. OCR edits support Undo.
-- PNG, JPEG, BMP, and image-backed PDF export; clipboard copy, print, and Windows Share.
-- Screen recording with selectable microphone and system-audio sources, local MP4 review, trimming, and smaller-video exports.
-- Smaller-copy presets and target-size options for email or chat attachments. The original recording is preserved.
-- Optional taskbar hiding for screenshots and video. The main monitor's taskbar can remain visible.
-- A themed color palette with swatches, recent ink colors, and hex input.
-- Tooltips on by default, with a switch in Settings.
-- Installed-editor discovery and a working-copy workflow for editors such as Photoshop or Paint.
+- Rectangle, freeform, window, and scrolling capture. **Full screen** lets you choose one monitor; **All monitors** captures the connected desktop.
+- Movable pen strokes, highlights, arrows, boxes, and rich text notes, with Undo and Redo. Right-click a mark to select it and switch to Move; use the middle mouse button to pan.
+- A pending **Remove area** box also survives switching to **Move**. Drag it within the image or nudge with arrow keys (Shift moves ten pixels), then press **Delete** to apply the removal at its new position. **Escape** cancels. Moving this review box changes no captured pixels, annotations or Undo history; Undo restores pixels after deletion.
+- Drag an arrow's tip or tail to rotate or resize it. Drag a text note's side handles to change wrapping width without shrinking its font.
+- Double-click a text note, or select it and press F2, to edit font families, point sizes, mixed character styles, ink/highlighting, paragraph alignment, lists, indentation, and spacing.
+- Local, on-demand Windows OCR for copying words, snapped highlighting, and line editing. Deleting selected bitmap words masks those words and leaves gaps; it does not reposition the remaining screenshot text.
+- Color swatches, recent colors, hex input, and an Exact color honeycomb picker. Tooltips are on by default and can be turned off in Settings.
+- PNG, JPEG, BMP, lossless image-backed PDF, clipboard copy, print, external-editor working copies, and Windows Share. Save As is available from the menu and Ctrl+Shift+S.
 
-## Install or use a portable release
+Source-font matching is an **estimate** from screenshot pixels and installed fonts. Line replacement uses a selectable solid fill; complex backgrounds are not reconstructed. Ambiguous overlapping text is guarded. Exports flatten annotations; notes remain editable in the open editor. PDFs are not searchable text documents or editable forms, and transparency becomes white.
 
-Use an official release installer when one is available. Installation is per Windows account; the desktop shortcut is optional. Setup does not launch the app or register Windows startup automatically.
+Ctrl+wheel zooms toward the pointer by default; the wheel alone scrolls. Settings can switch to plain-wheel zoom, remember or reset capture delay, and preview screenshot-border color and thickness inline.
 
-For a portable release, extract its ZIP and run `Snip Studio.exe`. Keep `Snip Studio.exe.config` beside it.
+The More menu anchors to its button and clamps its position to that monitor's working area. Oversized menus use native scrolling. Left/right toolbars contribute their complete measured height to the editor minimum, bounded by the working area; shorter displays keep a scrolling fallback. Physical monitor/DPI placement and pointer dragging still need live acceptance.
 
-Requires Windows 10 or 11 and .NET Framework 4.8. No account is required for the app.
+## Scrolling capture
 
-## Build from source
+Choose **Photo mode → Scrolling**, then select the moving content rather than fixed sidebars or message boxes. Capture advances only while a usable overlap can be verified. Localized animation can be tolerated; broad animation, repeated content, or reflow can stop the capture.
 
-Run in PowerShell on Windows:
+**Finish** opens a preview; **Cancel** discards the capture. Review the joins and bottom before choosing **Use capture**. An early stop or repeated lack of movement produces a partial, **bottom-unconfirmed** result, not proof that the entire page was captured. The previous snip stays intact until the preview is accepted.
+
+Limits are three minutes, 300 scroll requests, 100 accepted frames, 30,000 pixels high, and 64 million pixels. Real applications and physical monitor/DPI behavior still need live acceptance.
+
+## Offline translation
+
+The complete signed release supplies the Bergamot WebAssembly engine, Node runtime, six compact translation models, license notices, and corresponding-source archives. Keep the entire `translation` folder beside `Snip Studio.exe`; extract portable packages completely.
+
+Included languages are **English, German, Spanish, and French**. Models translate English in both directions with each other language; other supported pairs use English as an intermediate step. Choose the source and target explicitly. No Python, Docker, server setup, paid API, subscription, API key, or translation-time model download is needed for the included package.
+
+In Text actions, select words or use all recognized text, then choose **Translate**. Copy the result or use **Replace text in snip** to place replacements in the recognized line bounds. Review wording, font estimates, and solid background fills; one Undo restores the original replacement operation. Compact models and intermediate translation can reduce accuracy. The included workflow does not upload text or images to a translation service.
+
+The public checkout includes the application bridge, patched licensed JavaScript, license text, manifests, and preparation scripts. **It is not a complete, automatically reproducible translation bundle.** Model weights, runtime binaries, bulk downloads, and corresponding-source archives are supplied in release packages rather than this checkout. Preparation scripts require additional metadata and source/download inputs; copying only these sources does not produce a working offline translator.
+
+Upstream projects: [Bergamot](https://github.com/browsermt/bergamot-translator), [Node.js](https://github.com/nodejs/node). Their component notices and licenses remain separate from the application's licensing status.
+
+## Record and make smaller copies
+
+Choose microphone and system-audio devices separately. Recording currently produces H.264/AAC MP4 up to **1920 × 1080 at 15 fps**, with larger areas scaled proportionally.
+
+Recording review offers play, copy, save, trim, and **Make smaller**. Choose 720p, 480p, or a target file size to save a separate copy while preserving the original. Targets are estimates; actual output size is reported, and email/chat attachment limits vary. Smaller exports trade image detail for file size.
+
+Taskbar hiding applies to screenshots and video. Hide taskbars and Keep main monitor taskbar visible default On for new or previously unconfigured profiles; Settings can change either choice. Hidden taskbars are restored after the snapshot or recording ends. Live multi-monitor timing is not established by source or component checks.
+
+## Install, close, and build
+
+Requires Windows 10 or 11 and .NET Framework 4.8. Use a complete signed per-user release installer or extract a portable ZIP. Setup does not launch the app. Its optional sign-in component is unchecked by default. Save work and choose **Exit Snip Studio** before an upgrade; the installer does not force-close running copies.
+
+Closing an editor closes that snip. **Keep capture shortcuts after closing** is on by default, leaving a small notification-area listener for Ctrl+Alt+S and Print Screen. Choose **Exit** from its menu to stop the listener, or disable that preference to exit with the last editor. Keeping the full editor hidden in the notification area is a separate opt-in. Windows can reserve Print Screen; Snip Studio does not silently change Windows' routing.
+
+Build the application in PowerShell on Windows:
 
 ```powershell
 .\build.ps1 -UseExistingIcons
 ```
 
-The application is written in C# 5 for .NET Framework 4.8. The build uses the installed Windows Framework compiler and Windows WinRT metadata; no NuGet packages are needed. Output is written to `dist` by default. A local build is unsigned.
+The C# 5 build uses the installed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; a local build is unsigned. The build compiles the app without launching it or running development checks. Optional development checks require separate invocation. Omitting `-UseExistingIcons` compiles and runs the checked-in icon generator.
 
-The checked-in icon assets are sufficient for a normal build. Omitting `-UseExistingIcons` compiles and runs the icon-generation tool from `tools/BuildIcons.cs`.
+Selected `checks/Verify-*.ps1` sources cover menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
-Private signing credentials and generated development data are not part of this repository. The source build script only builds the application; release verification and signing are separate steps.
+```powershell
+powershell.exe -STA -NoProfile -File .\checks\Verify-MenuPlacement.ps1 -ReleaseFolder release-0.5.4-signed -ExpectedVersion 0.5.4.0
+```
 
-The `installer` folder contains NSIS packaging sources for the official publisher release. Its README describes the expected release payload and compiler configuration.
+The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
 
-## Useful workflows
+See [installer packaging](installer/README.md) for the signed-release inputs. Private signing credentials and the publisher's signing workflow are excluded.
 
-- **Edit recognized text:** turn on Text actions, select words within one line, then choose **Edit line**. The dialog starts with those words selected. Apply the change to replace the line on the snip. Use **Delete selection** for removal, or Undo to restore the previous content.
-- **Reshape a text note:** select it with Move and drag a side handle. Double-click it to edit the wording, size, width, or ink color. The toolbar also offers text size.
-- **Rotate an arrow:** select it with Move, then drag its tip or tail handle.
-- **Save a PDF:** choose **More → Save as PDF**, or select PDF in Save as.
-- **Make a recording smaller:** open its review window and choose **Make smaller**. Pick a preset or target file size, then save a separate MP4.
-- **Use an external editor:** choose the application in Settings, select **Edit in application**, save the working copy in that editor, then choose **Reload external edit** in Snip Studio.
+## Files and verification
 
-Original screenshots can save automatically to the folder selected in Settings. Annotations are edits; choose Save to keep them. Closing the last window exits by default. Optional notification-area mode makes Close hide the window instead.
+Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Sharing, external-editor opening, and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-## Limits and behavior
-
-- Screenshot files retain the captured pixel dimensions. A scaled preview can look softer; use Actual size (100%) and PNG to judge lossless screenshot output.
-- OCR can misread text. Screenshot pixels do not identify their original font or background reliably. Line replacement uses an estimated font and a selected solid background fill. Ambiguous overlaps with editable text notes are guarded rather than silently rewritten.
-- PDFs preserve the rendered snip as a lossless image. They are not searchable text documents or editable PDF forms. Transparent areas become white.
-- Recording is currently up to 1920 × 1080 at 15 fps, with larger regions scaled proportionally. Smaller exports trade detail for file size. Target sizes are estimates, and attachment limits depend on the receiving service; actual output size is reported.
-- Image exports are flattened. Annotations remain editable in the open app window.
-- Window screenshots capture visible desktop content, including anything covering the selected window. Protected content can appear black.
-- HDR correction is experimental; live HDR color fidelity is not established.
-- Scrolling capture is not included.
-
-## Privacy
-
-Editing, OCR, recording, PDF export, and video compression run locally. Sharing, opening an external editor, and visiting the website happen when selected by the user.
-
-Preferences and working copies are stored in the app's local Windows application-data folder. Uninstalling preserves screenshots, recordings, preferences, and working copies.
+`VALIDATION.txt` records 658 focused checks against the signed 0.5.4 application: menu placement, complete side-toolbar height, removal-selection movement/deletion/Undo, preview rendering, fullscreen layout, view preservation and startup compatibility. These used the application as a library; they did not display an editor or popup, capture a desktop, inject native input or use user preferences. Earlier scrolling suites are identified as historical. Physical monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior and full installation/upgrade/uninstall still need acceptance. HDR correction remains experimental.
 
 An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.

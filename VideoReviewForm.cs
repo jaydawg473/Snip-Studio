@@ -523,6 +523,7 @@ namespace SnipStudio
                 files.Add(currentPath);
                 DataObject data = new DataObject();
                 data.SetFileDropList(files);
+                MainForm.RegisterClipboardIntent();
                 Clipboard.SetDataObject(data, true, 4, 100);
                 if (!automatic) SetStatus("Video file copied. Paste it into a folder or an app that accepts files.", false);
                 return true;

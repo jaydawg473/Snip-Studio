@@ -1,30 +1,237 @@
-SNIP STUDIO 0.3.0 - AUTOMATION FORGE
+SNIP STUDIO 0.5.4 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Run "Snip Studio.exe" with its matching .exe.config file beside it.
-Requires Windows 10/11 and .NET Framework 4.8.
+Install with "SnipStudio-0.5.4-Setup.exe", then open Snip Studio from the
+Start menu. Installation is for your Windows account, with an optional desktop
+shortcut. It does not launch the app or enable Windows startup automatically.
+The optional "Start Snip Studio at Windows sign-in" installer component is
+unchecked by default. It uses the saved background preferences at sign-in;
+installation itself does not start the listener or editor.
+Installer 0.5.4 corrects the file-use API call for the existing NSIS 3.04 compiler. Before changing installed
+files, it checks whether Snip Studio is using them. Save your work and choose
+More > Exit Snip Studio (or Exit from its tray menu), then Retry. Cancel leaves
+the existing installation in place. The installer never force-closes the app.
+Uninstalling keeps your screenshots, recordings, and preferences.
 
-New captures can save automatically to the folder selected in Settings.
-Choose Save to keep annotation edits. Closing the last window exits unless
-you explicitly enable notification-area operation in Settings.
+For portable use, extract the ZIP and run "Snip Studio.exe". Keep the matching
+.exe.config beside it. Requires Windows 10/11 with .NET Framework 4.8.
+No account is needed. If an older or different portable copy is still running, startup now explains the conflict instead of silently opening that copy. Save your work, choose Exit Snip Studio from its tray menu, then reopen the installed app.
 
-Text actions can copy recognized text or edit one recognized line. The line
-editor estimates the font and uses a chosen solid background fill. Check OCR
-values before using them. Undo restores previous edits.
+CAPTURE
+Choose Photo mode, select a capture mode, then New. Full screen lets you click one monitor to capture; All monitors captures the complete connected desktop. Rectangle, Freeform, Window, and Scrolling remain available.
+Selections span the entire virtual desktop, including across monitors.
+Escape/right-click cancels selection. Delayed capture has a Cancel button.
+The app starts compact and can resize to fit a new snip. The clock shows the
+selected delay (Off, 3s, 5s, or 10s).
+Capture closes app menus, hides all open Snip Studio windows for the snapshot,
+and suppresses those windows' fade transitions before restoring them. Starting
+a hidden-window hotkey capture does not first show and hide the editor.
+Remember capture delay is on by default. Turn it off in Settings to start
+each new app session with no delay; you can still choose a delay while open.
+Window capture copies the visible desktop area, including overlapping content.
+Hide taskbars during capture and Keep main monitor taskbar visible are both
+on by default. Previously unconfigured profiles adopt taskbar hiding once;
+the saved main-taskbar choice is retained. Later explicit choices are remembered.
+Change either option in Settings.
+Hidden taskbars return after the screenshot snapshot or when recording ends.
 
-Select a text note and drag a side handle to wrap it into a narrower box.
-Double-click a note to edit its wording, font size, width, or ink color.
-Select an arrow and drag its tip or tail to rotate it or change its length.
+EDIT
+Move selects and drags annotations and removal selection boxes. To adjust a removal area before deleting, switch between Remove area and Move; drag the box or use arrow keys (Shift moves ten pixels). Delete applies at the new position; Escape cancels. Moving the box changes no pixels or Undo history. Drag blank space with the middle mouse
+button to pan the image. Arrow keys nudge; Shift+arrow moves ten
+image pixels. Escape cancels a move. Delete removes the selected annotation.
+The pointer shows the active drawing tool's icon. Right-click an annotation
+to select it and switch to Move, then drag it or use its available handles.
+Pen, Highlight, Arrow, Box, Text, Eraser, Crop, Undo, and Redo are available.
+Crop preserves editable annotations. Eraser removes marks rather than pixels.
+Highlight snaps to recognized words/lines when enabled. Shift-drag forces
+freehand highlighting. Recognition progress and unavailable states are shown.
+Text notes support rich text. Double-click a note in Move/Text mode, or select
+it and press F2, to edit its words and formatting. Select part of the draft to
+change only those words, or Select all to format the whole note. Controls
+include font family, point size, bold, italic, underline, strikethrough,
+superscript, subscript, ink color, highlighting, and clear formatting.
+Paragraph controls provide left/center/right/justified alignment, bullets,
+numbering, indentation, line spacing, and space before/after paragraphs.
+Cut, Copy, Paste, Select all, and draft Undo/Redo are available. Supported text
+formatting is kept; embedded objects are not pasted into the text draft.
+Drag the side handles to make a note narrower; it wraps and grows in height.
+Box width changes wrapping without changing the chosen font size. The editor
+shows its preview scale; keep the note inside the screenshot edges.
+In Move, select an arrow and drag its tip or tail handle to rotate or resize it.
+The color palette offers swatches, recent ink colors, and exact hex values.
+Click the Exact color square to open the honeycomb picker with RGB, hex,
+brightness, and current/new previews. Cancel leaves the previous color intact.
+Wheel zoom and scroll use short animated transitions. Ctrl + mouse wheel
+zooms toward the pointer by default; the wheel alone
+scrolls. Turn off Hold Ctrl to zoom with the mouse wheel in Settings if you
+prefer plain-wheel zoom. Actual size (100%) is available in More > Zoom.
 
-More > Save as PDF exports the finished snip as a lossless image-backed PDF.
-PDFs are not searchable text documents. Transparency becomes white.
+COPY, TEXT, PRINT, SHARE, AND EDITORS
+Copy image / Ctrl+C copies the rendered snip. Paste / Ctrl+V opens an image.
+Copy text / Ctrl+Shift+C adds a selectable text overlay directly on the image.
+Recognition starts when Text actions or text-snapping Highlight needs it;
+ordinary capture/editing does not continuously run OCR. Wait for the readiness
+message before selecting recognized words.
+Drag over words to select them, then copy the selection or all recognized text.
+Right-click selected words for Copy selection without changing the selection.
+Text actions show a bright preview outline for at least one second while the
+commands become ready. OCR can take longer. The screenshot stays at full
+contrast; selected words receive a blue band. These preview marks are not saved.
+Review recognized text for possible misreads.
+Select words within one recognized line, then Edit line (or F2) to replace
+words in the screenshot. The selected words start highlighted in the editor.
+Delete selection masks only the selected bitmap words with a solid fill.
+The remaining screenshot words keep their positions, so gaps can remain.
+These edits support Undo. Edit line estimates the source font from screenshot
+pixels and installed fonts. It is an ESTIMATE, not recovered font metadata;
+review the family, size, style, and spacing and adjust them when needed.
+Line replacement covers the old line with a solid fill, whose color can be
+changed in the editor. Complex image backgrounds are not reconstructed.
+For text you already added, edit the original text note. Ambiguous overlapping
+bitmap/vector text is left unchanged rather than guessing what to remove.
+Save always opens Save As to choose a filename, location, and PNG, JPEG, BMP,
+or PDF format. More > Save as PDF is also available.
+Save As is always available from the menu and Ctrl+Shift+S, even when the
+current snip already has a filename. It asks for a filename and location.
+PDF keeps a lossless image of the completed snip; it is not a searchable or
+editable text document. PNG preserves transparency. Image exports are
+flattened; editable annotations remain in the open Snip Studio window.
+Print / Ctrl+P provides preview, printer selection, and page setup. A Windows
+Print dialog confirms the job before submission.
+Share on the main toolbar or More > Share opens Windows' share panel. You
+choose the destination; no recipient is selected automatically.
+Settings lists detected editors, including Photoshop when installed. Refresh
+the list or browse manually if needed. Choose an editor, then Edit in ...
+opens a separate PNG working copy. Save it there, then use More > Reload
+external edit to load the changes into Snip Studio.
 
-Video review > Make smaller saves a separate MP4 using a size preset or
-target file size. The original remains intact. Target sizes are estimates;
-attachment limits vary by service. Recording is up to 1080p at 15 fps.
+TRANSLATE RECOGNIZED TEXT
+The complete 0.4.2 package includes a free, open-source Bergamot translation
+engine running locally through WebAssembly and a bundled Node runtime.
+No Python, Docker, localhost server setup, Azure, paid API, subscription,
+or API key is required for the included offline translation workflow.
 
-Settings includes taskbar hiding for screenshots and video, a choice to keep
-the main monitor taskbar visible, and Show tooltips (on by default).
+Included languages: English, German, Spanish, and French. Six small models
+cover English in both directions with each of the other three languages.
+Other supported pairs use English as an offline intermediate language.
+Choose the source language explicitly, choose the target, then Translate.
+Automatic language detection and other languages are not promised by this
+included model set. No model download is performed while translating.
 
-See README.md in the source repository for build instructions and limits.
+In Text actions, select recognized words or leave the selection empty to use
+all recognized text, then choose Translate. The dialog keeps the original
+beside the result, supports Cancel, and offers Copy translation.
+Replace text in snip translates each recognized line and places its replacement
+in the corresponding source bounds. It estimates font and ink color, covers the
+old bitmap words with a sampled solid background, and fits/wraps the result.
+This is not perfect background reconstruction: review the result, especially
+on textured or complex backgrounds. One Undo restores the original bitmap and
+removes the replacement annotations together.
+Offline translation does not upload the image or text to a translation service.
+
+Keep the entire translation subfolder beside Snip Studio.exe, including its
+runtime, worker, models, bundle manifest, and license/attribution files.
+The portable ZIP must be extracted completely; copying only the application
+EXE omits the included translator. If files are missing, repair or reinstall
+the complete package. The bundled Node executable keeps its original valid
+publisher signature; Automation Forge signs the application and Setup.
+
+Translation output can be inaccurate, especially with compact models or an
+English intermediate step. Review important values and wording. All six direct
+model directions and an English-pivot route passed synthetic phrase checks;
+broad language quality and live dialog operation remain unverified. Components
+are packaged only after their license review is complete.
+
+Bergamot source:
+https://github.com/browsermt/bergamot-translator
+Node source:
+https://github.com/nodejs/node
+
+VIDEO
+Choose Video mode, then Record to select a region across monitors and start
+after a countdown. Use the audio button to choose microphone and system-audio
+devices separately, or Windows defaults.
+Stop finalizes local H.264/AAC MP4, up to 1920x1080 at 15 frames/second.
+Larger regions are scaled proportionally. Unavailable devices report an error.
+Windows capture exclusion is requested for the controller when supported;
+otherwise place it outside the selected region.
+Review a recording to play, copy, save, or trim a new copy. Trimming re-encodes
+H.264/AAC and preserves the original. Copied videos are file clipboard items;
+the receiving app must accept video files.
+Make smaller in recording review saves an email-sized copy using Balanced
+720p, Small 480p, or a target size (10/20/25 MB or custom). Progress and Cancel
+are available. The original stays intact. Estimates are not hard size limits:
+the result reports its actual size and whether the chosen target was met.
+Very compact or long videos may need trimming to meet a smaller target.
+
+SETTINGS
+More > Settings includes automatic copy/save, folders, edited-file prompts,
+multiple windows, border color/width, HDR correction, audio defaults/devices,
+Dark/Light/System theme, compact startup, automatic resizing, preferred editor,
+Print Screen, notification-area operation, and optional background startup.
+Settings defers installed-editor/audio discovery and shell-icon work until
+after the form appears. Loading and failure states preserve saved choices.
+The screenshot-border section expands inline and provides a live sample with
+color and thickness controls. Preview changes before saving Settings; Cancel
+discards the settings draft. The preview is available even while borders are off.
+Show tooltips is on by default and can be turned off in Settings.
+Automatic image copies replace the clipboard when enabled.
+Original-capture saving and preparation of image clipboard copies run in the
+background. Status messages report progress or failure. This implementation
+change has not yet established live smoothness on a user's computer.
+Original captures can save automatically; edits save when you select Save.
+Unstored captures still prompt if an automatic save could not complete.
+HDR correction uses float-format Windows Graphics Capture and tone mapping;
+unsupported paths report errors rather than silently applying a color filter.
+HDR correction is experimental in this build: live HDR fidelity is unverified,
+and the conversion currently assumes an 80-nit SDR white level.
+
+SHORTCUTS
+Ctrl+N New; Ctrl+O Open; Ctrl+S Save; Ctrl+Shift+S Save as;
+Ctrl+C Copy image; Ctrl+Shift+C Copy text; Ctrl+V Paste; Ctrl+P Print;
+Ctrl+Z Undo; Ctrl+Y Redo; F1 Help.
+Ctrl+Alt+S captures from another app while Snip Studio is running.
+Print Screen capture is enabled by default in Snip Studio. Windows may reserve
+the key or route it to Snipping Tool; use the
+provided Windows keyboard settings link to review that choice.
+Snip Studio does not silently change Windows' Print Screen routing.
+Close closes the current editor. Keep capture shortcuts after closing is on
+by default: closing the last editor leaves a small notification-area listener
+so Ctrl+Alt+S and Print Screen can still start a capture. Choose Exit from its
+notification-area menu to stop the listener and shortcuts. Turn this setting
+off to exit when the last editor closes.
+Keep running in the notification area is a separate opt-in setting. When on,
+Close hides the full editor and preserves its current snip for reopening.
+Start with Windows is also optional and off by default. Enable it in Settings
+or select the optional installer component. With the default capture-shortcut
+preference, it starts only the listener. With notification-area editor mode on,
+it starts with the editor hidden; if both background preferences are off, it
+opens the main window. Existing saved background preferences are respected.
+
+YOUR DATA
+Editing, recognition, recording, and bundled translation run locally. The
+included translator does not send the text or image to a translation server.
+Sharing, opening an external editor, and the website happen when selected.
+Preferences: %LOCALAPPDATA%\SnipStudio\preferences.xml.
+Share/editor/video working copies stay in that local application folder so
+other apps can finish reading or editing them after a dialog closes.
+Protected content may appear black. Scrolling capture is available in Photo mode > Scrolling. Select only the moving content, leaving out sidebars and fixed message boxes. Small animations are tolerated only when a unique overlap remains verifiable. Broad animation or streaming/reflowing content can still stop capture. Smaller-step retries briefly reverse only the pinned scrolling target and continue only after the previous view is verified. Finish opens a preview; Cancel discards. Review the joins and bottom before Use capture. Partial results do not confirm that the bottom was reached. Limits are three minutes, 300 scroll requests, 100 accepted frames, 30,000 pixels high and 64 million pixels.
+
+DEVELOPMENT
+Build the application without running the icon generator or checks:
+.\build.ps1 -UseExistingIcons
+The public build creates an unsigned application and has no -Check switch.
+It uses the Windows Framework C# compiler and system WinRT metadata.
+Selected synthetic checks are source-only PowerShell 5 scripts under checks/;
+invoke them separately against the matching verified signed release. They do
+not establish live desktop, device, browser or installer behavior.
+The full translator payload is supplied in the signed release. Public
+translation preparation source requires additional reviewed inputs; the
+checkout does not automatically reproduce a complete signed release.
+Icon sources and the optional regeneration tool are in assets/ and tools/.
+
 An independent Automation Forge app; not affiliated with Microsoft.
+
+0.5.4 VERIFICATION STATUS
+658 focused signed-library checks passed for menu positioning, complete side-toolbar height, moving a removal selection without changing pixels, deletion/Undo, preview rendering, fullscreen layout, view preservation and startup compatibility.
+The prior0.5.3 build passed621 scrolling and related checks; those are historical rather than claimed rerun here. See VALIDATION.txt for exact current coverage. No editor, popup, capture, native input or user settings were used by the current checks. Live multi-monitor/DPI positioning, pointer dragging and full installation/upgrade/uninstall still need user acceptance.

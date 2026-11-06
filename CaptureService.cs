@@ -15,7 +15,9 @@ namespace SnipStudio
         Rectangle,
         Freeform,
         Window,
-        FullScreen
+        FullScreen,
+        // UI index 4 is reserved for the scrolling-capture workflow.
+        AllMonitors = 5
     }
 
     public static class CaptureService
@@ -24,6 +26,16 @@ namespace SnipStudio
         public static bool HideTaskbarsDuringCapture { get; set; }
         private static bool keepPrimaryTaskbarVisible = true;
         public static bool KeepPrimaryTaskbarVisible { get { return keepPrimaryTaskbarVisible; } set { keepPrimaryTaskbarVisible = value; } }
+
+        // Scrolling capture owns taskbar/window visibility for its whole session.
+        // Regions use physical desktop coordinates, including negative monitors.
+        internal static Bitmap CaptureRegion(Rectangle bounds)
+        {
+            Rectangle desktop = SystemInformation.VirtualScreen;
+            if (bounds.Width < 1 || bounds.Height < 1 || !desktop.Contains(bounds))
+                throw new ArgumentOutOfRangeException("bounds", "Keep the capture region inside the connected desktop.");
+            return CaptureDesktop(bounds);
+        }
         // The caller hides its own window before calling, and owns the returned bitmap.
         // Selection is made against a frozen desktop so the overlay never appears in a snip.
         public static Bitmap Capture(CaptureMode mode)
@@ -41,7 +53,8 @@ namespace SnipStudio
             {
                 using (TaskbarVisibilityScope taskbars = HideTaskbarsDuringCapture ? TaskbarVisibilityScope.Hide(KeepPrimaryTaskbarVisible) : null)
                 {
-                    windows = mode == CaptureMode.Window ? FindWindows(desktopBounds) : new List<CaptureWindow>();
+                    windows = mode == CaptureMode.Window ? FindWindows(desktopBounds) :
+                        mode == CaptureMode.FullScreen ? FindMonitors(desktopBounds) : new List<CaptureWindow>();
                     desktop = CaptureDesktop(desktopBounds);
                     if (taskbars != null) taskbars.VerifyHidden();
                 }
@@ -53,7 +66,7 @@ namespace SnipStudio
             }
             // The live taskbars are restored here. Selection uses the frozen
             // image, so canceling or spending time selecting cannot leave them hidden.
-            if (mode == CaptureMode.FullScreen)
+            if (mode == CaptureMode.AllMonitors)
                 return desktop;
 
             try
@@ -83,6 +96,38 @@ namespace SnipStudio
             if (right <= left || bottom <= top)
                 return Rectangle.Empty;
             return Rectangle.FromLTRB(left, top, right, bottom);
+        }
+
+        private static List<CaptureWindow> FindMonitors(Rectangle desktopBounds)
+        {
+            Screen[] screens = Screen.AllScreens;
+            Rectangle[] bounds = new Rectangle[screens.Length];
+            int primaryIndex = -1;
+            for (int index = 0; index < screens.Length; index++)
+            {
+                bounds[index] = screens[index].Bounds;
+                if (screens[index].Primary) primaryIndex = index;
+            }
+            return CreateMonitorTargets(desktopBounds, bounds, primaryIndex);
+        }
+
+        // Coordinates stay in the frozen desktop's pixel space, including
+        // displays left/above the primary monitor and gaps between displays.
+        internal static List<CaptureWindow> CreateMonitorTargets(Rectangle desktopBounds, Rectangle[] monitorBounds, int primaryIndex)
+        {
+            if (monitorBounds == null) throw new ArgumentNullException("monitorBounds");
+            List<CaptureWindow> monitors = new List<CaptureWindow>();
+            for (int index = 0; index < monitorBounds.Length; index++)
+            {
+                Rectangle bounds = Rectangle.Intersect(monitorBounds[index], desktopBounds);
+                if (bounds.Width < 1 || bounds.Height < 1) continue;
+                bounds.Offset(-desktopBounds.Left, -desktopBounds.Top);
+                CaptureWindow target = new CaptureWindow();
+                target.Bounds = bounds;
+                target.Title = index == primaryIndex ? "Primary monitor" : "Monitor " + (index + 1).ToString();
+                monitors.Add(target);
+            }
+            return monitors;
         }
 
         public static Rectangle? SelectRecordingRegion()
@@ -226,12 +271,20 @@ namespace SnipStudio
         private readonly Font instructionFont = new Font("Segoe UI", 11f, FontStyle.Regular);
         private readonly Font detailFont = new Font("Segoe UI", 9f, FontStyle.Regular);
         private readonly Color accent = Color.FromArgb(89, 184, 255);
+        private readonly string instructionTitle;
+        private readonly string instructionDetail;
+        private Size instructionTitleSize, instructionDetailSize;
+        private Rectangle instructionMonitor, instructionBox;
+        private float instructionDpiX, instructionDpiY;
+        private string dimensionText = "";
+        private Size dimensionTextSize;
         private Point start;
         private Point current;
         private bool dragging;
         private Rectangle selection = Rectangle.Empty;
         private GraphicsPath freeformPath;
         private CaptureWindow hoveredWindow;
+        private bool SelectsWholeTarget { get { return mode == CaptureMode.Window || mode == CaptureMode.FullScreen; } }
 
         internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows)
         {
@@ -239,6 +292,12 @@ namespace SnipStudio
             this.desktopBounds = desktopBounds;
             this.mode = mode;
             this.windows = windows;
+            instructionTitle = mode == CaptureMode.FullScreen ? "Click the monitor to capture" :
+                mode == CaptureMode.Window ? "Click a window to capture" :
+                mode == CaptureMode.Freeform ? "Draw around the area to capture" : "Drag to select an area";
+            instructionDetail = mode == CaptureMode.FullScreen ? "One complete monitor    |    Esc or right-click to cancel" :
+                mode == CaptureMode.Window ? "Visible window area    |    Esc or right-click to cancel" :
+                "Release to capture    |    Esc or right-click to cancel";
             Text = "Choose a snip - Snip Studio";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
@@ -247,13 +306,16 @@ namespace SnipStudio
             ShowInTaskbar = false;
             TopMost = true;
             KeyPreview = true;
-            Cursor = mode == CaptureMode.Window ? Cursors.Hand : Cursors.Cross;
+            Cursor = SelectsWholeTarget ? Cursors.Hand : Cursors.Cross;
             BackColor = Color.Black;
             DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
                 ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
             current = ClampPoint(new Point(Cursor.Position.X - desktopBounds.Left, Cursor.Position.Y - desktopBounds.Top));
-            if (mode == CaptureMode.Window)
+            instructionTitleSize = TextRenderer.MeasureText(instructionTitle, instructionFont);
+            instructionDetailSize = TextRenderer.MeasureText(instructionDetail, detailFont);
+            UpdateInstructionLocation();
+            if (SelectsWholeTarget)
                 UpdateHoveredWindow(current);
         }
 
@@ -312,7 +374,15 @@ namespace SnipStudio
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics graphics = e.Graphics;
-            graphics.DrawImageUnscaled(desktop, 0, 0);
+            // Mouse movement invalidates only changed strips/HUDs. Keep the
+            // system's dirty clip and copy only its bounded desktop rectangle.
+            Rectangle dirty = Rectangle.Intersect(e.ClipRectangle, new Rectangle(Point.Empty, desktop.Size));
+            if (dirty.Width <= 0 || dirty.Height <= 0) return;
+            GraphicsState desktopState = graphics.Save();
+            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            graphics.PixelOffsetMode = PixelOffsetMode.Half;
+            graphics.DrawImage(desktop, dirty, dirty.X, dirty.Y, dirty.Width, dirty.Height, GraphicsUnit.Pixel);
+            graphics.Restore(desktopState);
             using (Region dimmed = new Region(ClientRectangle))
             using (Brush dimBrush = new SolidBrush(Color.FromArgb(112, 0, 0, 0)))
             {
@@ -341,47 +411,76 @@ namespace SnipStudio
             base.OnPaint(e);
         }
 
+        protected override void OnPaintBackground(PaintEventArgs e)
+        {
+            // OnPaint replaces every dirty pixel with the frozen desktop.
+        }
+
         private void DrawInstructions(Graphics graphics)
         {
-            Point screenPoint = new Point(current.X + desktopBounds.Left, current.Y + desktopBounds.Top);
-            Rectangle monitor = Screen.FromPoint(screenPoint).Bounds;
-            monitor.Offset(-desktopBounds.Left, -desktopBounds.Top);
-            string title = mode == CaptureMode.Window ? "Click a window to capture" :
-                mode == CaptureMode.Freeform ? "Draw around the area to capture" : "Drag to select an area";
-            string detail = "Release to capture    |    Esc or right-click to cancel";
-            if (mode == CaptureMode.Window)
-                detail = "Visible window area    |    Esc or right-click to cancel";
-
-            Size titleSize = TextRenderer.MeasureText(graphics, title, instructionFont);
-            Size detailSize = TextRenderer.MeasureText(graphics, detail, detailFont);
-            int width = Math.Min(Math.Max(titleSize.Width, detailSize.Width) + 40, Math.Max(180, monitor.Width - 32));
-            int height = titleSize.Height + detailSize.Height + 28;
-            Rectangle box = new Rectangle(monitor.Left + (monitor.Width - width) / 2, monitor.Top + 22, width, height);
+            if (instructionDpiX != graphics.DpiX || instructionDpiY != graphics.DpiY)
+            {
+                Rectangle previous = instructionBox;
+                instructionTitleSize = TextRenderer.MeasureText(graphics, instructionTitle, instructionFont);
+                instructionDetailSize = TextRenderer.MeasureText(graphics, instructionDetail, detailFont);
+                instructionDpiX = graphics.DpiX; instructionDpiY = graphics.DpiY;
+                SetInstructionBox();
+                if (previous != instructionBox) { InvalidateHud(previous); InvalidateHud(instructionBox); }
+            }
+            Rectangle box = instructionBox;
+            if (!graphics.IsVisible(box)) return;
             DrawBox(graphics, box);
-            TextRenderer.DrawText(graphics, title, instructionFont,
-                new Rectangle(box.X + 16, box.Y + 10, box.Width - 32, titleSize.Height), Color.White,
+            TextRenderer.DrawText(graphics, instructionTitle, instructionFont,
+                new Rectangle(box.X + 16, box.Y + 10, box.Width - 32, instructionTitleSize.Height), Color.White,
                 TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
-            TextRenderer.DrawText(graphics, detail, detailFont,
-                new Rectangle(box.X + 12, box.Y + titleSize.Height + 13, box.Width - 24, detailSize.Height),
+            TextRenderer.DrawText(graphics, instructionDetail, detailFont,
+                new Rectangle(box.X + 12, box.Y + instructionTitleSize.Height + 13, box.Width - 24, instructionDetailSize.Height),
                 Color.FromArgb(198, 209, 224), TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+        }
+
+        private void UpdateInstructionLocation()
+        {
+            if (instructionMonitor.Width > 0 && instructionMonitor.Contains(current)) return;
+            Point screenPoint = new Point(current.X + desktopBounds.Left, current.Y + desktopBounds.Top);
+            instructionMonitor = Screen.FromPoint(screenPoint).Bounds;
+            instructionMonitor.Offset(-desktopBounds.Left, -desktopBounds.Top);
+            SetInstructionBox();
+        }
+
+        private void SetInstructionBox()
+        {
+            int width = Math.Min(Math.Max(instructionTitleSize.Width, instructionDetailSize.Width) + 40, Math.Max(180, instructionMonitor.Width - 32));
+            int height = instructionTitleSize.Height + instructionDetailSize.Height + 28;
+            instructionBox = new Rectangle(instructionMonitor.Left + (instructionMonitor.Width - width) / 2, instructionMonitor.Top + 22, width, height);
         }
 
         private void DrawDimensions(Graphics graphics)
         {
+            Rectangle box = GetDimensionBox();
+            if (!graphics.IsVisible(box)) return;
+            DrawBox(graphics, box);
+            TextRenderer.DrawText(graphics, dimensionText, detailFont, new Rectangle(box.X + 8, box.Y + 5, box.Width - 16, box.Height - 10),
+                Color.White, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+
+        private Rectangle GetDimensionBox()
+        {
+            if (selection.Width <= 0 || selection.Height <= 0) return Rectangle.Empty;
             string text = selection.Width.ToString() + " x " + selection.Height.ToString() + " px";
-            if (mode == CaptureMode.Window && hoveredWindow != null)
+            if (SelectsWholeTarget && hoveredWindow != null)
                 text = hoveredWindow.Title + "  |  " + text;
-            Size textSize = TextRenderer.MeasureText(graphics, text, detailFont);
-            int width = Math.Min(textSize.Width + 20, Math.Max(80, Math.Min(500, ClientSize.Width - 16)));
-            int height = textSize.Height + 12;
+            if (!String.Equals(text, dimensionText, StringComparison.Ordinal))
+            {
+                dimensionText = text;
+                dimensionTextSize = TextRenderer.MeasureText(text, detailFont);
+            }
+            int width = Math.Min(dimensionTextSize.Width + 20, Math.Max(80, Math.Min(500, ClientSize.Width - 16)));
+            int height = dimensionTextSize.Height + 12;
             int x = Math.Max(8, Math.Min(selection.Left, ClientSize.Width - width - 8));
             int y = selection.Bottom + 8;
             if (y + height > ClientSize.Height - 8)
                 y = Math.Max(8, selection.Top - height - 8);
-            Rectangle box = new Rectangle(x, y, width, height);
-            DrawBox(graphics, box);
-            TextRenderer.DrawText(graphics, text, detailFont, new Rectangle(x + 8, y + 5, width - 16, height - 10),
-                Color.White, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+            return new Rectangle(x, y, width, height);
         }
 
         private void DrawBox(Graphics graphics, Rectangle bounds)
@@ -405,10 +504,18 @@ namespace SnipStudio
             if (e.Button != MouseButtons.Left)
                 return;
 
+            Rectangle previousSelection = selection;
+            Rectangle previousFreeform = FreeformVisualBounds();
+            Rectangle previousDimensions = GetDimensionBox();
+            Rectangle previousInstructions = instructionBox;
+            CaptureWindow previousWindow = hoveredWindow;
             current = ClampPoint(e.Location);
-            if (mode == CaptureMode.Window)
+            UpdateInstructionLocation();
+            if (SelectsWholeTarget)
             {
                 UpdateHoveredWindow(current);
+                InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions,
+                    false, !Object.ReferenceEquals(previousWindow, hoveredWindow));
                 return;
             }
 
@@ -423,14 +530,24 @@ namespace SnipStudio
                 freeformPath.Dispose();
                 freeformPath = null;
             }
-            Invalidate();
+            InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions,
+                mode == CaptureMode.Freeform, false);
         }
 
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
-            current = ClampPoint(e.Location);
-            if (mode == CaptureMode.Window)
+            Point next = ClampPoint(e.Location);
+            if (next == current) return;
+            Rectangle previousSelection = selection;
+            Rectangle previousFreeform = FreeformVisualBounds();
+            Rectangle previousDimensions = GetDimensionBox();
+            Rectangle previousInstructions = instructionBox;
+            CaptureWindow previousWindow = hoveredWindow;
+            current = next;
+            UpdateInstructionLocation();
+            bool freeformChanged = false;
+            if (SelectsWholeTarget)
                 UpdateHoveredWindow(current);
             else if (dragging)
             {
@@ -438,13 +555,107 @@ namespace SnipStudio
                 {
                     Point last = freeformPoints[freeformPoints.Count - 1];
                     if (Math.Abs(last.X - current.X) + Math.Abs(last.Y - current.Y) >= 2)
+                    {
                         freeformPoints.Add(current);
-                    UpdateFreeformPath();
+                        UpdateFreeformPath();
+                        freeformChanged = true;
+                    }
                 }
                 else
                     selection = CaptureService.NormalizeSelection(start, current, ClientRectangle);
             }
-            Invalidate();
+            InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions,
+                freeformChanged, !Object.ReferenceEquals(previousWindow, hoveredWindow));
+        }
+
+        private void InvalidateOverlayChange(Rectangle previousSelection, Rectangle previousFreeform,
+            Rectangle previousDimensions, Rectangle previousInstructions, bool freeformChanged, bool windowChanged)
+        {
+            bool selectionChanged = previousSelection != selection;
+            bool instructionsChanged = previousInstructions != instructionBox;
+            if (!selectionChanged && !freeformChanged && !windowChanged && !instructionsChanged) return;
+
+            using (Region dirty = mode == CaptureMode.Freeform
+                ? new Region(Rectangle.Empty) : CreateSelectionRepaintRegion(previousSelection, selection))
+            {
+                if (mode == CaptureMode.Freeform && freeformChanged)
+                {
+                    if (HasArea(previousFreeform)) dirty.Union(previousFreeform);
+                    Rectangle nextFreeform = FreeformVisualBounds();
+                    if (HasArea(nextFreeform)) dirty.Union(nextFreeform);
+                }
+                if (selectionChanged || freeformChanged || windowChanged)
+                {
+                    AddHud(dirty, previousDimensions);
+                    AddHud(dirty, GetDimensionBox());
+                }
+                if (instructionsChanged)
+                {
+                    AddHud(dirty, previousInstructions);
+                    AddHud(dirty, instructionBox);
+                }
+                dirty.Intersect(ClientRectangle);
+                Invalidate(dirty, false);
+            }
+        }
+
+        // Pure geometry: resizing a large rectangle changes its interior only
+        // in the symmetric-difference strips. The shared bright interior is
+        // left alone; both old/new anti-aliased border rings are refreshed.
+        internal static Region CreateSelectionRepaintRegion(Rectangle previous, Rectangle next)
+        {
+            Region dirty = new Region(Rectangle.Empty);
+            if (HasArea(previous)) dirty.Union(previous);
+            if (HasArea(next)) dirty.Xor(next);
+            AddSelectionEdge(dirty, previous);
+            AddSelectionEdge(dirty, next);
+            return dirty;
+        }
+
+        private static bool HasArea(Rectangle rectangle) { return rectangle.Width > 0 && rectangle.Height > 0; }
+
+        private static void AddSelectionEdge(Region target, Rectangle rectangle)
+        {
+            if (!HasArea(rectangle)) return;
+            Rectangle outside = rectangle; outside.Inflate(3, 3);
+            Rectangle inside = rectangle; inside.Inflate(-3, -3);
+            using (Region edge = new Region(outside))
+            {
+                if (HasArea(inside)) edge.Exclude(inside);
+                target.Union(edge);
+            }
+        }
+
+        private static void AddHud(Region target, Rectangle rectangle)
+        {
+            if (!HasArea(rectangle)) return;
+            rectangle.Inflate(2, 2);
+            target.Union(rectangle);
+        }
+
+        private void InvalidateHud(Rectangle rectangle)
+        {
+            if (!HasArea(rectangle)) return;
+            rectangle.Inflate(2, 2);
+            Invalidate(Rectangle.Intersect(rectangle, ClientRectangle), false);
+        }
+
+        private Rectangle FreeformVisualBounds()
+        {
+            if (mode != CaptureMode.Freeform || freeformPoints.Count < 2) return Rectangle.Empty;
+            int left = freeformPoints[0].X, top = freeformPoints[0].Y, right = left, bottom = top;
+            if (freeformPath != null)
+            {
+                RectangleF bounds = freeformPath.GetBounds();
+                left = (int)Math.Floor(bounds.Left); top = (int)Math.Floor(bounds.Top);
+                right = (int)Math.Ceiling(bounds.Right); bottom = (int)Math.Ceiling(bounds.Bottom);
+            }
+            else foreach (Point point in freeformPoints)
+            {
+                left = Math.Min(left, point.X); right = Math.Max(right, point.X);
+                top = Math.Min(top, point.Y); bottom = Math.Max(bottom, point.Y);
+            }
+            return Rectangle.FromLTRB(left - 3, top - 3, right + 4, bottom + 4);
         }
 
         protected override void OnMouseUp(MouseEventArgs e)
@@ -453,12 +664,20 @@ namespace SnipStudio
             if (e.Button != MouseButtons.Left)
                 return;
 
+            Rectangle previousSelection = selection;
+            Rectangle previousFreeform = FreeformVisualBounds();
+            Rectangle previousDimensions = GetDimensionBox();
+            Rectangle previousInstructions = instructionBox;
+            CaptureWindow previousWindow = hoveredWindow;
             current = ClampPoint(e.Location);
-            if (mode == CaptureMode.Window)
+            UpdateInstructionLocation();
+            if (SelectsWholeTarget)
             {
                 UpdateHoveredWindow(current);
                 if (!selection.IsEmpty)
                     CompleteSelection();
+                else InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions,
+                    false, !Object.ReferenceEquals(previousWindow, hoveredWindow));
                 return;
             }
             if (!dragging)
@@ -472,7 +691,7 @@ namespace SnipStudio
                 UpdateFreeformPath();
                 if (freeformPath == null || !HasPolygonArea())
                 {
-                    ResetSelection();
+                    ResetSelection(previousSelection, previousFreeform, previousDimensions, previousInstructions);
                     return;
                 }
             }
@@ -482,7 +701,7 @@ namespace SnipStudio
             if (selection.Width >= 2 && selection.Height >= 2)
                 CompleteSelection();
             else
-                ResetSelection();
+                ResetSelection(previousSelection, previousFreeform, previousDimensions, previousInstructions);
         }
 
         protected override void OnMouseCaptureChanged(EventArgs e)
@@ -556,6 +775,12 @@ namespace SnipStudio
 
         private void ResetSelection()
         {
+            ResetSelection(selection, FreeformVisualBounds(), GetDimensionBox(), instructionBox);
+        }
+
+        private void ResetSelection(Rectangle previousSelection, Rectangle previousFreeform,
+            Rectangle previousDimensions, Rectangle previousInstructions)
+        {
             selection = Rectangle.Empty;
             freeformPoints.Clear();
             if (freeformPath != null)
@@ -563,7 +788,8 @@ namespace SnipStudio
                 freeformPath.Dispose();
                 freeformPath = null;
             }
-            Invalidate();
+            InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions,
+                mode == CaptureMode.Freeform, false);
         }
 
         private void CompleteSelection()

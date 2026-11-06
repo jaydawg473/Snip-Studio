@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Diagnostics;
 using System.Drawing;
@@ -14,13 +15,14 @@ namespace SnipStudio
         private Timer automaticCopyTimer;
         private long lastDocumentRevision = -1;
         private Size lastSnipSize = Size.Empty;
-        private bool applyingCapturePolicy;
         private string capturePolicyMessage;
         private string externalWorkingCopy;
         private string lastRecordingPath;
         private ContextMenuStrip moreMenu;
+        private bool positioningMoreMenu;
         private ToolStripMenuItem reloadExternalItem;
         private bool preparingShare;
+        private static SettingsForm sharedSettings;
 
         private bool ShouldAskToSaveEdits
         {
@@ -29,7 +31,7 @@ namespace SnipStudio
 
         private Control BuildSettingsButton()
         {
-            StudioButton more = ActionButton("More", "more", 34, delegate { moreMenu.Show(Cursor.Position); });
+            StudioButton more = ActionButton("More", "more", 34, ShowMoreMenu);
             more.IconOnly = true;
             more.AccessibleName = "More actions";
             tips.SetToolTip(more, "More actions, Print, Settings, Help and About");
@@ -39,14 +41,19 @@ namespace SnipStudio
             StudioTheme.StyleMenu(moreMenu);
             moreMenu.BackColor = StudioTheme.Surface;
             moreMenu.ForeColor = StudioTheme.Text;
+            moreMenu.Opened += delegate { RepositionMoreMenu(); };
+            moreMenu.SizeChanged += delegate { RepositionMoreMenu(); };
             ToolStripMenuItem zoom = new ToolStripMenuItem("Zoom");
-            zoom.DropDownItems.Add("Zoom in", null, delegate { canvas.ZoomIn(); UpdateDocumentState(); });
-            zoom.DropDownItems.Add("Zoom out", null, delegate { canvas.ZoomOut(); UpdateDocumentState(); });
-            zoom.DropDownItems.Add("Fit to window", null, delegate { canvas.FitToWindow(); UpdateDocumentState(); });
-            zoom.DropDownItems.Add("Actual size (100%)", null, delegate { canvas.ActualSize(); UpdateDocumentState(); });
+            zoom.DropDownItems.Add("Zoom in", null, delegate { canvas.ZoomIn(); });
+            zoom.DropDownItems.Add("Zoom out", null, delegate { canvas.ZoomOut(); });
+            zoom.DropDownItems.Add("Fit to window", null, delegate { canvas.FitToWindow(); });
+            zoom.DropDownItems.Add("Actual size (100%)", null, delegate { canvas.ActualSize(); });
             moreMenu.Items.Add(zoom);
             ToolStripMenuItem shareItem = AddMenuItem("Share…", "copy", delegate { ShareCurrentImage(); });
             AddMenuItem("Open file…", "open", delegate { ChooseImage(); });
+            AddMenuItem("Full-screen capture (choose monitor)", "camera", delegate { SetCaptureKind(false); mode.SelectedIndex = 3; StartCapture(); });
+            AddMenuItem("Capture all monitors", "fullscreen", delegate { SetCaptureKind(false); mode.SelectedIndex = 5; StartCapture(); });
+            AddMenuItem("Full-screen view                 F11", "fit", delegate { ToggleFullScreenEditor(); });
             AddMenuItem("Paste image", "paste", delegate { PasteImage(); });
             AddMenuItem("Open screenshots folder", "open", delegate { OpenScreenshotFolder(); });
             AddMenuItem("Open recordings folder", "open", delegate { OpenFolder(preferences.RecordingFolder); });
@@ -77,6 +84,38 @@ namespace SnipStudio
             return more;
         }
 
+        private void ShowMoreMenu(object sender, EventArgs e)
+        {
+            Control anchor = sender as Control;
+            if (anchor == null || anchor.IsDisposed || moreMenu == null || moreMenu.IsDisposed) return;
+            Rectangle buttonBounds = anchor.RectangleToScreen(anchor.ClientRectangle);
+            Rectangle work = Screen.FromControl(anchor).WorkingArea;
+            Size popup = moreMenu.GetPreferredSize(Size.Empty);
+            Point location = MenuPopupPlacement.Calculate(buttonBounds, popup, work);
+            // The control-relative overload also supplies SourceControl so
+            // WinForms uses this button's DPI and owner, never the global cursor.
+            moreMenu.Show(anchor, anchor.PointToClient(location), ToolStripDropDownDirection.BelowRight);
+        }
+
+        private void RepositionMoreMenu()
+        {
+            if (positioningMoreMenu || moreMenu == null || moreMenu.IsDisposed || !moreMenu.Visible) return;
+            if (moreMenu.Width < 1 || moreMenu.Height < 1) return;
+            Control anchor = moreMenu.SourceControl;
+            if (anchor == null || anchor.IsDisposed) return;
+            positioningMoreMenu = true;
+            try
+            {
+                // The first Show can resize for a different DPI or menu font.
+                // Clamp that actual size when opened and after any later menu
+                // sizing, using the current owner monitor.
+                Point location = MenuPopupPlacement.Calculate(anchor.RectangleToScreen(anchor.ClientRectangle),
+                    moreMenu.Size, Screen.FromControl(anchor).WorkingArea);
+                if (moreMenu.Location != location) moreMenu.Location = location;
+            }
+            finally { positioningMoreMenu = false; }
+        }
+
         private ToolStripMenuItem AddMenuItem(string label, string glyph, EventHandler action)
         {
             ToolStripMenuItem item = new ToolStripMenuItem(label, String.IsNullOrEmpty(glyph) ? null : IconArtwork.CreateToolIcon(glyph, 18, StudioTheme.Text), action);
@@ -89,13 +128,13 @@ namespace SnipStudio
         {
             automaticCopyTimer = new Timer();
             automaticCopyTimer.Interval = 180;
-            automaticCopyTimer.Tick += delegate
+            automaticCopyTimer.Tick += async delegate
             {
                 automaticCopyTimer.Stop();
                 if (preferences.AutoCopyScreenshotChanges && canvas.HasImage && !IsDisposed)
                 {
-                    try { CopySnapshotToClipboard(); }
-                    catch (Exception) { SetStatus("Your edit is kept. Automatic copy could not access the clipboard; use Copy image to retry."); }
+                    try { await CopySnapshotToClipboardAsync(true); }
+                    catch (Exception) { if (!IsDisposed && !Disposing) SetStatus("Your edit is kept. Automatic copy could not access the clipboard; use Copy image to retry."); }
                 }
             };
             ApplyCurrentPreferences();
@@ -112,61 +151,134 @@ namespace SnipStudio
             CaptureService.UseHdrColorCorrection = preferences.HdrColorCorrection;
             CaptureService.HideTaskbarsDuringCapture = preferences.HideTaskbarsDuringCapture;
             CaptureService.KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible;
+            canvas.RequireCtrlForWheelZoom = preferences.RequireCtrlForWheelZoom;
             recordMicrophone.Checked = preferences.DefaultMicrophone;
             recordSystemAudio.Checked = preferences.DefaultSystemAudio;
             if (!layoutTestMode) ApplyAudioSourcePreferences();
             UpdateExternalEditorButton();
-            if (!canvas.HasImage)
+            if (!canvas.HasImage && !IsFullScreenEditor)
             {
                 MinimumSize = new Size(500, 230);
                 if (preferences.StartCompact) Size = new Size(540, 260);
                 else Size = new Size(1220, 820);
             }
+            LayoutChrome();
         }
 
         private void ShowSettings()
         {
-            bool wasStartup = preferences.StartupWithWindows;
-            using (SettingsForm settings = new SettingsForm(preferences))
-                if (settings.ShowDialog(this) != DialogResult.OK) return;
-            if (wasStartup != preferences.StartupWithWindows)
+            if (sharedSettings != null && !sharedSettings.IsDisposed && !sharedSettings.Disposing)
             {
-                try { StartupIntegration.SetEnabled(preferences.StartupWithWindows); }
+                if (sharedSettings.WindowState == FormWindowState.Minimized) sharedSettings.WindowState = FormWindowState.Normal;
+                if (!sharedSettings.Visible) sharedSettings.Show();
+                sharedSettings.BringToFront();
+                sharedSettings.Activate();
+                return;
+            }
+
+            // Keep the dialog's saved result separate from every editor window's
+            // current capture and drawing choices while the modeless draft is open.
+            Preferences saved = preferences.Clone();
+            bool wasStartup = saved.StartupWithWindows;
+            // The optional installer component can create this app's Run entry.
+            // Read its current value so Settings reflects that explicit choice.
+            try { wasStartup = saved.StartupWithWindows = StartupIntegration.GetEnabled(); }
+            catch (InvalidOperationException) { }
+
+            SettingsForm settings = new SettingsForm(saved);
+            sharedSettings = settings;
+            settings.FormClosed += delegate
+            {
+                if (ReferenceEquals(sharedSettings, settings)) sharedSettings = null;
+                try
+                {
+                    if (settings.DialogResult == DialogResult.OK) ApplySavedSettings(saved, wasStartup);
+                }
+                finally
+                {
+                    Program.UntrackAuxiliaryWindow(settings);
+                    settings.Dispose();
+                }
+            };
+            settings.Disposed += delegate
+            {
+                if (ReferenceEquals(sharedSettings, settings)) sharedSettings = null;
+            };
+            try
+            {
+                // Settings has no editor owner: closing the editor that opened it
+                // must keep both the draft and the application's UI loop alive.
+                Program.TrackAuxiliaryWindow(settings);
+                settings.Show();
+            }
+            catch (Exception error)
+            {
+                if (ReferenceEquals(sharedSettings, settings)) sharedSettings = null;
+                Program.UntrackAuxiliaryWindow(settings);
+                settings.Dispose();
+                ShowSettingsFailure("Settings could not be opened", error);
+            }
+        }
+
+        private static void ApplySavedSettings(Preferences saved, bool wasStartup)
+        {
+            Exception startupFailure = null;
+            if (wasStartup != saved.StartupWithWindows)
+            {
+                try { StartupIntegration.SetEnabled(saved.StartupWithWindows); }
                 catch (Exception error)
                 {
-                    preferences.StartupWithWindows = wasStartup;
-                    try { preferences.Save(); } catch (Exception) { }
-                    ShowFailure("Windows startup could not be changed. The previous startup choice was kept", error);
+                    saved.StartupWithWindows = wasStartup;
+                    try { saved.Save(); } catch (Exception) { }
+                    startupFailure = error;
                 }
             }
-            ApplyCurrentPreferences();
-            ConfigureTrayIcon();
-            ConfigurePrintScreenShortcut();
+
+            // Take a snapshot because theme and tray changes can dispatch window
+            // events. No action below depends on the original editor surviving.
+            List<MainForm> editors = new List<MainForm>();
             foreach (Form form in Application.OpenForms)
             {
-                MainForm other = form as MainForm;
-                if (other != null && other != this)
-                {
-                    int captureMode = other.preferences.CaptureModeIndex;
-                    int captureDelay = other.preferences.DelaySeconds;
-                    int ink = other.preferences.InkArgb;
-                    int stroke = other.preferences.StrokeWidth;
-                    other.preferences.CopyFrom(preferences);
-                    other.preferences.CaptureModeIndex = captureMode;
-                    other.preferences.DelaySeconds = captureDelay;
-                    other.preferences.InkArgb = ink;
-                    other.preferences.StrokeWidth = stroke;
-                    other.ApplyCurrentPreferences();
-                    other.ConfigureTrayIcon();
-                    other.ConfigurePrintScreenShortcut();
-                }
+                MainForm editor = form as MainForm;
+                if (editor != null && !editor.IsDisposed && !editor.Disposing && !editor.closing) editors.Add(editor);
             }
-            SetStatus(preferences.UsePrintScreen ? "Settings saved. " + PrintScreenShortcutStatus : "Settings saved.");
+            Program.RememberShortcutPreferences(saved);
+            foreach (MainForm editor in editors)
+            {
+                if (editor.IsDisposed || editor.Disposing || editor.closing) continue;
+                int captureMode = editor.preferences.CaptureModeIndex;
+                int captureDelay = editor.preferences.DelaySeconds;
+                int ink = editor.preferences.InkArgb;
+                int stroke = editor.preferences.StrokeWidth;
+                editor.preferences.CopyFrom(saved);
+                editor.preferences.CaptureModeIndex = captureMode;
+                editor.preferences.DelaySeconds = captureDelay;
+                editor.preferences.InkArgb = ink;
+                editor.preferences.StrokeWidth = stroke;
+                editor.ApplyCurrentPreferences();
+                editor.ConfigureTrayIcon();
+                editor.ConfigurePrintScreenShortcut();
+                editor.SetStatus(saved.UsePrintScreen ? "Settings saved. " + editor.PrintScreenShortcutStatus : "Settings saved.");
+            }
+            if (startupFailure != null)
+                ShowSettingsFailure("Windows startup could not be changed. The previous startup choice was kept", startupFailure);
+        }
+
+        private static void ShowSettingsFailure(string title, Exception error)
+        {
+            foreach (Form form in Application.OpenForms)
+            {
+                MainForm editor = form as MainForm;
+                if (editor == null || editor.IsDisposed || editor.Disposing || editor.closing || !editor.Visible) continue;
+                editor.ShowFailure(title, error);
+                return;
+            }
+            MessageBox.Show(title + ".\n\n" + error.Message, "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
         }
 
         private void OnDocumentEdited()
         {
-            if (layoutTestMode || !canvas.HasImage || applyingCapturePolicy) return;
+            if (layoutTestMode || !canvas.HasImage) return;
             if (lastDocumentRevision == canvas.DocumentRevision) return;
             lastDocumentRevision = canvas.DocumentRevision;
             if (lastSnipSize != canvas.ImageSize)
@@ -176,6 +288,9 @@ namespace SnipStudio
             }
             if (preferences.AutoCopyScreenshotChanges && automaticCopyTimer != null)
             {
+                RequestAutomaticClipboardCopy();
+                if (captureProcessingPending || clipboardCopyBusy) return;
+                automaticCopyRequested = false;
                 automaticCopyTimer.Stop();
                 automaticCopyTimer.Start();
             }
@@ -183,15 +298,16 @@ namespace SnipStudio
 
         private void ResizeForSnip()
         {
-            if (!preferences.ResizeToSnip || !canvas.HasImage || WindowState == FormWindowState.Maximized) return;
-            Rectangle work = Screen.FromControl(this).WorkingArea;
+            if (!preferences.ResizeToSnip || !canvas.HasImage || WindowState == FormWindowState.Maximized || IsFullScreenEditor) return;
+            Rectangle work = EditorWorkingArea();
             int maximumWidth = Math.Max(640, work.Width - 48);
             int maximumHeight = Math.Max(400, work.Height - 48);
             LayoutChrome();
             int chromeHeight = CompactChromeHeight + (Height - ClientSize.Height) + Ui(24);
             double fit = Math.Min(1.0, Math.Min((double)(maximumWidth - 64) / canvas.ImageSize.Width,
                 (double)Math.Max(100, maximumHeight - chromeHeight) / canvas.ImageSize.Height));
-            MinimumSize = new Size(Math.Min(Ui(780), maximumWidth), Math.Min(Ui(380), maximumHeight));
+            int minimumHeight = Math.Min(work.Height, Math.Max(Math.Min(Ui(380), maximumHeight), MinimumSize.Height));
+            MinimumSize = new Size(Math.Min(Ui(780), maximumWidth), minimumHeight);
             Size = new Size(Math.Max(MinimumSize.Width, Math.Min(maximumWidth, (int)Math.Ceiling(canvas.ImageSize.Width * fit) + 64)),
                 Math.Max(MinimumSize.Height, Math.Min(maximumHeight, (int)Math.Ceiling(canvas.ImageSize.Height * fit) + chromeHeight)));
             Location = new Point(Math.Max(work.Left, Math.Min(Left, work.Right - Width)), Math.Max(work.Top, Math.Min(Top, work.Bottom - Height)));
@@ -200,69 +316,11 @@ namespace SnipStudio
 
         private void ApplyCapturePolicies(Bitmap image)
         {
-            capturePolicyMessage = null;
-            applyingCapturePolicy = true;
-            try
-            {
-                if (preferences.AddScreenshotBorder)
-                {
-                    using (Bitmap bordered = new Bitmap(image))
-                    using (Graphics graphics = Graphics.FromImage(bordered))
-                    using (Pen pen = new Pen(Color.FromArgb(preferences.ScreenshotBorderArgb), Math.Max(1, preferences.ScreenshotBorderWidth)))
-                    {
-                        pen.Alignment = PenAlignment.Inset;
-                        graphics.DrawRectangle(pen, 0, 0, bordered.Width - 1, bordered.Height - 1);
-                        canvas.SetImage(bordered);
-                    }
-                }
-                if (preferences.AutoSaveOriginalScreenshots)
-                {
-                    Directory.CreateDirectory(preferences.ScreenshotFolder);
-                    string filename = Path.Combine(preferences.ScreenshotFolder, "Screenshot " + DateTime.Now.ToString("yyyy-MM-dd HHmmss") + "-" + Guid.NewGuid().ToString("N").Substring(0, 6) + ".png");
-                    using (Bitmap original = canvas.RenderImage()) WritePngAtomic(original, filename);
-                    currentPath = filename;
-                    canvas.MarkSaved();
-                    capturePolicyMessage = "Captured and original saved. Your edits stay separate until you save.";
-                }
-            }
-            catch (Exception error)
-            {
-                capturePolicyMessage = "Captured. Automatic save failed; your snip is still open. Use Save to choose another folder.";
-                MessageBox.Show(this, capturePolicyMessage + "\n\n" + error.Message, "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            }
-            finally
-            {
-                applyingCapturePolicy = false;
-                lastDocumentRevision = -1;
-                OnDocumentEdited();
-                UpdateDocumentState();
-            }
-        }
-
-        private static void WritePngAtomic(Bitmap image, string filename)
-        {
-            string temporary = Path.Combine(Path.GetDirectoryName(filename), ".snip-" + Guid.NewGuid().ToString("N") + ".tmp");
-            try
-            {
-                image.Save(temporary, ImageFormat.Png);
-                if (File.Exists(filename)) File.Replace(temporary, filename, null);
-                else File.Move(temporary, filename);
-            }
-            finally { if (File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
-        }
-
-        private void CopySnapshotToClipboard()
-        {
-            using (Bitmap image = canvas.RenderImage())
-            using (MemoryStream png = new MemoryStream())
-            {
-                image.Save(png, ImageFormat.Png);
-                png.Position = 0;
-                DataObject data = new DataObject();
-                data.SetData(DataFormats.Bitmap, true, image);
-                data.SetData("PNG", false, png);
-                Clipboard.SetDataObject(data, true, 4, 100);
-            }
+            // Compatibility for callers that have not adopted the prepare/show/
+            // begin sequence yet. New captures prepare their owned bitmap once.
+            PrepareCaptureImage(image);
+            canvas.SetImage(image);
+            BeginCapturePolicies(image);
         }
 
         private bool ChooseRecordingDestination(out string destination)
@@ -286,6 +344,7 @@ namespace SnipStudio
                     picker.FileName = "Recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss");
                     if (Directory.Exists(preferences.RecordingFolder)) picker.InitialDirectory = preferences.RecordingFolder;
                     if (picker.ShowDialog(this) != DialogResult.OK) return false;
+                    CaptureVisibilityScope.NotifyNativeDialogClosed();
                     destination = picker.FileName;
                     return true;
                 }
@@ -301,6 +360,7 @@ namespace SnipStudio
 
         private static void CopyVideoToClipboard(string path)
         {
+            RegisterClipboardIntent();
             StringCollection paths = new StringCollection();
             paths.Add(path);
             Clipboard.SetFileDropList(paths);
@@ -331,8 +391,9 @@ namespace SnipStudio
             if (!canvas.HasImage || capturePending) return;
             if (String.IsNullOrWhiteSpace(preferences.EditorApplicationPath) || !File.Exists(preferences.EditorApplicationPath))
             {
+                SetStatus("Choose an editing app in Settings, save, then choose Edit in application again.");
                 ShowSettings();
-                if (String.IsNullOrWhiteSpace(preferences.EditorApplicationPath) || !File.Exists(preferences.EditorApplicationPath)) return;
+                return;
             }
             try
             {
@@ -363,6 +424,7 @@ namespace SnipStudio
 
         private void DisposeSettingsIntegration()
         {
+            DisposeCaptureProcessing();
             if (delayPopup != null) { delayPopup.Dispose(); delayPopup = null; }
             if (automaticCopyTimer != null) { automaticCopyTimer.Stop(); automaticCopyTimer.Dispose(); automaticCopyTimer = null; }
             if (moreMenu != null)

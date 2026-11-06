@@ -31,45 +31,74 @@ namespace SnipStudio
             this.owns = owns;
         }
 
-        public static ToolCursor CreateEraser()
+        public static ToolCursor CreateEraser() { return Create(EditorTool.Eraser, 96); }
+
+        public static ToolCursor Create(EditorTool tool, int dpi)
         {
             IntPtr original = IntPtr.Zero;
             IconInfo info = new IconInfo();
             try
             {
-                using (Bitmap bitmap = new Bitmap(32, 32))
+                string glyph;
+                PointF contact;
+                switch (tool)
+                {
+                    case EditorTool.Pen: glyph = "pen"; contact = new PointF(4, 20); break;
+                    case EditorTool.Highlighter: glyph = "highlighter"; contact = new PointF(4.8f, 18); break;
+                    case EditorTool.Arrow: glyph = "arrow"; contact = new PointF(19, 5); break;
+                    case EditorTool.Rectangle: glyph = "box"; contact = new PointF(4, 5.5f); break;
+                    case EditorTool.Text: glyph = "text"; contact = new PointF(12, 20); break;
+                    case EditorTool.Eraser: glyph = "eraser"; contact = new PointF(7.2f, 19.5f); break;
+                    case EditorTool.RemoveArea: glyph = "remove-area"; contact = new PointF(4, 4); break;
+                    case EditorTool.Crop: glyph = "crop"; contact = new PointF(7, 7); break;
+                    default: return new ToolCursor(Cursors.SizeAll, IntPtr.Zero, false);
+                }
+                float scale = Math.Max(1f, Math.Min(3f, dpi / 96f));
+                int size = (int)Math.Round(32 * scale);
+                int glyphSize = (int)Math.Round(26 * scale);
+                int inset = (size - glyphSize) / 2;
+                int halo = Math.Max(1, (int)Math.Round(scale));
+                int hotspotX = Math.Max(0, Math.Min(size - 1, (int)Math.Round(inset + contact.X * glyphSize / 24f)));
+                int hotspotY = Math.Max(0, Math.Min(size - 1, (int)Math.Round(inset + contact.Y * glyphSize / 24f)));
+                using (Bitmap bitmap = new Bitmap(size, size))
+                using (Bitmap light = IconArtwork.CreateToolIcon(glyph, glyphSize, Color.White))
+                using (Bitmap dark = IconArtwork.CreateToolIcon(glyph, glyphSize, Color.FromArgb(18, 30, 46)))
                 {
                     using (Graphics g = Graphics.FromImage(bitmap))
                     {
                         g.SmoothingMode = SmoothingMode.AntiAlias;
                         g.Clear(Color.Transparent);
-                        PointF[] body = { new PointF(8, 20), new PointF(21, 5), new PointF(29, 12), new PointF(16, 27) };
-                        using (GraphicsPath path = new GraphicsPath())
+                        // Reuse the selected button's actual geometry. A white
+                        // halo and dark stroke remain visible on arbitrary snips.
+                        for (int dy = -halo; dy <= halo; dy += halo)
+                            for (int dx = -halo; dx <= halo; dx += halo)
+                                g.DrawImageUnscaled(light, inset + dx, inset + dy);
+                        g.DrawImageUnscaled(dark, inset, inset);
+                        // The small contact dot is the precise image coordinate;
+                        // it does not add a generic cross over the tool artwork.
+                        float outer = 1.8f * scale, inner = .8f * scale;
+                        using (Brush white = new SolidBrush(Color.White))
+                        using (Brush ink = new SolidBrush(Color.FromArgb(18, 30, 46)))
                         {
-                            path.AddPolygon(body);
-                            using (Pen outline = new Pen(Color.FromArgb(18, 30, 46), 4f)) { outline.LineJoin = LineJoin.Round; g.DrawPath(outline, path); }
-                            using (Brush fill = new SolidBrush(Color.FromArgb(97, 185, 255))) g.FillPath(fill, path);
-                            using (Pen edge = new Pen(Color.White, 1.15f)) { edge.LineJoin = LineJoin.Round; g.DrawPath(edge, path); }
+                            g.FillEllipse(white, hotspotX - outer, hotspotY - outer, outer * 2, outer * 2);
+                            g.FillEllipse(ink, hotspotX - inner, hotspotY - inner, inner * 2, inner * 2);
                         }
-                        PointF[] rubber = { new PointF(8, 20), new PointF(13, 14), new PointF(21, 21), new PointF(16, 27) };
-                        using (Brush fill = new SolidBrush(Color.FromArgb(246, 249, 253))) g.FillPolygon(fill, rubber);
-                        using (Pen seam = new Pen(Color.FromArgb(30, 74, 113), 1.5f)) g.DrawLine(seam, 13, 14, 21, 21);
-                        // The contact corner is the hotspot, marked with a tiny contrasting tip.
-                        using (Pen edge = new Pen(Color.FromArgb(18, 30, 46), 1.7f)) g.DrawLine(edge, 7, 27, 16, 27);
-                        using (Pen tip = new Pen(Color.White, 1f)) { g.DrawLine(tip, 5, 27, 9, 27); g.DrawLine(tip, 7, 25, 7, 29); }
                     }
                     original = bitmap.GetHicon();
+                    info.HotspotX = (uint)hotspotX;
+                    info.HotspotY = (uint)hotspotY;
                 }
+                uint cursorX = info.HotspotX, cursorY = info.HotspotY;
                 if (!GetIconInfo(original, out info)) throw new InvalidOperationException("Cursor image unavailable.");
                 info.IsIcon = false;
-                info.HotspotX = 7;
-                info.HotspotY = 27;
+                info.HotspotX = cursorX;
+                info.HotspotY = cursorY;
                 IntPtr cursor = CreateIconIndirect(ref info);
                 if (cursor == IntPtr.Zero) throw new InvalidOperationException("Cursor could not be created.");
                 try { return new ToolCursor(new Cursor(cursor), cursor, true); }
                 catch { DestroyCursor(cursor); throw; }
             }
-            catch (Exception) { return new ToolCursor(Cursors.Cross, IntPtr.Zero, false); }
+            catch (Exception) { return new ToolCursor(tool == EditorTool.Text ? Cursors.IBeam : Cursors.Default, IntPtr.Zero, false); }
             finally
             {
                 if (original != IntPtr.Zero) DestroyIcon(original);
@@ -82,8 +111,12 @@ namespace SnipStudio
         {
             if (!owns) return;
             owns = false;
-            Cursor.Dispose();
-            if (handle != IntPtr.Zero) { DestroyCursor(handle); handle = IntPtr.Zero; }
+            // Cursor(IntPtr) wraps a caller-owned native handle. Dispose its
+            // managed wrapper, then release that handle exactly once ourselves.
+            IntPtr released = handle;
+            handle = IntPtr.Zero;
+            try { if (Cursor != null) Cursor.Dispose(); }
+            finally { if (released != IntPtr.Zero) DestroyCursor(released); }
         }
     }
 }

@@ -27,6 +27,7 @@ namespace SnipStudio
             BackColor = StudioTheme.Background;
             ForeColor = StudioTheme.Text;
             MainForm.TrySetAppIcon(this);
+            CaptureVisibilityScope.DisableTransientAnimations(this);
             HandleCreated += delegate { MainForm.ApplyDarkCaption(this); };
             TableLayoutPanel layout = new TableLayoutPanel();
             layout.Dock = DockStyle.Fill;

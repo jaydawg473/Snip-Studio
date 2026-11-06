@@ -35,7 +35,6 @@ namespace SnipStudio
         private int recognitionGeneration;
         private bool disposingCanvas;
         private string recognitionStatus = "Capture an image to find text.";
-        private ToolCursor eraserCursor;
         private PointF start;
         private PointF end;
         private Point lastPan;
@@ -55,11 +54,14 @@ namespace SnipStudio
                 if (textActionsMode == value) return;
                 CancelGesture();
                 textActionsMode = value;
+                if (value) BeginTextActionFeedback();
+                else { EndTextActionFeedback(); CancelSourceStyleMatching(); }
                 selectedIndex = -1;
                 if (!value) textSelection.Clear();
                 UpdateCursor();
                 RaiseTextSelectionChanged();
                 RaiseTextStyleChanged();
+                RefreshRecognitionIfNeeded();
                 Invalidate();
             }
         }
@@ -67,11 +69,14 @@ namespace SnipStudio
         public string SelectedRecognizedText { get { return textSelection.SelectedText; } }
         public bool HasSelectedRecognizedText { get { return textSelection.HasSelection; } }
         public long DocumentRevision { get { return document.Revision; } }
-        public bool SnapHighlightToText { get { return snapHighlightToText; } set { snapHighlightToText = value; } }
+        public object ImageIdentity { get { return document.BaseIdentity; } }
+        public bool SnapHighlightToText { get { return snapHighlightToText; } set { snapHighlightToText = value; RefreshRecognitionIfNeeded(); } }
         public string TextRecognitionStatus { get { return recognitionStatus; } }
         public bool TextSnapReady { get { return recognizedText != null && recognizedText.Available && recognizedText.Lines.Count > 0 && (!recognizedText.TextAngle.HasValue || Math.Abs(recognizedText.TextAngle.Value) <= 2); } }
         public bool HasImage { get { return document.HasImage; } }
         public bool CanUndo { get { return document.CanUndo; } }
+        private bool requireCtrlForWheelZoom = true;
+        public bool RequireCtrlForWheelZoom { get { return requireCtrlForWheelZoom; } set { requireCtrlForWheelZoom = value; } }
         public bool CanRedo { get { return document.CanRedo; } }
         public bool IsDirty { get { return document.IsDirty; } }
         public Size ImageSize { get { return document.ImageSize; } }
@@ -82,11 +87,16 @@ namespace SnipStudio
             set
             {
                 if (tool == value) return;
-                CancelGesture();
+                bool keepRemoval = !textActionsMode && HasSelectedRemovalArea &&
+                    ((tool == EditorTool.RemoveArea && value == EditorTool.Select) ||
+                     (tool == EditorTool.Select && value == EditorTool.RemoveArea));
+                CancelGesture(keepRemoval);
                 selectedIndex = -1;
                 tool = value;
                 UpdateCursor();
                 RaiseTextStyleChanged();
+                RaiseToolChanged();
+                RefreshRecognitionIfNeeded();
                 Invalidate();
             }
         }
@@ -97,7 +107,7 @@ namespace SnipStudio
             {
                 inkColor = value;
                 TextAnnotationInfo selectedText = HasImage && !textActionsMode ? document.GetTextAnnotation(selectedIndex) : null;
-                if (selectedText != null && document.UpdateTextAnnotation(selectedIndex, selectedText.Text, value, selectedText.FontSize, selectedText.LayoutWidth)) RaiseChanged();
+                if (selectedText != null && document.UpdateTextAnnotationColor(selectedIndex, value)) RaiseChanged();
                 else Invalidate();
             }
         }
@@ -121,18 +131,22 @@ namespace SnipStudio
             TabStop = true;
             Font = new Font("Segoe UI", 10);
             AccessibleName = "Screenshot editing canvas";
-            tooltip.SetToolTip(this, "Move: click a mark, then drag or use arrow keys. Blank drag or middle button pans. Shift+highlight draws freehand. Ctrl+wheel zooms. Escape cancels.");
+            tooltip.SetToolTip(this, "Use the wheel to scroll, or Ctrl+wheel to zoom around the pointer (configurable in Settings). Move selects annotations and pending removal boxes. Middle button pans; Shift+wheel scrolls horizontally. Shift+highlight draws freehand. Escape cancels.");
             TooltipService.RegisterProvider(tooltip);
-            eraserCursor = ToolCursor.CreateEraser();
+            InitializeToolPointers();
             UpdateCursor();
         }
 
         public void SetImage(Bitmap image)
         {
+            ChangeViewIntent();
+            StopViewAnimations();
             document.SetImage(image);
             CancelGesture();
             selectedIndex = -1;
             fit = true;
+            firstImagePainted = false;
+            zoomOriginOffset = PointF.Empty;
             RecalculateFit();
             AutoScrollPosition = Point.Empty;
             RaiseChanged();
@@ -161,27 +175,27 @@ namespace SnipStudio
 
         public void FitToWindow()
         {
+            ChangeViewIntent();
             CancelGesture();
             fit = true;
+            zoomOriginOffset = PointF.Empty;
             RecalculateFit();
             AutoScrollPosition = Point.Empty;
-            RaiseChanged();
+            RaiseViewChanged();
         }
         public void ActualSize() { SetZoom(1f); }
-        public void ZoomIn() { SetZoom(zoom * 1.25f); }
-        public void ZoomOut() { SetZoom(zoom / 1.25f); }
+        public void ZoomIn() { ZoomBy(1.25f, new Point(ClientSize.Width / 2, ClientSize.Height / 2)); }
+        public void ZoomOut() { ZoomBy(0.8f, new Point(ClientSize.Width / 2, ClientSize.Height / 2)); }
 
         private void SetZoom(float value)
         {
             if (!HasImage) return;
-            PointF center = ToImage(new Point(ClientSize.Width / 2, ClientSize.Height / 2), false);
+            ChangeViewIntent();
+            Point center = new Point(ClientSize.Width / 2, ClientSize.Height / 2);
+            PointF imagePoint = ToImage(center, false);
             CancelGesture();
             fit = false;
-            zoom = Math.Max(0.01f, Math.Min(8f, value));
-            UpdateCanvasSize();
-            AutoScrollPosition = new Point(Math.Max(0, (int)Math.Round(center.X * zoom + CanvasMargin - ClientSize.Width / 2f)),
-                Math.Max(0, (int)Math.Round(center.Y * zoom + CanvasMargin - ClientSize.Height / 2f)));
-            RaiseChanged();
+            ApplyZoom(value, center, imagePoint);
         }
 
         private PointF ImageOrigin
@@ -189,8 +203,8 @@ namespace SnipStudio
             get
             {
                 float width = ImageSize.Width * zoom, height = ImageSize.Height * zoom;
-                float x = width + CanvasMargin * 2 <= ClientSize.Width ? (ClientSize.Width - width) / 2f : CanvasMargin + AutoScrollPosition.X;
-                float y = height + CanvasMargin * 2 <= ClientSize.Height ? (ClientSize.Height - height) / 2f : CanvasMargin + AutoScrollPosition.Y;
+                float x = fit ? (ClientSize.Width - width) / 2f : CanvasMargin + AutoScrollPosition.X + zoomOriginOffset.X;
+                float y = fit ? (ClientSize.Height - height) / 2f : CanvasMargin + AutoScrollPosition.Y + zoomOriginOffset.Y;
                 return new PointF(x, y);
             }
         }
@@ -225,6 +239,7 @@ namespace SnipStudio
                 DrawEmpty(graphics);
                 return;
             }
+            firstImagePainted = true;
             PointF origin = ImageOrigin;
             float width = ImageSize.Width * zoom, height = ImageSize.Height * zoom;
             using (Brush shadow = new SolidBrush(Color.FromArgb(90, 0, 0, 0)))
@@ -236,13 +251,13 @@ namespace SnipStudio
             {
                 graphics.TranslateTransform(origin.X, origin.Y);
                 graphics.ScaleTransform(zoom, zoom);
-                graphics.SetClip(new Rectangle(0, 0, ImageSize.Width, ImageSize.Height));
+                graphics.SetClip(new Rectangle(0, 0, ImageSize.Width, ImageSize.Height), CombineMode.Intersect);
                 // A checker behind transparent areas is only a preview; exports preserve alpha.
                 DrawChecker(graphics);
                 // Whole-pixel enlargement stays crisp. Fractional zoom needs
                 // interpolation so text strokes do not acquire uneven widths.
                 bool wholePixelScale = zoom >= 1 && Math.Abs(zoom - (float)Math.Round(zoom)) < 0.001f;
-                graphics.InterpolationMode = wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
+                graphics.InterpolationMode = ViewAnimationActive || panning ? InterpolationMode.Bilinear : wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
                 graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 document.Draw(graphics, moving ? selectedIndex : -1, moveDelta, AnnotationPreviewIndex);
                 if (preview != null) preview.Draw(graphics);
@@ -255,27 +270,18 @@ namespace SnipStudio
                     graphics.Restore(selectionState);
                 }
                 if (textActionsMode) DrawTextOverlay(graphics);
+                DrawSourceRemoval(graphics);
             }
             finally { graphics.Restore(state); }
             using (Pen border = new Pen(Color.FromArgb(59, 73, 94)))
                 graphics.DrawRectangle(border, origin.X - 1, origin.Y - 1, width + 1, height + 1);
+            DrawTextScanFeedback(graphics, origin, width, height);
         }
 
         private void DrawChecker(Graphics graphics)
         {
-            const int tile = 16;
-            using (Bitmap pattern = new Bitmap(tile * 2, tile * 2))
-            {
-                using (Graphics patternGraphics = Graphics.FromImage(pattern))
-                using (Brush dark = new SolidBrush(Color.FromArgb(64, 71, 83)))
-                {
-                    patternGraphics.Clear(Color.FromArgb(78, 86, 98));
-                    patternGraphics.FillRectangle(dark, tile, 0, tile, tile);
-                    patternGraphics.FillRectangle(dark, 0, tile, tile, tile);
-                }
-                using (TextureBrush checker = new TextureBrush(pattern, WrapMode.Tile))
-                    graphics.FillRectangle(checker, 0, 0, ImageSize.Width, ImageSize.Height);
-            }
+            EnsureCheckerBrush();
+            graphics.FillRectangle(checkerBrush, 0, 0, ImageSize.Width, ImageSize.Height);
         }
 
         public string EmptyMessage { get; set; }
@@ -312,8 +318,8 @@ namespace SnipStudio
             // Preserve the screenshot's contrast and original type. Only selected
             // text receives an adorner; OCR boxes never outline or clip glyphs.
             // Join words by their OCR line so spaces do not become separate tiles.
-            using (Pen underline = new Pen(Color.FromArgb(0, 102, 204), 1.5f / zoom))
-            using (Brush highlight = new SolidBrush(Color.FromArgb(36, 0, 102, 204)))
+            using (Pen underline = new Pen(Color.FromArgb(0, 102, 204), 2f / zoom))
+            using (Brush highlight = new SolidBrush(Color.FromArgb(80, 0, 102, 204)))
             {
                 foreach (RectangleF selectedLine in textSelection.SelectedLineBounds())
                 {
@@ -347,8 +353,11 @@ namespace SnipStudio
         protected override void OnMouseDown(MouseEventArgs e)
         {
             base.OnMouseDown(e);
+            StopViewAnimations();
             Focus();
             if (!HasImage) return;
+            if (e.Button == MouseButtons.Right) { HandleAnnotationRightClick(e); return; }
+            if (BeginSourceRemoval(e)) return;
             if (TryBeginAnnotationHandleDrag(e)) return;
             if (textActionsMode && e.Button == MouseButtons.Left)
             {
@@ -375,9 +384,15 @@ namespace SnipStudio
                     moving = true; moveStart = ToImage(e.Location, false); moveDelta = PointF.Empty;
                     Capture = true; Cursor = Cursors.SizeAll; Invalidate(); return;
                 }
+                // Pending removal boxes are handled above. The captured bitmap
+                // remains background, not an object selected by a blank click.
+                UpdateCursor();
+                Invalidate();
+                return;
             }
-            if (e.Button == MouseButtons.Middle || (e.Button == MouseButtons.Left && tool == EditorTool.Select))
+            if (e.Button == MouseButtons.Middle)
             {
+                BeginPanView();
                 panning = true;
                 lastPan = e.Location;
                 Capture = true;
@@ -436,13 +451,13 @@ namespace SnipStudio
             }
             if (panning)
             {
-                Point current = AutoScrollPosition;
-                AutoScrollPosition = new Point(-current.X - (e.X - lastPan.X), -current.Y - (e.Y - lastPan.Y));
+                PanView(e.X - lastPan.X, e.Y - lastPan.Y);
                 lastPan = e.Location;
                 Invalidate();
                 return;
             }
             if (!HasImage) return;
+            if (UpdateSourceRemoval(e)) return;
             if (erasing)
             {
                 if (document.Erase(ToImage(e.Location, true), Math.Max(5 / zoom, strokeWidth))) RaiseChanged();
@@ -451,7 +466,7 @@ namespace SnipStudio
             if (!drawing)
             {
                 if (TrySetAnnotationHandleCursor(e.Location)) return;
-                if (tool == EditorTool.Select) Cursor = IsOnImage(e.Location) && document.HitTestAnnotation(ToImage(e.Location, false), 5 / zoom) >= 0 ? Cursors.SizeAll : Cursors.Hand;
+                if (tool == EditorTool.Select) UpdateSelectPointer(e.Location);
                 return;
             }
             end = ToImage(e.Location, true);
@@ -465,6 +480,7 @@ namespace SnipStudio
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (CompleteSourceRemoval(e)) return;
             if (textSelectionDragging && e.Button == MouseButtons.Left)
             {
                 int nearest = textSelection.Nearest(ToImage(e.Location, false));
@@ -487,7 +503,7 @@ namespace SnipStudio
             }
             if (panning)
             {
-                panning = false; Capture = false; UpdateCursor(); return;
+                panning = false; Capture = false; UpdateCursor(); Invalidate(); return;
             }
             if (erasing)
             {
@@ -517,6 +533,7 @@ namespace SnipStudio
                         Math.Min(ImageSize.Height, (int)Math.Ceiling(bounds.Bottom)));
                     if (crop.Width >= 2 && crop.Height >= 2)
                     {
+                        ChangeViewIntent();
                         document.Crop(crop);
                         selectedIndex = -1;
                         fit = true;
@@ -559,12 +576,19 @@ namespace SnipStudio
         {
             base.OnMouseCaptureChanged(e);
             if (!Capture && textSelectionDragging) { textSelectionDragging = false; UpdateCursor(); }
-            if (!Capture && (drawing || panning || erasing || moving || AnnotationHandleDragging)) CancelGesture();
+            if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging)) CancelGesture();
         }
 
         private void CancelGesture()
         {
+            CancelGesture(false);
+        }
+
+        private void CancelGesture(bool preserveRemovalSelection)
+        {
+            StopViewAnimations();
             CancelAnnotationHandleDrag();
+            CancelSourceRemoval(preserveRemovalSelection);
             drawing = false; panning = false; erasing = false; moving = false; snapping = false; moveDelta = PointF.Empty; preview = null;
             textSelectionDragging = false;
             points.Clear();
@@ -575,11 +599,12 @@ namespace SnipStudio
 
         private void UpdateCursor()
         {
-            Cursor = textActionsMode ? Cursors.Default : tool == EditorTool.Select ? Cursors.Hand : tool == EditorTool.Text ? Cursors.IBeam : tool == EditorTool.Eraser && eraserCursor != null ? eraserCursor.Cursor : Cursors.Cross;
+            UpdateToolPointer();
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (HandleSourceRemovalKey(keyData)) return true;
             if (keyData == Keys.F2) { EditSelectedText(); return true; }
             if (textActionsMode && keyData == Keys.Delete) { DeleteRecognizedText(); return true; }
             if (textActionsMode && keyData == Keys.Escape)
@@ -618,35 +643,57 @@ namespace SnipStudio
 
         protected override void OnMouseWheel(MouseEventArgs e)
         {
-            if ((ModifierKeys & Keys.Control) == Keys.Control)
+            if (!HasImage) { base.OnMouseWheel(e); return; }
+            if (RequireCtrlForWheelZoom && (ModifierKeys & Keys.Control) == 0)
+                ScrollByWheel(e.Delta, (ModifierKeys & Keys.Shift) != 0);
+            else ZoomBy((float)ViewMotion.WheelZoomFactor(e.Delta), e.Location);
+            HandledMouseEventArgs handled = e as HandledMouseEventArgs;
+            if (handled != null) handled.Handled = true;
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            const int MouseHorizontalWheel = 0x020E;
+            if (message.Msg == MouseHorizontalWheel && HasImage)
             {
-                if (e.Delta > 0) ZoomIn(); else ZoomOut();
-                HandledMouseEventArgs handled = e as HandledMouseEventArgs;
-                if (handled != null) handled.Handled = true;
+                int delta = unchecked((short)((message.WParam.ToInt64() >> 16) & 0xffff));
+                ScrollByWheel(-delta, true);
+                message.Result = IntPtr.Zero;
+                return;
             }
-            else base.OnMouseWheel(e);
-            Invalidate();
+            base.WndProc(ref message);
         }
 
         protected override void OnScroll(ScrollEventArgs se)
         {
+            if (!updatingView && preserveLayoutDepth == 0) ChangeViewIntent();
+            if (!updatingView) StopViewAnimations();
             base.OnScroll(se);
             Invalidate();
+            if (!updatingView) RaiseViewChanged();
         }
 
         protected override void OnResize(EventArgs e)
         {
             base.OnResize(e);
             if (document == null || !HasImage) return;
-            float previousZoom = zoom;
-            if (fit) RecalculateFit(); else UpdateCanvasSize();
+            if (updatingView || preserveLayoutDepth > 0) return;
+            StopViewAnimations();
+            if (fit || fitOnWindowResize)
+            {
+                fit = true;
+                fitOnWindowResize = false;
+                RecalculateFit();
+            }
+            else UpdateCanvasSize();
             Invalidate();
-            if (Math.Abs(previousZoom - zoom) > 0.00001f) RaiseChanged();
+            RaiseViewChanged();
         }
 
         private void RecalculateFit()
         {
             if (!HasImage) return;
+            zoomOriginOffset = PointF.Empty;
             zoom = Math.Min(1f, Math.Min(Math.Max(1, ClientSize.Width - CanvasMargin * 2) / (float)ImageSize.Width,
                 Math.Max(1, ClientSize.Height - CanvasMargin * 2) / (float)ImageSize.Height));
             zoom = Math.Max(0.01f, zoom);
@@ -656,8 +703,17 @@ namespace SnipStudio
         private void UpdateCanvasSize()
         {
             if (!HasImage) { AutoScrollMinSize = Size.Empty; return; }
-            AutoScrollMinSize = fit ? Size.Empty : new Size((int)Math.Ceiling(ImageSize.Width * zoom) + CanvasMargin * 2,
-                (int)Math.Ceiling(ImageSize.Height * zoom) + CanvasMargin * 2);
+            if (fit)
+            {
+                if (AutoScrollMinSize != Size.Empty) AutoScrollMinSize = Size.Empty;
+            }
+            else
+            {
+                bool wasUpdating = updatingView;
+                updatingView = true;
+                try { PositionViewOrigin(ImageOrigin); }
+                finally { updatingView = wasUpdating; }
+            }
             Invalidate();
         }
 
@@ -670,25 +726,30 @@ namespace SnipStudio
             if (changed != null) changed(this, EventArgs.Empty);
         }
 
-        private async void RefreshRecognitionIfNeeded()
+        private void RefreshRecognitionIfNeeded()
         {
-            if (disposingCanvas || !HasImage || (Object.ReferenceEquals(recognizedBase, document.BaseIdentity) && recognizedRevision == document.Revision)) return;
-            recognizedBase = document.BaseIdentity;
-            recognizedRevision = document.Revision;
+            QueueRecognitionWhenNeeded();
+        }
+
+        private async void RecognizeCurrentImageAsync()
+        {
+            if (disposingCanvas || !HasImage || !RecognitionRequested) { SetTextRecognitionBusy(false); return; }
+            if (recognizedText != null && Object.ReferenceEquals(recognizedBase, document.BaseIdentity) && recognizedRevision == document.Revision) { SetTextRecognitionBusy(false); return; }
+            SetTextRecognitionBusy(true);
             if (recognitionCancellation != null) recognitionCancellation.Cancel();
             CancellationTokenSource cancellation = new CancellationTokenSource();
             recognitionCancellation = cancellation;
             CancellationToken token = cancellation.Token;
-            int generation = ++recognitionGeneration;
-            recognizedText = null;
-            ResetTextSelection(null);
+            int generation = recognitionGeneration;
+            activeRecognitionGeneration = generation;
+            long revision = document.Revision;
             SetRecognitionStatus("Finding text for precise highlighting...");
             try
             {
                 Task<TextRecognitionResult> pending;
                 using (Bitmap original = document.RenderImage()) pending = TextRecognition.RecognizeAsync(original, token);
                 TextRecognitionResult result = await pending;
-                if (disposingCanvas || generation != recognitionGeneration || token.IsCancellationRequested) return;
+                if (disposingCanvas || generation != recognitionGeneration || revision != document.Revision || token.IsCancellationRequested) return;
                 recognizedText = result;
                 ResetTextSelection(result);
                 if (!result.Available) SetRecognitionStatus("Text snap unavailable. Freehand highlighting is ready.");
@@ -704,12 +765,14 @@ namespace SnipStudio
             finally
             {
                 if (Object.ReferenceEquals(recognitionCancellation, cancellation)) recognitionCancellation = null;
+                if (generation == recognitionGeneration) SetTextRecognitionBusy(false);
                 cancellation.Dispose();
             }
         }
 
         private void SetRecognitionStatus(string value)
         {
+            if (String.Equals(recognitionStatus, value, StringComparison.Ordinal)) return;
             recognitionStatus = value;
             EventHandler changed = TextRecognitionStatusChanged;
             if (changed != null) changed(this, EventArgs.Empty);
@@ -735,9 +798,13 @@ namespace SnipStudio
             if (disposing)
             {
                 disposingCanvas = true;
+                DisposeViewResources();
+                DisposeTextScanFeedback();
+                CancelSourceStyleMatching();
+                DisposeSourceRemoval();
                 if (recognitionCancellation != null) recognitionCancellation.Cancel();
                 Cursor = Cursors.Default;
-                if (eraserCursor != null) eraserCursor.Dispose();
+                DisposeToolPointers();
                 tooltip.Dispose();
                 document.Dispose();
             }

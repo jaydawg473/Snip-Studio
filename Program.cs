@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.3.0.0")]
-[assembly: AssemblyFileVersion("0.3.0.0")]
+[assembly: AssemblyVersion("0.5.4.0")]
+[assembly: AssemblyFileVersion("0.5.4.0")]
 
 namespace SnipStudio
 {
@@ -35,9 +35,44 @@ namespace SnipStudio
             applicationContext.OpenWindow(form, show);
         }
 
+        internal static void RememberShortcutPreferences(Preferences preferences)
+        {
+            if (applicationContext != null) applicationContext.RememberPreferences(preferences);
+        }
+
+        internal static void RequestApplicationExit()
+        {
+            if (applicationContext != null) applicationContext.RequestExit();
+        }
+
+        internal static void CancelApplicationExit()
+        {
+            if (applicationContext != null) applicationContext.CancelExit();
+        }
+
+        internal static void TrackAuxiliaryWindow(Form form)
+        {
+            if (applicationContext != null) applicationContext.TrackAuxiliaryWindow(form);
+        }
+
+        internal static void UntrackAuxiliaryWindow(Form form)
+        {
+            if (applicationContext != null) applicationContext.UntrackAuxiliaryWindow(form);
+        }
+
         [STAThread]
         private static void Main(string[] args)
         {
+            // Reuse this user's existing editor/listener, including when all editor
+            // windows have closed. A second process must not compete for hotkeys.
+            string startupProblem;
+            ShortcutForwardResult forwarded = ShortcutHost.TryForward(args, out startupProblem);
+            if (forwarded == ShortcutForwardResult.Forwarded) return;
+            if (forwarded == ShortcutForwardResult.IncompatibleHost)
+            {
+                MessageBox.Show(startupProblem, "A different Snip Studio copy is running", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             try { SetProcessDpiAwarenessContext(new IntPtr(-4)); }
             catch (EntryPointNotFoundException) { SetProcessDPIAware(); }
             Application.EnableVisualStyles();
@@ -49,20 +84,38 @@ namespace SnipStudio
                 MessageBox.Show("The action could not finish. Your current snip has been kept where possible.\n\n" + e.Exception.Message,
                     "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Error);
             };
-            using (StudioApplicationContext context = new StudioApplicationContext())
+            using (ShortcutHost shortcuts = new ShortcutHost())
             {
-                applicationContext = context;
-                try
+                if (!shortcuts.IsPrimary)
                 {
-                    bool backgroundRequested = args.Length > 0 && String.Equals(args[0], "--background", StringComparison.OrdinalIgnoreCase);
-                    // A startup flag must not leave an inaccessible invisible
-                    // process when the user has disabled the tray behavior.
-                    bool background = backgroundRequested && Preferences.Load().KeepRunningInTray;
-                    string imagePath = !backgroundRequested && args.Length > 0 ? args[0] : null;
-                    OpenWindow(new MainForm(imagePath), !background);
-                    Application.Run(context);
+                    forwarded = ShortcutHost.TryForward(args, out startupProblem);
+                    if (forwarded != ShortcutForwardResult.Forwarded)
+                        MessageBox.Show(forwarded == ShortcutForwardResult.IncompatibleHost ? startupProblem :
+                            "Snip Studio is already starting or is busy. Please try again in a moment.",
+                            "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
                 }
-                finally { applicationContext = null; }
+                Preferences preferences = Preferences.Load();
+                using (StudioApplicationContext context = new StudioApplicationContext(shortcuts, preferences))
+                {
+                    applicationContext = context;
+                    try
+                    {
+                        bool backgroundRequested = args.Length > 0 && (String.Equals(args[0], "--background", StringComparison.OrdinalIgnoreCase) || String.Equals(args[0], "--shortcut-listener", StringComparison.OrdinalIgnoreCase));
+                        bool captureRequested = args.Length > 0 && String.Equals(args[0], "--capture", StringComparison.OrdinalIgnoreCase);
+                        if (backgroundRequested && preferences.KeepShortcutsAfterClose && !preferences.KeepRunningInTray)
+                            context.StartIdleListener();
+                        else if (captureRequested) context.CaptureFromShortcut();
+                        else
+                        {
+                            bool background = backgroundRequested && preferences.KeepRunningInTray;
+                            string imagePath = !backgroundRequested && args.Length > 0 ? args[0] : null;
+                            OpenWindow(new MainForm(imagePath), !background);
+                        }
+                        Application.Run(context);
+                    }
+                    finally { applicationContext = null; }
+                }
             }
         }
     }
@@ -70,11 +123,105 @@ namespace SnipStudio
     internal sealed class StudioApplicationContext : ApplicationContext
     {
         private readonly HashSet<MainForm> windows = new HashSet<MainForm>();
+        private readonly HashSet<Form> auxiliaryWindows = new HashSet<Form>();
         private readonly int uiThreadId = Thread.CurrentThread.ManagedThreadId;
         private bool idleExitPending;
         private bool exiting;
+        private bool exitRequested;
+        private readonly ShortcutHost shortcuts;
+        private Preferences preferences;
+
+        internal StudioApplicationContext(ShortcutHost shortcutHost, Preferences initialPreferences)
+        {
+            shortcuts = shortcutHost;
+            preferences = initialPreferences.Clone();
+            shortcuts.OpenRequested += OpenFromShortcut;
+            shortcuts.CaptureRequested += CaptureFromShortcut;
+            shortcuts.ExitRequested += RequestExit;
+        }
+
+        internal void RememberPreferences(Preferences value) { preferences = value.Clone(); }
+
+        internal void StartIdleListener()
+        {
+            if (windows.Count == 0 && !exitRequested && !exiting)
+                shortcuts.SetIdleShortcuts(preferences.KeepShortcutsAfterClose, preferences.UsePrintScreen);
+        }
+
+        private void OpenFromShortcut(string imagePath)
+        {
+            if (exiting || exitRequested) return;
+            // Each explicit launch opens its own editor. The process and global
+            // shortcut listener are shared so windows do not compete for keys.
+            shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
+            try { OpenWindow(new MainForm(imagePath), true); }
+            catch { StartIdleListener(); throw; }
+        }
+
+        internal void CaptureFromShortcut()
+        {
+            if (exiting || exitRequested) return;
+            foreach (MainForm form in windows)
+                if (!form.IsDisposed) { form.CaptureFromShortcut(); return; }
+            shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
+            MainForm created = null;
+            try
+            {
+                created = new MainForm(null);
+                OpenWindow(created, false);
+                created.BeginInvoke((MethodInvoker)delegate { if (!created.IsDisposed) created.CaptureFromShortcut(true); });
+            }
+            catch
+            {
+                if (created != null)
+                {
+                    created.FormClosed -= OnWindowClosed;
+                    windows.Remove(created);
+                    created.Dispose();
+                }
+                StartIdleListener();
+                throw;
+            }
+        }
+
+        internal void RequestExit()
+        {
+            exitRequested = true;
+            shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
+            // Let every editor finish its save/cancel prompt before dismissing
+            // a Settings draft. A canceled Exit must keep that draft available.
+            if (windows.Count == 0)
+                foreach (Form form in new List<Form>(auxiliaryWindows))
+                    if (!form.IsDisposed) form.Close();
+            if (windows.Count == 0 && auxiliaryWindows.Count == 0) { exiting = true; ExitThread(); }
+        }
+
+        internal void TrackAuxiliaryWindow(Form form)
+        {
+            if (form == null || form.IsDisposed || exiting) return;
+            if (auxiliaryWindows.Add(form)) form.FormClosed += OnAuxiliaryClosed;
+        }
+
+        internal void UntrackAuxiliaryWindow(Form form)
+        {
+            if (form == null || !auxiliaryWindows.Remove(form)) return;
+            form.FormClosed -= OnAuxiliaryClosed;
+            QueueLastWindowCheck();
+        }
+
+        private void OnAuxiliaryClosed(object sender, FormClosedEventArgs e)
+        {
+            UntrackAuxiliaryWindow(sender as Form);
+        }
+
+        internal void CancelExit() { if (!exiting) exitRequested = false; }
 
         internal int WindowCount { get { return windows.Count; } }
+
+        internal static bool ShouldKeepListenerAlive(int windowCount, bool keepShortcuts, bool explicitExit)
+        {
+            return windowCount == 0 && keepShortcuts && !explicitExit;
+        }
 
         internal void OpenWindow(MainForm form)
         {
@@ -88,6 +235,8 @@ namespace SnipStudio
             if (exiting) throw new InvalidOperationException("The application is closing.");
             if (Thread.CurrentThread.ManagedThreadId != uiThreadId)
                 throw new InvalidOperationException("Windows must be opened on the application UI thread.");
+
+            shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
 
             if (windows.Add(form)) form.FormClosed += OnWindowClosed;
             try
@@ -141,6 +290,24 @@ namespace SnipStudio
             idleExitPending = false;
             if (windows.Count == 0 && !exiting)
             {
+                // Modeless Settings is useful even after its original snip was
+                // closed; keep its draft and message loop alive until it closes.
+                if (auxiliaryWindows.Count != 0)
+                {
+                    if (exitRequested)
+                        foreach (Form form in new List<Form>(auxiliaryWindows))
+                            if (!form.IsDisposed) form.Close();
+                    if (auxiliaryWindows.Count != 0)
+                    {
+                        if (!exitRequested) StartIdleListener();
+                        return;
+                    }
+                }
+                if (ShouldKeepListenerAlive(windows.Count, preferences.KeepShortcutsAfterClose, exitRequested))
+                {
+                    StartIdleListener();
+                    return;
+                }
                 exiting = true;
                 ExitThread();
             }
@@ -154,6 +321,12 @@ namespace SnipStudio
                 idleExitPending = false;
                 foreach (MainForm form in windows) form.FormClosed -= OnWindowClosed;
                 windows.Clear();
+                foreach (Form form in auxiliaryWindows) form.FormClosed -= OnAuxiliaryClosed;
+                auxiliaryWindows.Clear();
+                shortcuts.OpenRequested -= OpenFromShortcut;
+                shortcuts.CaptureRequested -= CaptureFromShortcut;
+                shortcuts.ExitRequested -= RequestExit;
+                shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
             }
             base.Dispose(disposing);
         }

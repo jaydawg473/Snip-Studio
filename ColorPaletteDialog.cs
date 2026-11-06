@@ -108,7 +108,13 @@ namespace SnipStudio
             TableLayoutPanel exact = new TableLayoutPanel { Dock = DockStyle.Top, Height = 54, ColumnCount = 2, RowCount = 1, Margin = Padding.Empty, Padding = Padding.Empty };
             exact.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 66));
             exact.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            preview = new ColorPreview { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 12, 0), Color = SelectedColor, AccessibleName = "Selected color preview" };
+            preview = new ColorPreview { Dock = DockStyle.Fill, Margin = new Padding(0, 0, 12, 0), Color = SelectedColor, AccessibleName = "Choose an exact color", AccessibleDescription = "Open the honeycomb color picker." };
+            tips.SetToolTip(preview, "More colors — open the honeycomb color picker");
+            preview.Click += delegate
+            {
+                using (HoneycombColorDialog picker = new HoneycombColorDialog(SelectedColor))
+                    if (picker.ShowDialog(this) == DialogResult.OK) Choose(picker.SelectedColor);
+            };
             exact.Controls.Add(preview, 0, 0);
             hexInput = new TextBox { Text = Hex(SelectedColor), Font = OwnFont(12f, FontStyle.Regular, "Consolas"), BorderStyle = BorderStyle.FixedSingle, Dock = DockStyle.Top, MaxLength = 7, Margin = new Padding(0, 10, 0, 0), BackColor = StudioTheme.Input, ForeColor = StudioTheme.Text, AccessibleName = "Hex color", AccessibleDescription = "Enter a six digit RGB hex color, such as #0078D4. Three digit shorthand is also accepted." };
             exact.Controls.Add(hexInput, 1, 0);
@@ -222,7 +228,7 @@ namespace SnipStudio
         private void ApplyValidColor()
         {
             preview.Color = SelectedColor;
-            preview.AccessibleDescription = Hex(SelectedColor);
+            preview.AccessibleDescription = Hex(SelectedColor) + ". Open the honeycomb color picker.";
             useColor.Enabled = true;
             validation.Text = "Hex color, for example #0078D4";
             validation.ForeColor = StudioTheme.Muted;
@@ -276,15 +282,23 @@ namespace SnipStudio
             if (disposing) foreach (Font font in ownedFonts) font.Dispose();
         }
 
-        private sealed class ColorPreview : Control
+        private sealed class ColorPreview : Button
         {
             private Color color;
             internal Color Color { get { return color; } set { color = value; Invalidate(); } }
             internal ColorPreview()
             {
                 SetStyle(ControlStyles.UserPaint | ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.ResizeRedraw, true);
+                FlatStyle = FlatStyle.Flat;
+                FlatAppearance.BorderSize = 0;
+                UseVisualStyleBackColor = false;
+                Cursor = Cursors.Hand;
+                TabStop = true;
+                AccessibleRole = AccessibleRole.PushButton;
                 Tag = "PreserveColor";
             }
+            protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
+            protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
             protected override void OnPaint(PaintEventArgs e)
             {
                 e.Graphics.Clear(StudioTheme.Surface);
@@ -293,11 +307,15 @@ namespace SnipStudio
                 RectangleF bounds = new RectangleF(2 * scale, 2 * scale, Math.Max(1, Width - 4 * scale - 1), Math.Max(1, Height - 4 * scale - 1));
                 using (GraphicsPath shape = StudioTheme.Round(bounds, 8 * scale))
                 using (Brush fill = new SolidBrush(color))
-                using (Pen border = new Pen(StudioTheme.Border, scale))
+                using (Pen border = new Pen(Focused ? StudioTheme.Accent : StudioTheme.Border, (Focused ? 2 : 1) * scale))
                 {
                     e.Graphics.FillPath(fill, shape);
                     e.Graphics.DrawPath(border, shape);
                 }
+                double light = color.R * 0.299 + color.G * 0.587 + color.B * 0.114;
+                using (Brush ink = new SolidBrush(light > 150 ? System.Drawing.Color.Black : System.Drawing.Color.White))
+                    for (int i = 0; i < 3; i++)
+                        e.Graphics.FillEllipse(ink, bounds.Right - (15 - i * 4) * scale, bounds.Bottom - 8 * scale, 2 * scale, 2 * scale);
             }
         }
 

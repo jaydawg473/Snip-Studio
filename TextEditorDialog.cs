@@ -1,336 +1,533 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 using System.Windows.Forms;
 
 namespace SnipStudio
 {
-    // Dialog state is local until the caller accepts it. Document changes and
-    // undo history belong to EditorCanvas/EditorDocument, never to this form.
+    // A local rich-text draft. Only Apply returns it to the document/history.
     internal sealed class TextEditorDialog : Form
     {
-        private readonly TextBox entry;
-        private readonly NumericUpDown fontSize;
-        private readonly NumericUpDown boxWidth;
-        private readonly Button textColorButton;
-        private readonly Button backgroundColorButton;
-        private readonly Label description;
-        private readonly Label guidance;
-        private readonly Panel body;
+        private static string[] installedFontNames;
+        private readonly RichTextDraftBox entry;
+        private readonly ComboBox family;
+        private readonly NumericUpDown pointSize, boxWidth, beforeSpace, afterSpace;
+        private readonly ComboBox lineSpacing;
+        private readonly Button inkButton, highlightButton, backgroundButton;
+        private readonly StudioButton bold, italic, underline, strike, superscript, subscript;
+        private readonly StudioButton alignLeft, alignCenter, alignRight, alignJustify, bullets, numbering;
+        private readonly Panel body, page;
         private readonly TableLayoutPanel layout;
-        private readonly FlowLayoutPanel options;
+        private readonly FlowLayoutPanel characterTools, paragraphTools, documentTools, editingTools;
+        private readonly Label description, guidance, previewScale;
+        private readonly ToolTip tips = TooltipService.RegisterProvider(new ToolTip());
         private readonly int availableWidth;
-        private Color textColor;
+        private readonly string sourceFamily;
+        private readonly float sourceSizePixels;
+        private readonly Color sourceInk;
         private Color backgroundColor;
-        private bool updatingMetrics;
-        private bool reflowing;
-        private int initialSelectionStart = -1;
-        private int initialSelectionLength;
+        private Color lastHighlight = Color.FromArgb(255, 232, 120);
+        private bool updating, reflowing;
+        private int initialSelectionStart = -1, initialSelectionLength;
 
         public string EnteredText { get { return entry.Text; } }
-        public float TextSize { get { return (float)fontSize.Value; } }
+        public string Rtf { get { return entry.Rtf; } }
+        public float TextSize { get { return entry.TextLength > 0 ? RichTextLayout.GetFirstFontSize(entry.Rtf) : (float)pointSize.Value * 96f / 72f; } }
         public float BoxWidth { get { return (float)boxWidth.Value; } }
-        public Color TextColor { get { return textColor; } }
+        public Color TextColor { get { return entry.TextLength > 0 ? RichTextLayout.GetFirstColor(entry.Rtf) : sourceInk; } }
         public Color BackgroundColor { get { return backgroundColor; } }
 
         internal TextEditorDialog(string title, string initialText, float initialFontSize,
             float initialBoxWidth, int maximumWidth, Color foreground, Color background, bool showBackground)
+            : this(title, initialText, initialFontSize, initialBoxWidth, maximumWidth, foreground, background, showBackground, null) { }
+
+        internal TextEditorDialog(string title, string initialText, float initialFontSize,
+            float initialBoxWidth, int maximumWidth, Color foreground, Color background, bool showBackground, string initialRtf)
         {
-            availableWidth = Math.Max(1, maximumWidth);
-            textColor = foreground;
-            backgroundColor = background;
+            availableWidth = Math.Max(12, maximumWidth);
+            backgroundColor = Color.FromArgb(255, background);
+            sourceInk = Color.FromArgb(255, foreground);
             Text = title ?? "Edit text";
+            Font = new Font("Segoe UI", 9.5f);
             StartPosition = FormStartPosition.CenterParent;
             ShowInTaskbar = false;
             MinimizeBox = false;
             MaximizeBox = false;
             AutoScaleDimensions = new SizeF(96, 96);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Font = new Font("Segoe UI", 10f);
+            ClientSize = new Size(1020, 720);
+            MinimumSize = new Size(620, 500);
             BackColor = StudioTheme.Surface;
             ForeColor = StudioTheme.Text;
-            ClientSize = new Size(650, 580);
-            MinimumSize = new Size(560, 440);
             KeyPreview = true;
             MainForm.TrySetAppIcon(this);
 
-            body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Margin = Padding.Empty, BackColor = StudioTheme.Surface };
+            entry = new RichTextDraftBox();
+            entry.Tag = "PreserveColor";
+            entry.BorderStyle = BorderStyle.None;
+            entry.Multiline = true;
+            entry.WordWrap = true;
+            entry.AcceptsTab = true;
+            entry.DetectUrls = false;
+            entry.AllowDrop = false;
+            entry.HideSelection = false;
+            entry.AutoWordSelection = false;
+            entry.ScrollBars = RichTextBoxScrollBars.Vertical;
+            entry.MaxLength = 16000;
+            entry.BackColor = backgroundColor;
+            entry.ForeColor = sourceInk;
+            entry.AccessibleName = showBackground ? "Recognized text document" : "Text note document";
+            float initialPixels = Math.Max(1, Math.Min(1024, initialFontSize));
+            entry.Font = new Font("Segoe UI", initialPixels * 72f / 96f, FontStyle.Regular, GraphicsUnit.Point);
+            if (!String.IsNullOrWhiteSpace(initialRtf))
+            {
+                RichTextDraftBox.ValidateTextRtf(initialRtf);
+                entry.Rtf = initialRtf;
+            }
+            else entry.Rtf = RichTextLayout.CreatePlainRtf(initialText ?? "", "Segoe UI", initialPixels, FontStyle.Regular, sourceInk);
+            if (entry.TextLength > 16000) throw new ArgumentException("Text notes are limited to 16,000 characters.", "initialText");
+            sourceFamily = RichTextLayout.GetFirstFontFamily(entry.Rtf);
+            sourceSizePixels = Math.Max(1, Math.Min(1024, RichTextLayout.GetFirstFontSize(entry.Rtf)));
+
+            body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = StudioTheme.Surface };
             Controls.Add(body);
-            layout = new TableLayoutPanel();
-            layout.Dock = DockStyle.Top;
-            layout.AutoSize = true;
-            layout.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            layout.ColumnCount = 1;
-            layout.RowCount = 5;
-            layout.Padding = new Padding(24, 20, 24, 20);
-            layout.Margin = Padding.Empty;
+            layout = new TableLayoutPanel { Dock = DockStyle.Top, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                ColumnCount = 1, RowCount = 7, Padding = new Padding(20, 16, 20, 16), Margin = Padding.Empty };
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 156));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            for (int i = 0; i < 7; i++) layout.RowStyles.Add(new RowStyle(i == 5 ? SizeType.Absolute : SizeType.AutoSize, i == 5 ? 300 : 0));
             body.Controls.Add(layout);
 
-            TableLayoutPanel heading = new TableLayoutPanel();
-            heading.AutoSize = true;
-            heading.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            heading.Dock = DockStyle.Fill;
-            heading.ColumnCount = 1;
-            heading.Margin = new Padding(0, 0, 0, 14);
+            TableLayoutPanel heading = new TableLayoutPanel { AutoSize = true, Dock = DockStyle.Fill, ColumnCount = 1, Margin = new Padding(0, 0, 0, 10) };
             Label titleLabel = Body(Text, StudioTheme.Text);
-            titleLabel.Font = new Font("Segoe UI", 18f, FontStyle.Bold);
-            titleLabel.Margin = new Padding(0, 0, 0, 5);
+            titleLabel.Font = new Font("Segoe UI", 17f, FontStyle.Bold);
             heading.Controls.Add(titleLabel);
-            description = Body(showBackground
-                ? "Change the recognized words, or clear the text to remove this line."
-                : "Write your note. Use a narrower box to wrap it onto more lines.", StudioTheme.Muted);
+            description = Body(showBackground ? "Edit the recognized line using the document's estimated style. Select words to format just those words."
+                : "Write and format your note. Select words for individual formatting, or select all to change the whole note.", StudioTheme.Muted);
             heading.Controls.Add(description);
             layout.Controls.Add(heading, 0, 0);
 
-            Label textLabel = Body("Text", StudioTheme.Text);
-            textLabel.Margin = new Padding(0, 0, 0, 6);
-            layout.Controls.Add(textLabel, 0, 1);
-            entry = new TextBox();
-            entry.Multiline = true;
-            entry.WordWrap = true;
-            entry.AcceptsReturn = true;
-            entry.AcceptsTab = false;
-            entry.ScrollBars = ScrollBars.Vertical;
-            entry.BorderStyle = BorderStyle.FixedSingle;
-            entry.Dock = DockStyle.Fill;
-            entry.Margin = new Padding(0, 0, 0, 16);
-            entry.MaxLength = 16000;
-            entry.Text = initialText ?? "";
-            entry.Font = new Font("Segoe UI", 11f);
-            entry.BackColor = StudioTheme.Input;
-            entry.ForeColor = StudioTheme.Text;
-            entry.AccessibleName = showBackground ? "Recognized line text" : "Annotation text";
-            layout.Controls.Add(entry, 0, 2);
+            characterTools = ToolRow();
+            family = new ExplicitComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 212, DropDownWidth = 360, AccessibleName = "Font family" };
+            family.Items.Add(sourceFamily);
+            family.SelectedIndex = 0;
+            Field(characterTools, "Font", family, 212);
+            pointSize = Number("Font size in points", 1, 768, 80);
+            pointSize.DecimalPlaces = 1;
+            pointSize.Value = Clamp(sourceSizePixels * 72f / 96f, pointSize.Minimum, pointSize.Maximum);
+            Field(characterTools, "Size (pt)", pointSize, 74);
+            FlowLayoutPanel styles = ButtonGroup();
+            bold = Small(styles, "B", "Bold (Ctrl+B)", delegate { Toggle(FontStyle.Bold); });
+            bold.Font = new Font(Font, FontStyle.Bold);
+            italic = Small(styles, "I", "Italic (Ctrl+I)", delegate { Toggle(FontStyle.Italic); });
+            italic.Font = new Font(Font, FontStyle.Italic);
+            underline = Small(styles, "U", "Underline (Ctrl+U)", delegate { Toggle(FontStyle.Underline); });
+            underline.Font = new Font(Font, FontStyle.Underline);
+            strike = Small(styles, "S", "Strikethrough", delegate { Toggle(FontStyle.Strikeout); });
+            strike.Font = new Font(Font, FontStyle.Strikeout);
+            superscript = Small(styles, "x²", "Superscript", delegate { Apply(delegate { RichEditFormatting.SetScript(entry, RichEditFormatting.GetScript(entry) == 1 ? 0 : 1); }); });
+            subscript = Small(styles, "x₂", "Subscript", delegate { Apply(delegate { RichEditFormatting.SetScript(entry, RichEditFormatting.GetScript(entry) == -1 ? 0 : -1); }); });
+            Field(characterTools, "Style", styles, 232);
+            inkButton = ColorButton("Ink", "Choose text color for selected words or the insertion point", delegate { PickInk(); });
+            Field(characterTools, "Text color", inkButton, 100);
+            highlightButton = ColorButton("Highlight", "Choose a highlight color for selected words", delegate { PickHighlight(); });
+            Field(characterTools, "Highlight", highlightButton, 108);
+            FlowLayoutPanel clearGroup = ButtonGroup();
+            Small(clearGroup, "Clear", "Clear selection formatting and restore the source's base style", delegate
+            { Apply(delegate { RichEditFormatting.ClearFormatting(entry, sourceFamily, sourceSizePixels, sourceInk); }); }, 66);
+            Small(clearGroup, "No fill", "Remove highlighting from selected words", delegate
+            { Apply(delegate { RichEditFormatting.SetHighlightColor(entry, null); }); }, 68);
+            Field(characterTools, "Reset", clearGroup, 142);
+            layout.Controls.Add(characterTools, 0, 1);
 
-            options = new FlowLayoutPanel();
-            options.Dock = DockStyle.Fill;
-            options.AutoSize = true;
-            options.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            options.WrapContents = true;
-            options.Margin = new Padding(0, 0, 0, 12);
-            decimal maximumFontSize = Math.Max(8, Math.Min(160, Math.Floor(availableWidth / 1.5m * 10) / 10));
-            fontSize = Number("Text size in image pixels", 8, maximumFontSize);
-            fontSize.DecimalPlaces = 1;
-            fontSize.Increment = 1;
-            fontSize.Value = Clamp(initialFontSize, fontSize.Minimum, fontSize.Maximum, 20);
-            boxWidth = Number("Text box width in image pixels", 1, availableWidth);
+            paragraphTools = ToolRow();
+            FlowLayoutPanel align = ButtonGroup();
+            alignLeft = Small(align, "Left", "Align selected paragraphs left (Ctrl+L)", delegate { Align(0); }, 48);
+            alignCenter = Small(align, "Center", "Center selected paragraphs (Ctrl+E)", delegate { Align(1); }, 60);
+            alignRight = Small(align, "Right", "Align selected paragraphs right (Ctrl+R)", delegate { Align(2); }, 52);
+            alignJustify = Small(align, "Justify", "Justify selected paragraphs (Ctrl+J)", delegate { Align(3); }, 58);
+            Field(paragraphTools, "Alignment", align, 230);
+            FlowLayoutPanel lists = ButtonGroup();
+            bullets = Small(lists, "Bullets", "Toggle bullet list for selected paragraphs", delegate { Apply(delegate { RichEditFormatting.SetBullets(entry, RichEditFormatting.GetListKind(entry) != 1); }); }, 68);
+            numbering = Small(lists, "1. List", "Toggle numbered list for selected paragraphs", delegate { Apply(delegate { RichEditFormatting.SetNumbering(entry, RichEditFormatting.GetListKind(entry) != 2); }); }, 70);
+            Field(paragraphTools, "Lists", lists, 146);
+            FlowLayoutPanel indentation = ButtonGroup();
+            Small(indentation, "−", "Decrease paragraph indent", delegate { Apply(delegate { RichEditFormatting.ChangeIndent(entry, -24); }); }, 36);
+            Small(indentation, "+", "Increase paragraph indent", delegate { Apply(delegate { RichEditFormatting.ChangeIndent(entry, 24); }); }, 36);
+            Field(paragraphTools, "Indent", indentation, 80);
+            lineSpacing = new ExplicitComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = 80, AccessibleName = "Paragraph line spacing" };
+            lineSpacing.Items.AddRange(new object[] { "1.0", "1.15", "1.5", "2.0" });
+            lineSpacing.SelectedIndex = 0;
+            Field(paragraphTools, "Line spacing", lineSpacing, 86);
+            beforeSpace = Number("Space before selected paragraphs in points", 0, 120, 72);
+            afterSpace = Number("Space after selected paragraphs in points", 0, 120, 72);
+            beforeSpace.DecimalPlaces = afterSpace.DecimalPlaces = 1;
+            Field(paragraphTools, "Before (pt)", beforeSpace, 82);
+            Field(paragraphTools, "After (pt)", afterSpace, 82);
+            layout.Controls.Add(paragraphTools, 0, 2);
+
+            documentTools = ToolRow();
+            boxWidth = Number("Text box width in image pixels", 12, availableWidth, 126);
             boxWidth.Increment = 10;
-            boxWidth.Value = Clamp(initialBoxWidth, 1, availableWidth, Math.Min(360, availableWidth));
-            AddOption("Size (px)", fontSize, 108);
-            AddOption("Box width (px)", boxWidth, 142);
-            textColorButton = ColorButton("Choose text color", delegate { PickColor(false); });
-            AddOption("Text color", textColorButton, 132);
-            backgroundColorButton = ColorButton("Choose replacement background color", delegate { PickColor(true); });
-            if (showBackground) AddOption("Background fill", backgroundColorButton, 132);
-            layout.Controls.Add(options, 0, 3);
+            boxWidth.Value = Clamp(initialBoxWidth, 12, availableWidth);
+            Field(documentTools, "Box width (px)", boxWidth, 138);
+            backgroundButton = ColorButton("Fill", "Choose the solid fill used to cover the original screenshot line", delegate { PickBackground(); });
+            if (showBackground) Field(documentTools, "Replacement fill", backgroundButton, 120);
+            previewScale = Body("", StudioTheme.Muted);
+            previewScale.Margin = new Padding(4, 23, 8, 0);
+            documentTools.Controls.Add(previewScale);
+            layout.Controls.Add(documentTools, 0, 3);
 
+            editingTools = ToolRow();
+            Small(editingTools, "Undo", "Undo the last change in this text draft (Ctrl+Z)", delegate { if (entry.CanUndo) entry.Undo(); entry.Focus(); }, 70);
+            Small(editingTools, "Redo", "Redo the last text draft change (Ctrl+Y)", delegate { if (entry.CanRedo) entry.Redo(); entry.Focus(); }, 70);
+            Small(editingTools, "Cut", "Cut selected words", delegate { entry.Cut(); entry.Focus(); }, 58);
+            Small(editingTools, "Copy", "Copy selected words with their formatting", delegate { entry.Copy(); entry.Focus(); }, 62);
+            Small(editingTools, "Paste", "Paste text and supported character formatting; embedded objects are omitted", delegate { entry.PasteTextOnlyContent(); entry.Focus(); }, 64);
+            Small(editingTools, "Select all", "Select all words in this text note (Ctrl+A)", delegate { entry.SelectAll(); entry.Focus(); }, 90);
+            layout.Controls.Add(editingTools, 0, 4);
+
+            page = new Panel { Dock = DockStyle.Fill, AutoScroll = false, BackColor = StudioTheme.Background, Padding = new Padding(12), Margin = new Padding(0, 2, 0, 10) };
+            entry.SetBounds(12, 12, 500, 276);
+            page.Controls.Add(entry);
+            layout.Controls.Add(page, 0, 5);
             guidance = Body(showBackground
-                ? "The original line is covered with the chosen background fill. Font size is estimated; you can adjust it. Undo restores the original."
-                : "After applying, drag a side handle to make the box wider or narrower. Text wraps and the box grows in height without shrinking the font.", StudioTheme.Muted);
-            guidance.Margin = new Padding(0, 0, 0, 14);
-            layout.Controls.Add(guidance, 0, 4);
+                ? "Screenshot pixels do not contain their original font metadata. The estimated font and solid replacement fill are adjustable. Undo in Snip Studio restores the original image."
+                : "The note wraps to its image width. Side handles can reshape it after Apply. Keep the note inside the screenshot edges.", StudioTheme.Muted);
+            layout.Controls.Add(guidance, 0, 6);
 
-            FlowLayoutPanel actions = new FlowLayoutPanel();
-            actions.Dock = DockStyle.Bottom;
-            actions.AutoSize = true;
-            actions.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            actions.FlowDirection = FlowDirection.RightToLeft;
-            actions.WrapContents = false;
-            actions.Margin = Padding.Empty;
-            actions.Padding = new Padding(24, 12, 24, 20);
+            FlowLayoutPanel actions = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.RightToLeft, WrapContents = false, Padding = new Padding(20, 12, 20, 16) };
             StudioButton apply = ActionButton("Apply", true);
-            apply.DialogResult = DialogResult.OK;
+            apply.Click += delegate { ApplyDraft(); };
             StudioButton cancel = ActionButton("Cancel", false);
             cancel.DialogResult = DialogResult.Cancel;
-            actions.Controls.Add(apply);
-            actions.Controls.Add(cancel);
+            actions.Controls.Add(apply); actions.Controls.Add(cancel);
             Controls.Add(actions);
-            AcceptButton = apply;
-            CancelButton = cancel;
+            AcceptButton = apply; CancelButton = cancel;
 
-            fontSize.ValueChanged += delegate { ConstrainBoxWidth(); };
-            ConstrainBoxWidth();
-            UpdateColorButton(textColorButton, textColor);
-            UpdateColorButton(backgroundColorButton, backgroundColor);
+            family.SelectedIndexChanged += delegate
+            { if (!updating && family.SelectedItem != null) Apply(delegate { RichEditFormatting.SetFontFamily(entry, family.SelectedItem.ToString()); }); };
+            pointSize.ValueChanged += delegate
+            {
+                if (updating) return;
+                float pixels = (float)pointSize.Value * 96f / 72f;
+                if (pixels * 1.5f > availableWidth)
+                {
+                    MessageBox.Show(this, "That font size would extend beyond the screenshot's available width. Choose a smaller size or move the text box to a wider area.",
+                        "Text size", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    RefreshFormatting();
+                    return;
+                }
+                if (boxWidth.Value < (decimal)(pixels * 1.5f)) boxWidth.Value = Math.Min(boxWidth.Maximum, (decimal)Math.Ceiling(pixels * 1.5f));
+                Apply(delegate { RichEditFormatting.SetFontSizePixels(entry, pixels); });
+            };
+            lineSpacing.SelectedIndexChanged += delegate
+            {
+                float multiple;
+                if (!updating && Single.TryParse(lineSpacing.Text, NumberStyles.Float, CultureInfo.InvariantCulture, out multiple))
+                    Apply(delegate { RichEditFormatting.SetLineSpacing(entry, multiple); });
+            };
+            beforeSpace.ValueChanged += delegate { if (!updating) Apply(delegate { RichEditFormatting.SetSpaceBefore(entry, (float)beforeSpace.Value); }); };
+            afterSpace.ValueChanged += delegate { if (!updating) Apply(delegate { RichEditFormatting.SetSpaceAfter(entry, (float)afterSpace.Value); }); };
+            boxWidth.ValueChanged += delegate { if (!updating) ReflowPage(); };
+            entry.SelectionChanged += delegate { RefreshFormatting(); };
+            entry.TextChanged += delegate { RefreshFormatting(); };
+            page.SizeChanged += delegate { ReflowPage(); };
+            body.SizeChanged += delegate { Reflow(); };
             StudioTheme.ApplyTo(this);
-            layout.SizeChanged += delegate { ReflowHelp(); };
-            body.SizeChanged += delegate { ReflowHelp(); };
+            UpdateColorButton(inkButton, sourceInk, "Ink");
+            UpdateColorButton(highlightButton, lastHighlight, "Highlight");
+            UpdateColorButton(backgroundButton, backgroundColor, "Fill");
             Shown += delegate
             {
                 Rectangle work = Screen.FromControl(this).WorkingArea;
-                int maximumFormWidth = Math.Max(320, work.Width - 32);
-                int maximumFormHeight = Math.Max(280, work.Height - 32);
-                MinimumSize = new Size(Math.Min(MinimumSize.Width, maximumFormWidth), Math.Min(MinimumSize.Height, maximumFormHeight));
-                Size = new Size(Math.Min(Width, maximumFormWidth), Math.Min(Height, maximumFormHeight));
-                ReflowHelp();
+                MinimumSize = new Size(Math.Min(620, Math.Max(320, work.Width - 24)), Math.Min(500, Math.Max(300, work.Height - 24)));
+                Size = new Size(Math.Min(Width, work.Width - 24), Math.Min(Height, work.Height - 24));
+                LoadFonts();
+                Reflow();
                 entry.Focus();
                 if (initialSelectionStart >= 0) entry.Select(initialSelectionStart, initialSelectionLength);
                 else entry.Select(entry.TextLength, 0);
-                entry.ScrollToCaret();
+                entry.ScrollToCaret(); RefreshFormatting();
             };
-            ReflowHelp();
+            Reflow();
         }
 
-        private static Label Body(string value, Color color)
+        private static FlowLayoutPanel ToolRow()
         {
-            return new Label { Text = value, AutoSize = true, ForeColor = color, Margin = Padding.Empty, UseMnemonic = false };
+            return new FlowLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                WrapContents = true, Margin = new Padding(0, 0, 0, 6), Padding = Padding.Empty };
         }
-
-        private static NumericUpDown Number(string accessibleName, decimal minimum, decimal maximum)
+        private static FlowLayoutPanel ButtonGroup()
         {
-            return new ExplicitNumericUpDown
-            {
-                AccessibleName = accessibleName,
-                Minimum = minimum,
-                Maximum = maximum,
-                AutoSize = false,
-                Width = 110,
-                Height = 30,
-                ThousandsSeparator = false,
-                BackColor = StudioTheme.Input,
-                ForeColor = StudioTheme.Text,
-                BorderStyle = BorderStyle.FixedSingle
-            };
+            return new FlowLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, WrapContents = false, Margin = Padding.Empty, Padding = Padding.Empty };
         }
-
-        private void AddOption(string caption, Control control, int logicalWidth)
+        private static Label Body(string text, Color color)
         {
-            TableLayoutPanel field = new TableLayoutPanel();
-            field.ColumnCount = 1;
-            field.RowCount = 2;
-            field.AutoSize = true;
-            field.AutoSizeMode = AutoSizeMode.GrowAndShrink;
-            field.Margin = new Padding(0, 0, 12, 8);
-            Label label = Body(caption, StudioTheme.Text);
-            label.Margin = new Padding(0, 0, 0, 6);
-            field.Controls.Add(label, 0, 0);
-            control.Width = logicalWidth;
-            control.Height = 32;
-            control.Margin = Padding.Empty;
-            field.Controls.Add(control, 0, 1);
-            options.Controls.Add(field);
+            return new Label { Text = text, AutoSize = true, ForeColor = color, UseMnemonic = false, Margin = new Padding(0, 0, 0, 5) };
         }
-
-        private static Button ColorButton(string accessibleName, EventHandler click)
+        private void Field(FlowLayoutPanel row, string caption, Control control, int width)
         {
-            Button button = new Button();
-            button.Tag = "PreserveColor";
-            button.AccessibleName = accessibleName;
-            button.FlatStyle = FlatStyle.Flat;
-            button.FlatAppearance.BorderSize = 1;
-            button.UseVisualStyleBackColor = false;
-            button.Cursor = Cursors.Hand;
+            TableLayoutPanel field = new TableLayoutPanel { ColumnCount = 1, RowCount = 2, AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink, Margin = new Padding(0, 0, 8, 6) };
+            field.Controls.Add(Body(caption, StudioTheme.Muted), 0, 0);
+            control.Width = width; control.Height = 32; control.Margin = Padding.Empty;
+            field.Controls.Add(control, 0, 1); row.Controls.Add(field);
+        }
+        private StudioButton Small(FlowLayoutPanel row, string text, string hint, EventHandler click, int width = 34)
+        {
+            StudioButton button = new StudioButton { Text = text, AccessibleName = hint, Width = width, Height = 32,
+                Margin = new Padding(0, 0, 3, 0), Cursor = Cursors.Hand };
             button.Click += click;
-            return button;
+            tips.SetToolTip(button, hint);
+            row.Controls.Add(button); return button;
         }
-
         private static StudioButton ActionButton(string text, bool primary)
         {
-            return new StudioButton
-            {
-                Text = text,
-                AccessibleName = text,
-                Primary = primary,
-                Size = new Size(104, 38),
-                Margin = new Padding(8, 0, 0, 0)
-            };
+            return new StudioButton { Text = text, AccessibleName = text, Primary = primary, Size = new Size(108, 38), Margin = new Padding(8, 0, 0, 0) };
         }
-
-        private void PickColor(bool background)
+        private static NumericUpDown Number(string name, decimal minimum, decimal maximum, int width)
         {
-            using (ColorPaletteDialog picker = new ColorPaletteDialog(background ? backgroundColor : textColor, new Color[0]))
-            {
-                if (picker.ShowDialog(this) != DialogResult.OK) return;
-                if (background) { backgroundColor = picker.SelectedColor; UpdateColorButton(backgroundColorButton, backgroundColor); }
-                else { textColor = picker.SelectedColor; UpdateColorButton(textColorButton, textColor); }
-            }
+            return new ExplicitNumericUpDown { AccessibleName = name, Minimum = minimum, Maximum = Math.Max(minimum, maximum),
+                Width = width, Height = 32, BackColor = StudioTheme.Input, ForeColor = StudioTheme.Text, BorderStyle = BorderStyle.FixedSingle };
         }
-
-        private static void UpdateColorButton(Button button, Color value)
+        private Button ColorButton(string text, string hint, EventHandler click)
         {
-            Color opaque = Color.FromArgb(value.R, value.G, value.B);
-            button.BackColor = opaque;
-            double light = (0.2126 * Linear(value.R) + 0.7152 * Linear(value.G) + 0.0722 * Linear(value.B));
-            button.ForeColor = light > 0.179 ? Color.Black : Color.White;
-            button.Text = "#" + value.R.ToString("X2") + value.G.ToString("X2") + value.B.ToString("X2");
+            Button button = new Button { Text = text, AccessibleName = hint, Tag = "PreserveColor", FlatStyle = FlatStyle.Flat,
+                UseVisualStyleBackColor = false, Cursor = Cursors.Hand, Height = 32 };
+            button.Click += click; tips.SetToolTip(button, hint); return button;
+        }
+        private void Apply(Action action)
+        {
+            if (updating) return;
+            action(); entry.Focus(); RefreshFormatting();
+        }
+        private void Toggle(FontStyle style)
+        {
+            Apply(delegate { RichEditFormatting.SetStyle(entry, style, RichEditFormatting.GetStyleState(entry, style) != true); });
+        }
+        private void Align(int value) { Apply(delegate { RichEditFormatting.ParagraphAlign(entry, value); }); }
+        private void PickInk()
+        {
+            Color current = entry.SelectionColor.IsEmpty ? sourceInk : entry.SelectionColor;
+            using (ColorPaletteDialog palette = new ColorPaletteDialog(current, new Color[0]))
+                if (palette.ShowDialog(this) == DialogResult.OK)
+                { Apply(delegate { RichEditFormatting.SetTextColor(entry, palette.SelectedColor); }); UpdateColorButton(inkButton, palette.SelectedColor, "Ink"); }
+        }
+        private void PickHighlight()
+        {
+            using (ColorPaletteDialog palette = new ColorPaletteDialog(lastHighlight, new Color[0]))
+                if (palette.ShowDialog(this) == DialogResult.OK)
+                { lastHighlight = palette.SelectedColor; Apply(delegate { RichEditFormatting.SetHighlightColor(entry, lastHighlight); }); UpdateColorButton(highlightButton, lastHighlight, "Highlight"); }
+        }
+        private void PickBackground()
+        {
+            using (ColorPaletteDialog palette = new ColorPaletteDialog(backgroundColor, new Color[0]))
+                if (palette.ShowDialog(this) == DialogResult.OK)
+                { backgroundColor = palette.SelectedColor; entry.BackColor = backgroundColor; UpdateColorButton(backgroundButton, backgroundColor, "Fill"); }
+        }
+        private static void UpdateColorButton(Button button, Color color, string text)
+        {
+            Color opaque = Color.FromArgb(255, color);
+            double luminance = .2126 * Linear(color.R) + .7152 * Linear(color.G) + .0722 * Linear(color.B);
+            Color contrast = luminance > .179 ? Color.Black : Color.White;
+            string hex = "#" + color.R.ToString("X2") + color.G.ToString("X2") + color.B.ToString("X2");
+            if (button.BackColor != opaque) button.BackColor = opaque;
+            if (button.ForeColor != contrast) button.ForeColor = contrast;
+            if (button.Text != hex) button.Text = hex;
             button.FlatAppearance.BorderColor = StudioTheme.Border;
         }
-
         private static double Linear(byte channel)
         {
             double value = channel / 255.0;
-            return value <= 0.04045 ? value / 12.92 : Math.Pow((value + 0.055) / 1.055, 2.4);
+            return value <= .04045 ? value / 12.92 : Math.Pow((value + .055) / 1.055, 2.4);
         }
-
-        private void ConstrainBoxWidth()
+        private void RefreshFormatting()
         {
-            if (updatingMetrics) return;
-            updatingMetrics = true;
+            if (updating || entry.IsDisposed) return;
+            updating = true;
             try
             {
-                decimal minimum = Math.Min(availableWidth, Math.Max(24, Math.Ceiling(fontSize.Value * 1.5m)));
-                if (boxWidth.Value < minimum) boxWidth.Value = minimum;
-                boxWidth.Minimum = minimum;
+                Font selected = entry.SelectionFont;
+                if (selected != null)
+                {
+                    int index = family.Items.IndexOf(selected.FontFamily.Name);
+                    if (index < 0) index = family.Items.Add(selected.FontFamily.Name);
+                    family.SelectedIndex = index;
+                    pointSize.Value = Clamp(selected.SizeInPoints, pointSize.Minimum, pointSize.Maximum);
+                }
+                else { family.SelectedIndex = -1; pointSize.Text = ""; }
+                bold.Selected = RichEditFormatting.GetStyleState(entry, FontStyle.Bold) == true;
+                italic.Selected = RichEditFormatting.GetStyleState(entry, FontStyle.Italic) == true;
+                underline.Selected = RichEditFormatting.GetStyleState(entry, FontStyle.Underline) == true;
+                strike.Selected = RichEditFormatting.GetStyleState(entry, FontStyle.Strikeout) == true;
+                superscript.Selected = RichEditFormatting.GetScript(entry) == 1;
+                subscript.Selected = RichEditFormatting.GetScript(entry) == -1;
+                int? alignment = RichEditFormatting.GetAlignment(entry);
+                alignLeft.Selected = alignment == 0; alignCenter.Selected = alignment == 1;
+                alignRight.Selected = alignment == 2; alignJustify.Selected = alignment == 3;
+                int? list = RichEditFormatting.GetListKind(entry);
+                bullets.Selected = list == 1; numbering.Selected = list == 2;
+                float? before = RichEditFormatting.GetSpaceBefore(entry), after = RichEditFormatting.GetSpaceAfter(entry);
+                if (before.HasValue) beforeSpace.Value = Clamp(before.Value, beforeSpace.Minimum, beforeSpace.Maximum); else beforeSpace.Text = "";
+                if (after.HasValue) afterSpace.Value = Clamp(after.Value, afterSpace.Minimum, afterSpace.Maximum); else afterSpace.Text = "";
+                float? multiple = RichEditFormatting.GetLineSpacing(entry);
+                int spacingIndex = -1;
+                if (multiple.HasValue)
+                    for (int i = 0; i < 4; i++) if (Math.Abs(Single.Parse(lineSpacing.Items[i].ToString(), CultureInfo.InvariantCulture) - multiple.Value) < .01f) spacingIndex = i;
+                if (spacingIndex < 0)
+                {
+                    if (lineSpacing.Items.Count == 4) lineSpacing.Items.Add("Custom / mixed");
+                    spacingIndex = 4;
+                }
+                lineSpacing.SelectedIndex = spacingIndex;
+                Color selectedInk = entry.SelectionColor;
+                if (!selectedInk.IsEmpty) UpdateColorButton(inkButton, selectedInk, "Ink");
             }
-            finally { updatingMetrics = false; }
+            finally { updating = false; }
         }
-
-        private void ReflowHelp()
+        private void LoadFonts()
         {
-            if (reflowing) return;
+            if (installedFontNames == null)
+            {
+                List<string> names = new List<string>();
+                foreach (FontFamily font in FontFamily.Families)
+                {
+                    using (font) if (!names.Contains(font.Name)) names.Add(font.Name);
+                }
+                names.Sort(StringComparer.CurrentCultureIgnoreCase);
+                installedFontNames = names.ToArray();
+            }
+            updating = true;
+            try
+            {
+                string current = family.Text;
+                family.BeginUpdate(); family.Items.Clear(); family.Items.AddRange(installedFontNames);
+                if (!family.Items.Contains(sourceFamily)) family.Items.Add(sourceFamily);
+                int at = family.Items.IndexOf(current); family.SelectedIndex = at >= 0 ? at : family.Items.IndexOf(sourceFamily);
+                family.EndUpdate();
+            }
+            finally { updating = false; }
+        }
+        private void Reflow()
+        {
+            if (reflowing || layout == null || body == null) return;
             reflowing = true;
             try
             {
-                // Reserve scrollbar space even before it is visible. This keeps
-                // wrapping stable as the body becomes scrollable on a small screen.
-                int bodyWidth = Math.Max(160, body.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
-                Size bodyConstraint = new Size(bodyWidth, 0);
-                if (layout.MaximumSize != bodyConstraint) layout.MaximumSize = bodyConstraint;
-                if (layout.Width != bodyWidth) layout.Width = bodyWidth;
-                int contentWidth = Math.Max(120, bodyWidth - layout.Padding.Horizontal);
-                Size constraint = new Size(contentWidth, 0);
-                if (description.MaximumSize != constraint) description.MaximumSize = constraint;
-                if (guidance.MaximumSize != constraint) guidance.MaximumSize = constraint;
-                // Bound the auto-sized flow row before measuring its height, so
-                // color fields wrap instead of enlarging the table horizontally.
-                if (options.MaximumSize != constraint) options.MaximumSize = constraint;
+                int width = Math.Max(300, body.ClientSize.Width - SystemInformation.VerticalScrollBarWidth);
+                layout.MaximumSize = new Size(width, 0); layout.Width = width;
+                Size constraint = new Size(Math.Max(260, width - layout.Padding.Horizontal), 0);
+                description.MaximumSize = guidance.MaximumSize = constraint;
+                characterTools.MaximumSize = paragraphTools.MaximumSize = documentTools.MaximumSize = editingTools.MaximumSize = constraint;
+                ReflowPage();
             }
             finally { reflowing = false; }
         }
-
-        private static decimal Clamp(float value, decimal minimum, decimal maximum, decimal fallback)
+        private void ReflowPage()
         {
-            if (Single.IsNaN(value) || Single.IsInfinity(value)) return Math.Max(minimum, Math.Min(maximum, fallback));
-            if (value <= (float)minimum) return minimum;
-            if (value >= (float)maximum) return maximum;
-            return Math.Max(minimum, Math.Min(maximum, (decimal)value));
+            if (page == null || entry == null || page.ClientSize.Width <= 24) return;
+            float dpiScale = 1;
+            if (IsHandleCreated) using (Graphics graphics = CreateGraphics()) dpiScale = graphics.DpiX / 96f;
+            float logicalWidth = Math.Max(12, (float)boxWidth.Value);
+            float factor = Math.Max(.05f, Math.Min(1f, (page.ClientSize.Width - 28) / Math.Max(1f, logicalWidth * dpiScale)));
+            int previewWidth = Math.Max(12, Math.Min(page.ClientSize.Width - 24, (int)Math.Round(logicalWidth * dpiScale * factor)));
+            entry.RightMargin = Math.Max(1, (int)Math.Round(logicalWidth * dpiScale));
+            if (Math.Abs(entry.ZoomFactor - factor) > .001f) entry.ZoomFactor = factor;
+            entry.SetBounds(12, 12, previewWidth, Math.Max(100, page.ClientSize.Height - 24));
+            previewScale.Text = "Preview " + Math.Round(factor * 100) + "%  •  Width controls wrapping; font size stays unchanged.";
         }
-
+        private void ApplyDraft()
+        {
+            if (entry.TextLength > 16000)
+            { MessageBox.Show(this, "Keep this text note within 16,000 characters.", "Text note", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            try { RichTextDraftBox.ValidateTextRtf(entry.Rtf); }
+            catch (ArgumentException error) { MessageBox.Show(this, error.Message, "Unsupported text content", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+            DialogResult = DialogResult.OK;
+        }
         public void SelectTextRange(int start, int length)
         {
             initialSelectionStart = Math.Max(0, Math.Min(entry.TextLength, start));
             initialSelectionLength = Math.Max(0, Math.Min(entry.TextLength - initialSelectionStart, length));
             entry.Select(initialSelectionStart, initialSelectionLength);
-            if (entry.IsHandleCreated) entry.ScrollToCaret();
         }
-
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (keyData == (Keys.Control | Keys.Enter)) { DialogResult = DialogResult.OK; return true; }
+            if (keyData == (Keys.Control | Keys.Enter)) { ApplyDraft(); return true; }
+            if (entry.ContainsFocus)
+            {
+                if (keyData == (Keys.Control | Keys.B)) { Toggle(FontStyle.Bold); return true; }
+                if (keyData == (Keys.Control | Keys.I)) { Toggle(FontStyle.Italic); return true; }
+                if (keyData == (Keys.Control | Keys.U)) { Toggle(FontStyle.Underline); return true; }
+                if (keyData == (Keys.Control | Keys.L)) { Align(0); return true; }
+                if (keyData == (Keys.Control | Keys.E)) { Align(1); return true; }
+                if (keyData == (Keys.Control | Keys.R)) { Align(2); return true; }
+                if (keyData == (Keys.Control | Keys.J)) { Align(3); return true; }
+            }
             return base.ProcessCmdKey(ref msg, keyData);
         }
-
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) tips.Dispose();
+            base.Dispose(disposing);
+        }
+        private static decimal Clamp(float value, decimal minimum, decimal maximum)
+        {
+            if (Single.IsNaN(value) || Single.IsInfinity(value)) return minimum;
+            return Math.Max(minimum, Math.Min(maximum, (decimal)value));
+        }
         private sealed class ExplicitNumericUpDown : NumericUpDown
         {
             protected override void OnMouseWheel(MouseEventArgs e)
+            { HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; }
+        }
+        private sealed class ExplicitComboBox : ComboBox
+        {
+            protected override void OnMouseWheel(MouseEventArgs e)
             {
-                HandledMouseEventArgs handled = e as HandledMouseEventArgs;
-                if (handled != null) handled.Handled = true;
+                if (DroppedDown) base.OnMouseWheel(e);
+                else { HandledMouseEventArgs handled = e as HandledMouseEventArgs; if (handled != null) handled.Handled = true; }
+            }
+        }
+        private sealed class RichTextDraftBox : RichTextBox
+        {
+            private const int WmPaste = 0x0302;
+            internal static void ValidateTextRtf(string rtf)
+            {
+                RichTextLayout.ValidateRtf(rtf);
+            }
+            internal void PasteTextOnlyContent()
+            {
+                try { PasteSupportedText(); }
+                catch (System.Runtime.InteropServices.ExternalException)
+                { MessageBox.Show(FindForm(), "The clipboard is busy. Try Paste again.", "Paste text", MessageBoxButtons.OK, MessageBoxIcon.Information); }
+            }
+            private void PasteSupportedText()
+            {
+                bool hasPlain = Clipboard.ContainsText(TextDataFormat.UnicodeText), hasRich = Clipboard.ContainsText(TextDataFormat.Rtf);
+                if (!hasPlain && !hasRich) return;
+                string plain = hasPlain ? Clipboard.GetText(TextDataFormat.UnicodeText) : "";
+                if (TextLength - SelectionLength + plain.Length > 16000)
+                { MessageBox.Show(FindForm(), "This paste would exceed the 16,000-character text limit.", "Paste text", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
+                if (hasRich)
+                {
+                    string rich = Clipboard.GetText(TextDataFormat.Rtf);
+                    try
+                    {
+                        ValidateTextRtf(rich);
+                        if (TextLength - SelectionLength + RichTextLayout.GetPlainText(rich).Length <= 16000) { SelectedRtf = rich; return; }
+                    }
+                    catch (ArgumentException) { }
+                }
+                if (hasPlain) SelectedText = plain;
+            }
+            protected override void WndProc(ref Message message)
+            {
+                if (message.Msg == WmPaste) { PasteTextOnlyContent(); return; }
+                if ((message.Msg == 0x0300 || message.Msg == 0x0301) && SelectionLength > 0)
+                    MainForm.RegisterClipboardIntent();
+                base.WndProc(ref message);
             }
         }
     }

@@ -6,20 +6,23 @@ using System.Drawing.Imaging;
 
 namespace SnipStudio
 {
-    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop }
+    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop, RemoveArea }
 
     // Detached immutable data for an editor UI; history-owned annotations stay private.
     public sealed class TextAnnotationInfo
     {
         public string Text { get; private set; }
+        public string Rtf { get; private set; }
+        public string FontFamily { get; private set; }
+        public FontStyle FontStyle { get; private set; }
         public PointF Location { get; private set; }
         public Color Color { get; private set; }
         public float FontSize { get; private set; }
         public float LayoutWidth { get; private set; }
         public RectangleF Bounds { get; private set; }
         public RectangleF InkBounds { get; private set; }
-        internal TextAnnotationInfo(string text, PointF location, Color color, float fontSize, float layoutWidth, RectangleF bounds, RectangleF inkBounds)
-        { Text = text; Location = location; Color = color; FontSize = fontSize; LayoutWidth = layoutWidth; Bounds = bounds; InkBounds = inkBounds; }
+        internal TextAnnotationInfo(string text, string rtf, string fontFamily, FontStyle fontStyle, PointF location, Color color, float fontSize, float layoutWidth, RectangleF bounds, RectangleF inkBounds)
+        { Text = text; Rtf = rtf; FontFamily = fontFamily; FontStyle = fontStyle; Location = location; Color = color; FontSize = fontSize; LayoutWidth = layoutWidth; Bounds = bounds; InkBounds = inkBounds; }
     }
 
     // Immutable annotations make undo inexpensive: ordinary edits share the captured bitmap.
@@ -107,10 +110,30 @@ namespace SnipStudio
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             for (int i = 0; i < Current.Annotations.Count; i++)
                 if (i != hiddenIndex)
-                    (i == movingIndex ? Current.Annotations[i].Translate(delta) : Current.Annotations[i]).Draw(graphics);
+                {
+                    if (i != movingIndex) Current.Annotations[i].Draw(graphics);
+                    else
+                    {
+                        GraphicsState state = graphics.Save();
+                        try
+                        {
+                            graphics.TranslateTransform(delta.X, delta.Y);
+                            Current.Annotations[i].Draw(graphics);
+                        }
+                        finally { graphics.Restore(state); }
+                    }
+                }
         }
 
         internal Bitmap CopyBaseImage() { RequireImage(); return CopyImage(Current.Frame.Bitmap); }
+
+        internal Bitmap CopyBaseRegion(Rectangle requested)
+        {
+            RequireImage();
+            Rectangle clipped = ClipPixelRectangle(requested);
+            if (clipped.IsEmpty) throw new ArgumentException("The requested image region must overlap the screenshot.", "requested");
+            return Current.Frame.Bitmap.Clone(clipped, PixelFormat.Format32bppArgb);
+        }
 
         public int HitTestAnnotation(PointF point, float radius)
         {
@@ -131,7 +154,7 @@ namespace SnipStudio
         {
             ThrowIfDisposed();
             TextAnnotation text = HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] as TextAnnotation : null;
-            return text == null ? null : new TextAnnotationInfo(text.Text, text.Location, text.Color, text.FontSize, text.LayoutWidth, text.Bounds, text.InkBounds);
+            return text == null ? null : new TextAnnotationInfo(text.Text, text.Rtf, text.FontFamily, text.FontStyle, text.Location, text.Color, text.FontSize, text.LayoutWidth, text.Bounds, text.InkBounds);
         }
 
         public bool IsArrowAnnotation(int index)
@@ -170,31 +193,31 @@ namespace SnipStudio
         internal TextAnnotation CreateTextAnnotationPreview(int index, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
-            TextAnnotationInfo original = GetTextAnnotation(index);
-            return original == null ? null : new TextAnnotation(original.Text, original.Location, original.Color, fontSize, layoutWidth);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            return original == null ? null : original.WithGeometry(original.Location, fontSize, layoutWidth);
         }
 
         internal TextAnnotation CreateTextAnnotationPreview(int index, PointF location, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
-            TextAnnotationInfo original = GetTextAnnotation(index);
-            return original == null ? null : new TextAnnotation(original.Text, location, original.Color, fontSize, layoutWidth);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            return original == null ? null : original.WithGeometry(location, fontSize, layoutWidth);
         }
 
         public bool UpdateTextAnnotationBounds(int index, PointF location, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
             layoutWidth = NormalizeTextWidth(layoutWidth);
-            TextAnnotationInfo original = GetTextAnnotation(index);
+            TextAnnotation original = GetTextAnnotationObject(index);
             if (original == null) return false;
             if (location == original.Location && fontSize == original.FontSize && layoutWidth == original.LayoutWidth) return false;
-            return ReplaceAnnotation(index, new TextAnnotation(original.Text, location, original.Color, fontSize, layoutWidth));
+            return ReplaceAnnotation(index, original.WithGeometry(location, fontSize, layoutWidth));
         }
 
         public bool UpdateTextAnnotation(int index, string text, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
-            TextAnnotationInfo original = GetTextAnnotation(index);
+            TextAnnotation original = GetTextAnnotationObject(index);
             return original != null && UpdateTextAnnotation(index, text, original.Color, fontSize, layoutWidth);
         }
 
@@ -202,11 +225,70 @@ namespace SnipStudio
         {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
             layoutWidth = NormalizeTextWidth(layoutWidth);
-            TextAnnotationInfo original = GetTextAnnotation(index);
+            TextAnnotation original = GetTextAnnotationObject(index);
             if (original == null) return false;
             if (String.IsNullOrEmpty(text)) return RemoveAnnotation(index);
             if (text == original.Text && color.ToArgb() == original.Color.ToArgb() && fontSize == original.FontSize && layoutWidth == original.LayoutWidth) return false;
-            return ReplaceAnnotation(index, new TextAnnotation(text, original.Location, color, fontSize, layoutWidth));
+            return ReplaceAnnotation(index, original.WithTextAndFormatting(text, color, fontSize, layoutWidth));
+        }
+
+        public bool UpdateRichTextAnnotation(int index, string plain, string rtf, Color color, float fontSize, float layoutWidth)
+        {
+            RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            if (original == null) return false;
+            if (String.IsNullOrEmpty(plain)) return RemoveAnnotation(index);
+            layoutWidth = NormalizeTextWidth(layoutWidth);
+            TextAnnotation replacement = new TextAnnotation(plain, rtf, original.Location, color, fontSize, layoutWidth, original.FontFamily, original.FontStyle);
+            if (replacement.Text == original.Text && replacement.Rtf == original.Rtf && replacement.LayoutWidth == original.LayoutWidth) return false;
+            return ReplaceAnnotation(index, replacement);
+        }
+
+        public bool UpdateTextAnnotationFontSize(int index, float fontSize)
+        {
+            RequireImage();
+            TextAnnotation original = GetTextAnnotationObject(index);
+            return original != null && UpdateTextAnnotationFontSize(index, fontSize, original.LayoutWidth);
+        }
+
+        public bool UpdateTextAnnotationFontSize(int index, float fontSize, float layoutWidth)
+        {
+            RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            if (original == null) return false;
+            string rtf = RichTextLayout.SetFontSize(original.Rtf, fontSize);
+            return UpdateRichTextAnnotation(index, original.Text, rtf, original.Color, fontSize, layoutWidth);
+        }
+
+        public bool UpdateTextAnnotationColor(int index, Color color)
+        {
+            RequireImage();
+            TextAnnotation original = GetTextAnnotationObject(index);
+            if (original == null) return false;
+            string rtf = RichTextLayout.SetColor(original.Rtf, color);
+            return UpdateRichTextAnnotation(index, original.Text, rtf, color, original.FontSize, original.LayoutWidth);
+        }
+
+        public bool RemoveTextAnnotationRange(int index, int start, int length)
+        {
+            RequireImage();
+            TextAnnotation original = GetTextAnnotationObject(index);
+            if (original == null) return false;
+            if (start < 0 || length < 0 || start > original.Text.Length - length) throw new ArgumentOutOfRangeException("start");
+            if (length == 0) return false;
+            if (SplitsTextSequence(original.Text, start) || SplitsTextSequence(original.Text, start + length))
+                throw new ArgumentException("The selected range must not split a line ending or a Unicode character.", "length");
+            string plain = original.Text.Remove(start, length);
+            if (plain.Length == 0) return RemoveAnnotation(index);
+            int nativeStart = NormalizeRichPlain(original.Text.Substring(0, start)).Length;
+            int nativeLength = NormalizeRichPlain(original.Text.Substring(start, length)).Length;
+            string rtf = RichTextLayout.RemoveTextRange(original.Rtf, nativeStart, nativeLength);
+            return UpdateRichTextAnnotation(index, plain, rtf, original.Color, original.FontSize, original.LayoutWidth);
+        }
+
+        private TextAnnotation GetTextAnnotationObject(int index)
+        {
+            return HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] as TextAnnotation : null;
         }
 
         internal PointF ConstrainMove(int index, PointF delta)
@@ -299,17 +381,29 @@ namespace SnipStudio
             Add(new TextAnnotation(text, location, color, fontSize, layoutWidth));
         }
 
+        public void AddRichText(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth)
+        {
+            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            if (String.IsNullOrWhiteSpace(plain)) return;
+            Add(new TextAnnotation(plain, rtf, location, color, fontSize, layoutWidth, "Segoe UI", FontStyle.Regular));
+        }
+
         public int ReplaceImageText(Rectangle eraseBounds, string text, Color foreground, Color background, float fontSize, float layoutWidth)
+        {
+            return ReplaceImageRichText(eraseBounds, text, null, foreground, background, fontSize, layoutWidth);
+        }
+
+        public int ReplaceImageRichText(Rectangle eraseBounds, string plain, string rtf, Color foreground, Color background, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
             Rectangle clipped = ClipPixelRectangle(eraseBounds);
             if (clipped.IsEmpty) throw new ArgumentException("The text region must overlap the image.", "eraseBounds");
             List<Annotation> annotations = new List<Annotation>(Current.Annotations);
             int addedIndex = -1;
-            if (!String.IsNullOrWhiteSpace(text))
+            if (!String.IsNullOrWhiteSpace(plain))
             {
                 addedIndex = annotations.Count;
-                annotations.Add(new TextAnnotation(text, clipped.Location, foreground, fontSize, layoutWidth));
+                annotations.Add(new TextAnnotation(plain, rtf, clipped.Location, foreground, fontSize, layoutWidth, "Segoe UI", FontStyle.Regular));
             }
             Bitmap patched = CopyImage(Current.Frame.Bitmap);
             try
@@ -324,6 +418,51 @@ namespace SnipStudio
                 return addedIndex;
             }
             catch { patched.Dispose(); throw; }
+        }
+
+        internal int ReplaceRecognizedTextBlocks(IList<RecognizedTextReplacement> replacements,
+            object expectedImageIdentity, long expectedRevision)
+        {
+            RequireImage();
+            if (replacements == null) throw new ArgumentNullException("replacements");
+            if (replacements.Count == 0) return -1;
+            if (!Object.ReferenceEquals(expectedImageIdentity, BaseIdentity) || expectedRevision != Revision) return -1;
+
+            List<Rectangle> masks = new List<Rectangle>();
+            List<Color> backgrounds = new List<Color>();
+            List<Annotation> text = new List<Annotation>();
+            foreach (RecognizedTextReplacement replacement in replacements)
+            {
+                if (replacement == null) throw new ArgumentException("Every source region needs replacement text.", "replacements");
+                ValidatePoint(replacement.TextLocation);
+                ValidatePositive(replacement.FontSize, "fontSize");
+                ValidateTextWidth(replacement.LayoutWidth);
+                Rectangle clipped = ClipPixelRectangle(replacement.Bounds);
+                if (clipped.IsEmpty || clipped != replacement.Bounds || String.IsNullOrWhiteSpace(replacement.PlainText))
+                    throw new ArgumentException("Every replacement must contain text and stay inside its source image.", "replacements");
+                // Construct and validate every immutable annotation first. RTF
+                // failures cannot leave a half-translated document or extra Undo.
+                TextAnnotation annotation = new TextAnnotation(replacement.PlainText, replacement.Rtf, replacement.TextLocation,
+                    replacement.Foreground, replacement.FontSize, replacement.LayoutWidth, "Segoe UI", FontStyle.Regular);
+                RectangleF ink = annotation.InkBounds;
+                if (ink.IsEmpty || ink.Left < clipped.Left || ink.Top < clipped.Top || ink.Right > clipped.Right || ink.Bottom > clipped.Bottom)
+                    throw new ArgumentException("The complete translated text must fit inside its original source region.", "replacements");
+                text.Add(annotation);
+                masks.Add(clipped);
+                backgrounds.Add(Color.FromArgb(255, replacement.Background));
+            }
+            if (!Object.ReferenceEquals(expectedImageIdentity, BaseIdentity) || expectedRevision != Revision) return -1;
+
+            // Sampled flat-color masks cover only source raster text. The
+            // original capture is shared, untouched, across this single history
+            // state. Existing highlights/shapes/notes retain their draw order.
+            List<Annotation> annotations = new List<Annotation>();
+            annotations.Add(new SourceTextMasksAnnotation(masks.ToArray(), backgrounds.ToArray()));
+            annotations.AddRange(Current.Annotations);
+            annotations.AddRange(text);
+            Current.Frame.AddReference();
+            Commit(new DocumentState(Current.Frame, annotations, ++nextRevision));
+            return annotations.Count - 1;
         }
 
         public bool EraseImageRegions(IEnumerable<Rectangle> regions, Color background)
@@ -490,13 +629,24 @@ namespace SnipStudio
 
         private static void ValidateTextWidth(float value)
         {
-            if (Single.IsNaN(value) || Single.IsInfinity(value) || value < 0 || value > 1048576)
+            if (Single.IsNaN(value) || Single.IsInfinity(value) || value < 0 || value > 32768)
                 throw new ArgumentOutOfRangeException("layoutWidth");
         }
 
         private static float NormalizeTextWidth(float value)
         {
             return value > 0 ? Math.Max(1, (float)Math.Round(value)) : 0;
+        }
+
+        private static string NormalizeRichPlain(string value)
+        {
+            return (value ?? "").Replace("\r\n", "\n").Replace("\r", "\n");
+        }
+
+        private static bool SplitsTextSequence(string text, int at)
+        {
+            if (at <= 0 || at >= text.Length) return false;
+            return (text[at - 1] == '\r' && text[at] == '\n') || (Char.IsHighSurrogate(text[at - 1]) && Char.IsLowSurrogate(text[at]));
         }
 
         private static void ValidatePoint(PointF point)
@@ -564,6 +714,47 @@ namespace SnipStudio
             public abstract bool HitTest(PointF point, float radius);
             public abstract RectangleF Bounds { get; }
             public abstract Annotation Translate(PointF delta);
+        }
+
+        private sealed class SourceTextMasksAnnotation : Annotation
+        {
+            private readonly RectangleF[] regions;
+            private readonly Color[] backgrounds;
+            private readonly RectangleF bounds;
+
+            internal SourceTextMasksAnnotation(Rectangle[] regions, Color[] backgrounds)
+            {
+                this.regions = new RectangleF[regions.Length];
+                this.backgrounds = (Color[])backgrounds.Clone();
+                RectangleF union = RectangleF.Empty;
+                for (int i = 0; i < regions.Length; i++)
+                {
+                    this.regions[i] = regions[i];
+                    union = union.IsEmpty ? regions[i] : RectangleF.Union(union, regions[i]);
+                }
+                bounds = union;
+            }
+
+            private SourceTextMasksAnnotation(RectangleF[] regions, Color[] backgrounds, RectangleF bounds)
+            { this.regions = regions; this.backgrounds = backgrounds; this.bounds = bounds; }
+
+            public override RectangleF Bounds { get { return bounds; } }
+            // A mask belongs to its source pixels, so moving/erasing the
+            // translated text cannot accidentally move the erased source words.
+            public override bool HitTest(PointF point, float radius) { return false; }
+            public override void Draw(Graphics graphics)
+            {
+                for (int i = 0; i < regions.Length; i++)
+                    using (Brush fill = new SolidBrush(backgrounds[i])) graphics.FillRectangle(fill, regions[i]);
+            }
+            public override Annotation Translate(PointF delta)
+            {
+                RectangleF[] moved = new RectangleF[regions.Length];
+                for (int i = 0; i < moved.Length; i++) { moved[i] = regions[i]; moved[i].Offset(delta); }
+                RectangleF movedBounds = bounds;
+                movedBounds.Offset(delta);
+                return new SourceTextMasksAnnotation(moved, backgrounds, movedBounds);
+            }
         }
 
         internal sealed class StrokeAnnotation : Annotation
@@ -672,58 +863,99 @@ namespace SnipStudio
 
         internal sealed class TextAnnotation : Annotation
         {
-            private readonly string text;
+            // Content and source-pixel layout are immutable and shared by all
+            // translated previews/history entries. Moving must not invoke native
+            // rich-text layout, regenerate RTF, or allocate a font on each paint.
+            private sealed class TextContent
+            {
+                internal readonly string Text, Rtf, FontFamily;
+                internal readonly FontStyle Style;
+                internal readonly Color Color;
+                internal readonly float FontSize, LayoutWidth;
+                internal readonly SizeF Size;
+                internal readonly RectangleF InkBounds;
+
+                internal TextContent(string plain, string rtf, Color color, float fontSize, float layoutWidth, string family, FontStyle style)
+                {
+                    Text = plain ?? "";
+                    LayoutWidth = NormalizeTextWidth(layoutWidth);
+                    Rtf = String.IsNullOrWhiteSpace(rtf) ? RichTextLayout.CreatePlainRtf(Text, family, fontSize, style, color) : rtf;
+                    if (NormalizeRichPlain(RichTextLayout.GetPlainText(Rtf)) != NormalizeRichPlain(Text))
+                        throw new ArgumentException("The formatted text does not match its plain-text content.", "rtf");
+                    FontFamily = RichTextLayout.GetFirstFontFamily(Rtf);
+                    Style = RichTextLayout.GetFirstFontStyle(Rtf);
+                    FontSize = RichTextLayout.GetFirstFontSize(Rtf);
+                    Color = RichTextLayout.GetFirstColor(Rtf);
+                    RichTextMetrics metrics = RichTextLayout.Measure(Rtf, LayoutWidth);
+                    Size = metrics.Size;
+                    InkBounds = metrics.InkBounds;
+                }
+            }
+
+            private readonly TextContent content;
             private readonly PointF location;
-            private readonly Color color;
-            private readonly float fontSize;
-            private readonly float layoutWidth;
             private readonly RectangleF bounds;
             private readonly RectangleF inkBounds;
             public TextAnnotation(string text, PointF location, Color color, float fontSize)
                 : this(text, location, color, fontSize, 0) { }
             public TextAnnotation(string text, PointF location, Color color, float fontSize, float layoutWidth)
+                : this(text, null, location, color, fontSize, layoutWidth, "Segoe UI", System.Drawing.FontStyle.Regular) { }
+
+            internal TextAnnotation(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth, string family, FontStyle style)
             {
                 ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
-                this.text = text ?? ""; this.location = location; this.color = color; this.fontSize = fontSize;
-                // Layout is in source-image pixels and remains stable across screen DPI.
-                this.layoutWidth = NormalizeTextWidth(layoutWidth);
-                using (Bitmap bitmap = new Bitmap(1, 1))
-                using (Graphics graphics = Graphics.FromImage(bitmap))
-                using (Font font = new Font("Segoe UI", fontSize, FontStyle.Regular, GraphicsUnit.Pixel))
-                using (StringFormat format = TextFormat())
-                {
-                    string measureText = this.text.EndsWith("\n", StringComparison.Ordinal) || this.text.EndsWith("\r", StringComparison.Ordinal) ? this.text + " " : this.text;
-                    SizeF measured = this.layoutWidth > 0
-                        ? graphics.MeasureString(measureText, font, (int)this.layoutWidth, format)
-                        : graphics.MeasureString(measureText, font, PointF.Empty, format);
-                    bounds = new RectangleF(location, new SizeF(this.layoutWidth > 0 ? this.layoutWidth : Math.Max(1, measured.Width), Math.Max(font.GetHeight(graphics), (float)Math.Ceiling(measured.Height + 2))));
-                    // Ownership checks use occupied text rather than the full
-                    // resize box, whose unused horizontal space may cover OCR text.
-                    inkBounds = new RectangleF(location, new SizeF(this.layoutWidth > 0 ? Math.Min(this.layoutWidth, Math.Max(1, measured.Width)) : Math.Max(1, measured.Width), bounds.Height));
-                }
+                content = new TextContent(plain, rtf, color, fontSize, layoutWidth, family, style);
+                this.location = location;
+                bounds = new RectangleF(location, content.Size);
+                inkBounds = content.InkBounds;
+                inkBounds.Offset(location);
             }
-            internal string Text { get { return text; } }
-            internal PointF Location { get { return location; } }
-            internal Color Color { get { return color; } }
-            internal float FontSize { get { return fontSize; } }
-            internal float LayoutWidth { get { return layoutWidth; } }
-            internal RectangleF InkBounds { get { return inkBounds; } }
-            private static StringFormat TextFormat()
+
+            private TextAnnotation(TextContent content, PointF location)
             {
-                StringFormat format = new StringFormat();
-                format.FormatFlags = StringFormatFlags.MeasureTrailingSpaces | StringFormatFlags.NoClip;
-                format.Trimming = StringTrimming.None;
-                return format;
+                ValidatePoint(location);
+                this.content = content;
+                this.location = location;
+                bounds = new RectangleF(location, content.Size);
+                inkBounds = content.InkBounds;
+                inkBounds.Offset(location);
             }
+
+            internal string Text { get { return content.Text; } }
+            internal string Rtf { get { return content.Rtf; } }
+            internal string FontFamily { get { return content.FontFamily; } }
+            internal FontStyle FontStyle { get { return content.Style; } }
+            internal PointF Location { get { return location; } }
+            internal Color Color { get { return content.Color; } }
+            internal float FontSize { get { return content.FontSize; } }
+            internal float LayoutWidth { get { return content.LayoutWidth; } }
+            internal RectangleF InkBounds { get { return inkBounds; } }
+
+            internal TextAnnotation WithGeometry(PointF newLocation, float newFontSize, float newWidth)
+            {
+                newWidth = NormalizeTextWidth(newWidth);
+                if (newFontSize == FontSize && newWidth == LayoutWidth) return new TextAnnotation(content, newLocation);
+                string rtf = newFontSize == FontSize ? Rtf : RichTextLayout.SetFontSize(Rtf, newFontSize);
+                return new TextAnnotation(Text, rtf, newLocation, Color, newFontSize, newWidth, FontFamily, FontStyle);
+            }
+
+            internal TextAnnotation WithTextAndFormatting(string text, Color color, float fontSize, float layoutWidth)
+            {
+                string rtf;
+                if (text == Text)
+                {
+                    rtf = Rtf;
+                    if (fontSize != FontSize) rtf = RichTextLayout.SetFontSize(rtf, fontSize);
+                    if (color.ToArgb() != Color.ToArgb()) rtf = RichTextLayout.SetColor(rtf, color);
+                }
+                else rtf = RichTextLayout.CreatePlainRtf(text, FontFamily, fontSize, FontStyle, color);
+                if (rtf == Rtf && NormalizeTextWidth(layoutWidth) == LayoutWidth && text == Text) return new TextAnnotation(content, location);
+                return new TextAnnotation(text, rtf, location, color, fontSize, layoutWidth, FontFamily, FontStyle);
+            }
+
             public override void Draw(Graphics graphics)
             {
-                using (Font font = new Font("Segoe UI", fontSize, FontStyle.Regular, GraphicsUnit.Pixel))
-                using (Brush brush = new SolidBrush(color))
-                using (StringFormat format = TextFormat())
-                {
-                    if (layoutWidth > 0) graphics.DrawString(text, font, brush, bounds, format);
-                    else graphics.DrawString(text, font, brush, location, format);
-                }
+                RichTextLayout.Draw(graphics, Rtf, LayoutWidth, location);
             }
             public override bool HitTest(PointF point, float radius)
             {
@@ -732,7 +964,7 @@ namespace SnipStudio
                 return expanded.Contains(point);
             }
             public override RectangleF Bounds { get { return bounds; } }
-            public override Annotation Translate(PointF delta) { return new TextAnnotation(text, new PointF(location.X + delta.X, location.Y + delta.Y), color, fontSize, layoutWidth); }
+            public override Annotation Translate(PointF delta) { return new TextAnnotation(content, new PointF(location.X + delta.X, location.Y + delta.Y)); }
         }
 
         internal sealed class HighlightBandsAnnotation : Annotation

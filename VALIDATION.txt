@@ -1,12 +1,592 @@
-SNIP STUDIO - RELEASE VALIDATION NOTES
+SNIP STUDIO 0.5.4 - MENU, TOOLBAR HEIGHT AND REMOVAL SELECTION, 2026-11-06
 
-Build success, source review, data/export checks, visual checks, device checks,
-installation, and user acceptance are separate forms of evidence.
+Signed application SHA256:
+7A1A988E6EA4D39C7E27F94A5FAD93495EA3139E1A27216A3C9EC6A5DDFB4382
+Authenticode: Valid, timestamped Automation Forge LLC.
 
-Consult the corresponding release notes for the checks actually performed.
-A local unsigned source build does not inherit the publisher's release
-signature or establish live device, Windows Share, printer, HDR, or installer
-behavior on another computer.
+More opens relative to its own button, right-aligned below or above as space
+allows, and clamps to the button monitor's working area. Actual native-size
+changes after opening reapply the same placement, with reentrancy/disposal
+guards. It no longer consults the global cursor. Delay-menu behavior and
+native Zoom submenu navigation are not changed by this fix.
 
-The source does not include private signing credentials, local screenshots,
-test recordings, or generated development binaries.
+Left/Right editor minimum height includes the complete actual measured side
+toolbar, context/capture rows and footer. Height/location remain bounded to
+the monitor working area; shorter monitors retain scrolling. Resize-to-snip
+preserves this minimum. Compact empty windows and F11/maximized behavior are
+retained; ordinary Top/Bottom placement does not acquire the new height cap.
+
+Remove-area selection survives switching to Move. Dragging or arrow keys
+repositions the box within image bounds; Shift nudges ten pixels. Delete
+uses the new rectangle; Escape cancels. This moves only the review selection,
+not captured pixels or annotations. Original fill and source revision guards
+remain, other drawing tools clear the selection, and stale selections cannot
+commit. Pointer-drag status is batched until mouse-up to avoid layout churn.
+
+658 checks passed against these exact signed application bytes:
+- 73 menu checks over20synthetic monitor/button scenarios and actual signed
+  call metadata: adjacent-right displays, negative/stacked origins, owner work
+  areas, scaled/oversize popup sizes and actual-size event correction.
+- 207 actual side-toolbar layout checks across8dock/tool/scale combinations
+  and2short-monitor cases, using synthetic work areas. Verify complete tool
+  reachability, height cap/scroll fallback, context view preservation and
+  resize-to-snip minimum retention.
+- 45 removal-selection checks: real tool transitions and Delete/Escape/arrow
+  handling; source pixels, annotations and history unchanged before commit;
+  exact target deletion, Undo/Redo, clamp, stale/clear/new-image guards.
+- 27 existing object-removal regressions;187controller/preview/icon checks;
+  81fullscreen layout regressions;10view-preservation checks;28startup-policy
+  checks. Prior release scrolling suites are historical and not claimed rerun.
+
+Tests use only the signed application as a library. No visible editor/menu,
+app entrypoint, native input, desktop capture, user preferences or registry
+mutation was used. Unshown layout tests may create hidden child-control
+handles; physical monitor placement and actual dragging remain unverified.
+
+The unchanged114-file offline translation runtime matches its audited hashes;
+Node retains its original Valid OpenJS signature. Portable packaging verifies
+every archive entry. Final installer signature/readiness receipts are retained
+separately beside Setup. No full install/upgrade/uninstall is claimed.
+
+NOT LIVE VERIFIED: native menu/submenu placement or display transition on
+physical mixed-DPI monitors, pointer dragging, actual application capture or
+scrolling, device/audio behavior and full installation/upgrade/uninstall.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+SNIP STUDIO 0.5.3 - SCROLLING RELIABILITY, 2026-11-05
+
+Signed application SHA256:
+529D7AEAF29F47B4E9386CF5B22526A46524DD1EFE0D682ACF88D39C359FF5CB
+Authenticode: Valid, timestamped Automation Forge LLC.
+
+Changes: scrolling uses the detected moving-body height and smaller wheel
+steps. It waits for delayed responses; localized animation may settle while
+broad motion remains rejected. Two smaller-step retries are allowed only
+after reversing the last request to the still-pinned target and verifying
+an exact RGB return to the accepted view. Target/cancellation checks precede
+every request; no cursor movement, global input or keyboard hooks are added.
+Image, frame, time and request limits remain bounded and visible in Help.
+Repeated no movement is explicitly bottom-unconfirmed; early-stop previews
+are labeled partial and preserve the previous snip until accepted.
+
+The stitcher allows taller fixed top/bottom panels and verifies a strict
+unique overlap first. A conservative fallback permits localized animation
+only with distributed nonblank anchors, bounded informative outliers, and
+strict overlap-boundary checks. Verification samples every overlap row at
+up to 128 columns; it is not a full-source-pixel matcher. Recovery separately
+compares every RGB pixel. Broad reflow, repeated/blank content, undetected
+animated footers and changed seam boundaries are rejected rather than joined.
+
+Old signed 0.5.2 reproduced the tall-composer alignment failure in an isolated
+three-check fixture. Final 0.5.3 passed 621 checks against the above bytes:
+- 59 production-session checks across 12 deterministic virtual-driver cases:
+  delayed750ms response, badge plus delayed response, localized animation,
+  broad animation, successful/failed recovery, target loss, cancellation,
+  stalled capture, duration limit, failed delivery and invalid frame geometry.
+- 152 scrolling stitching regressions; 21 tall-footer exact-output checks;
+  21 localized-animation, repeated-row, animated-footer and late-reflow checks.
+- 187 controller/preview/icon checks including 32 actual button paints,
+  partial-result captions/acceptance/cancel and borrowed-image ownership.
+- 28 pure startup-version/path policy checks. An incompatible or unverifiable
+  old host receives no launch request; it is never closed or terminated.
+  Legacy broker version is described as file metadata, not runtime attestation.
+- 27 capture-mode icon and 12 distinct drawing-tool icon checks. Scrolling now
+  has its own vector icon. Pen and Highlight have different shapes/orientation;
+  their tool cursors use the same geometry. Root inspected the exported sheet.
+- 33 synthetic monitor-crop and 81 fullscreen layout/restore regressions.
+
+All tests load only the signed app as a library; no test helper executable,
+visible editor, desktop capture, native scrolling or live broker was run.
+Unshown fullscreen component tests record hidden child-control handles;
+no native editor-form handle is claimed created by that suite.
+
+All 114 reviewed translation files retain their manifest hashes; Node retains
+its original Valid OpenJS signature. Packaging checks every portable entry.
+Installer readiness/signature receipts are retained separately beside Setup.
+No GitHub update was pushed.
+
+NOT LIVE VERIFIED: actual Codex/browser scrolling and end-of-page behavior,
+native legacy-host discovery or forwarding/dialog appearance, physical DPI
+or device/audio behavior, full install/upgrade/uninstall and endpoint security
+acceptance. Small animations and arbitrary applications are not universally
+supported; select just the scrolling content and review the resulting image.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+SNIP STUDIO 0.5.2 - HOTFIX VALIDATION, 2026-11-05
+
+Includes scrolling Finish-icon and installer file-use API corrections, plus
+click-to-pick Full screen capture and separate All monitors mode.
+F11 now completes Dock=Fill on the root panel before measuring toolbars and
+canvas, then fits the snip to the final expanded viewport. Exit completes
+layout when restoring the window. The 0.5.1 candidate was held when this
+additional fullscreen-layout defect was reported.
+
+Signed application 0.5.2.0 SHA256:
+7FE2B4BB9A0B43BF33DD166ECCA9C8DFC79E0F42332AC15170939CD30A9B1594
+Authenticode: Valid, timestamped Automation Forge LLC.
+
+421 focused checks passed against these exact signed application bytes:
+- 155 scrolling UI/icon checks, including 22 actual button paints.
+- 152 synthetic scrolling stitching regressions.
+- 33 synthetic monitor-choice/crop regressions.
+- 81 actual fullscreen layout-helper/exit checks over four geometry/docking
+  cases. Root and canvas fill their new bounds immediately; entering replaces
+  manual zoom with Fit; exit restores bounds, border and constraints. Document
+  identity and history remain unchanged. No editor form was shown or native
+  form handle created. Hidden child-control handles are recorded in the test
+  receipt; they are not claimed absent.
+The previous 0.5.0 signed app reproduced the exact missing Finish-icon error
+on its first offscreen button paint; the corrected releases pass that check.
+
+The unchanged corrected installer preflight was verified natively using the
+signed 0.5.0.1 installer: idle test copies return 0, a held copy returns 2,
+and selected files, preferences, product registry values and preserved
+process remain unchanged. Final 0.5.2 read-only preflight/signature receipts
+are retained beside Setup; no full install/upgrade/uninstall is claimed.
+
+All 114 unchanged translation payload files match the reviewed manifest;
+Node retains its original Valid OpenJS signature. The complete 120-file
+portable archive is checked entry-by-entry against the staged payload.
+No GitHub sync or push was performed.
+
+NOT LIVE VERIFIED: native scrolling in Teams/browsers, physical monitor and
+mixed-DPI interaction, actual F11 key delivery/visible rendering, native
+maximized-window restoration, real screen capture, full installation,
+upgrade/uninstall, endpoint-protection acceptance and device/audio behavior.
+The tests are signed-library component checks and isolated readiness checks,
+not a live user-desktop acceptance run.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+SNIP STUDIO 0.5.1 - HOTFIX VALIDATION, 2026-11-05
+
+Corrects the scrolling controller's unsupported Finish icon; Finish now uses
+an existing stop icon. The exact old 0.5.0 first-paint exception was reproduced
+by painting the real signed controller's Finish button into a memory bitmap.
+
+Full screen now opens a monitor picker: hover/click a monitor to capture it.
+All monitors is a separate explicit capture mode. Existing mode indices,
+Scrolling index 4, F11 editor view, and video region selection are preserved.
+
+Signed application 0.5.1.0 SHA256:
+A2593092AC9EEE9621A5678895DD66B534AA9815F3E4F6DDDBAB9D665DE9737E
+Authenticode: Valid, timestamped Automation Forge LLC.
+
+340 checks passed against these exact signed application bytes:
+- 155 scrolling UI/icon checks including 22 actual button paints, enabled,
+  disabled, finishing and cancelling controls, preview acceptance/ownership,
+  supported catalog raster/SVGs, and no native form handles or shown windows.
+- 152 synthetic scrolling-image stitching regressions.
+- 33 synthetic monitor-selection/crop checks: left/above monitors, desktop
+  gaps, exact output dimensions/pixels, independent image ownership and
+  clipping. The selector was never shown and had no native window handle.
+
+Installer preflight corrects the NSIS 3.04 quoted-module incompatibility.
+A signed 0.5.0.1 installer with this same preflight code passed the native
+read-only /CHECKREADY check for idle test copies (exit 0) and a held copy
+(exit 2). Selected files, preferences, product registry values and preserved
+process were unchanged. Final 0.5.1 preflight receipts, when completed, are
+stored separately beside Setup. No applications were closed or terminated.
+
+The 114 translation payload files were hash-checked against the unchanged
+reviewed manifest; Node retains its original Valid OpenJS signature.
+No GitHub sync/push was performed.
+
+NOT LIVE VERIFIED: actual scrolling in Teams/browsers, physical multi-monitor
+and mixed-DPI clicks, real screen capture, full install/upgrade/uninstall,
+endpoint-protection acceptance, and actual device/audio behavior. Offscreen
+checks are component evidence rather than live end-to-end verification.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+INSTALLER BUILD 0.5.0.1 - NSIS 3.04 CALL COMPATIBILITY
+Application 0.5.0.0 and its signed bytes remain unchanged.
+The installed compiler's System plug-in predates quoted DLL module paths.
+Quoted support was added in NSIS 3.05 (2019-12-15); all five Restart Manager
+calls now use the full, unquoted system DLL path supported by NSIS 3.04.
+Primary evidence: https://nsis.sourceforge.io/Docs/AppendixF.html#v3.05
+and https://raw.githubusercontent.com/kichik/nsis/v304/Contrib/System/Source/System.c
+A literal plug-in 'error' is no longer labeled a numeric Windows error.
+Readiness exit codes distinguish ready (0), in use (2) and check failure (3).
+/CHECKREADY always exits before installation; runtime diagnostic evidence,
+when permitted, is recorded separately beside the installer.
+SNIP STUDIO 0.5.0 - VALIDATION, 2026-11-05
+
+Application compiled and has a Valid, timestamped Automation Forge LLC
+signature. SHA256:
+871BA36B489BB2035B279B70CBA0E767C25D4FD4F3C398534567D9E9BB3ADC59
+All 114 reviewed translation payload files still match their license/hash
+manifest; Node retains its original publisher signature.
+
+754 checks passed against this signed 0.5.0 build:
+- 152 exact synthetic scrolling-stitch checks: variable overlap, small final
+  movement, one sticky header/footer, no duplicated end frames, geometry,
+  unchanged inputs, independent output ownership, ambiguity and limits.
+- 314 workspace component checks over 24 docking/width/scale combinations;
+  tool/context transitions preserve image zoom/center and document state.
+  IL inspection confirms modeless Show(), auxiliary tracking, and separate
+  editor creation per launch. No editor window was shown or handle created.
+- 10 view-layout component checks: nested preservation, Fit intent on genuine
+  resize, manual zoom, explicit Fit/zoom override and replacement-image guards.
+- 25 pure motion checks including fine/fractional wheel scale.
+- 27 object/area selection and removal checks: preview changes no pixels/history,
+  sampled fill, unchanged outside pixels, annotations, exact Undo/Redo, stale
+  guards, clipping, cancellation and whole-background rejection.
+- 39 rich-text/view, 41 LibreTranslate client/protocol, 20 data/export,
+  38 real included-engine and 88 translation-replacement/shortcut checks.
+Real offline suite: 12 fixed translation entries in 6609 ms, including batch
+order, cancellation, owned-worker exit and recovery. Cached 4K draw sample:
+35.00 ms / 200 draws. Settings constructor: 57.73 / 5.03 / 4.43 ms.
+These are synthetic component measurements, not live speed/DPI claims.
+
+Static integration review corrected deferred Exit during scrolling, Cancel
+mouse-down handling, preview policy wording, and Escape cancellation. The
+controller uses a temporary Escape hotkey when available; no keyboard/mouse
+hook is installed. An inside-region controller is hidden/flushed for pixel
+reads, with only its exact pinned HWND exempted from occlusion checking.
+Captured-image preview is borrowed; accepting it clones into the document.
+
+NOT LIVE VERIFIED: native target selection/scrolling in actual applications,
+physical wheel smoothness, F11 monitor/taskbar behavior, real DPI, controller
+placement/exclusion, multiple-launch activation, modeless Settings lifetime,
+installer readiness prompts, install/upgrade/uninstall, endpoint-protection
+acceptance and actual device/audio behavior. No installer or visible app was
+launched by these final checks. The earlier installer diagnostic was declined;
+it has not been retried. No GitHub push was performed.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+SNIP STUDIO 0.4.3 - VALIDATION, 2026-11-05
+
+Application compiled without warnings and has a Valid, timestamped
+Automation Forge LLC signature. SHA256:
+12BA7EA89B9AAAF4FA14FFD195E1765EB87898FDDC12A5A9818D62441BF331E4
+
+245 existing checks were rerun and passed against this signed build:
+39 rich-text/view, 41 translation-client/protocol, 20 data/export, 19 pure
+view-motion, 38 included-engine and 88 replacement/shortcut data checks.
+The offline suite exercised 12 fixed translation entries, batch order,
+owned-worker cancellation and recovery in 4278 ms. Cached 4K drawing sample:
+49.35 ms for 200 draws. These are synthetic measurements, not UI speed claims.
+
+The border settings check additionally passed 405 control/state assertions
+across repeated toggles: actual preview/expander visibility, collapsed rows,
+restored rows, retained color/thickness, unchanged other settings and original
+preferences. The form was not shown and no handle or discovery was started.
+Constructor samples: 59.06 / 4.90 / 4.40 ms; this is not first-paint timing.
+
+Changes: border preview/color/thickness are available only when screenshot
+borders are On. Values survive Off/On. The installer and uninstaller query
+Windows Restart Manager before changing installed files; in-use or unavailable
+checks offer Retry/Cancel and never force-close the app. A clear result is not
+a guarantee of permissions or future writability. Installer source compilation
+and independent static review passed. The diagnostic installer launch was not
+approved, so live detection, prompts, Retry/Cancel, upgrade and uninstall have
+NOT been executed or verified. Signature receipts are beside the artifacts.
+
+No GitHub push, desktop capture, clipboard change, real audio-device check,
+or installed app modification was performed by these data checks.
+
+HISTORICAL 0.4.2 / INSTALLER-ONLY 0.4.2.1 RECORDS FOLLOW
+INSTALLER BUILD 0.4.2.1 - RUNNING-APPLICATION PREFLIGHT
+The installer and uninstaller check the exact installed application and
+translation runtime with Windows Restart Manager before changing files.
+An active process or an unavailable check stops copying/removal and offers
+Retry/Cancel. No application is force-closed. Silent runs stop with code 2.
+/CHECKREADY runs only that same check and exits 0 (ready) or 2 (blocked/error),
+without starting the wizard or installing/uninstalling the application.
+A clear query is not a guarantee of file permissions or future writability.
+Diagnostic evidence is recorded separately beside the installer. Full
+installation, uninstallation and prompt interaction require live acceptance.
+The application remains 0.4.2.0 with the unchanged SHA256 and 245-check record
+below. This is an installer-only correction; it does not change app behavior.
+SNIP STUDIO 0.4.2 - VALIDATION, 2026-11-05
+
+CURRENT VERSION STATUS
+Version 0.4.2.0 compiled without warnings. The application has a Valid,
+timestamped Automation Forge LLC Authenticode signature. All 114 reviewed
+translation runtime/model/license files passed the manifest preparation gate;
+Node retains its original Valid OpenJS Foundation signature.
+Application SHA256:
+79462119A0E65FB7F9393E3499BBFE40FD8B5E0E41830CDE97E68C9D99D4236D
+
+245 checks passed against this signed 0.4.2 application:
+- 39 rich-text/view checks; 200 cached 4K draws took 39.25 ms total. This is
+  a synthetic drawing measurement, not a live UI frame-rate measurement.
+- 41 optional LibreTranslate client/protocol checks.
+- 20 document/export checks, including PDF and synthetic MP4 conversion.
+- 19 pure smooth-view-motion checks.
+- 38 included offline-engine checks: 12 fixed synthetic translation entries,
+  including a four-line batch retaining a blank line and exact region order.
+  One owned Node worker was observed for the batch. In-flight cancellation,
+  owned-worker exit and recovery were exercised. Total offline suite: 6922 ms.
+- 88 source-replacement and shortcut checks: complete rendered text in both
+  source regions, preserved underlying raster and unrelated annotations,
+  exact one-step Undo/Redo, atomic failure, invalid/stale/canceled guards,
+  fitting, pure IPC decoding and resident lifetime policy. No native shortcut
+  host was constructed by these tests. Replacement proof was visually viewed.
+Settings constructor samples: 66.01 / 6.64 / 5.00 ms, without showing the form
+or creating its handle. This does not measure actual first-paint latency.
+
+Portable packaging verifies the full payload and each archived entry before
+installer generation. Application and Setup signature/hash receipts are
+retained beside their artifacts. Installation has not been run by the agent.
+The completed 153-check 0.4.1 record below remains historical evidence;
+existing 0.4.1 artifacts are retained separately.
+
+0.4.2 CHANGES
+- Keep capture shortcuts after closing defaults on. Closing the last editor
+  leaves a small notification-area listener; its Exit command stops it.
+  The separate opt-in Keep running in the notification area preference keeps
+  the full editor and its snip available instead of closing that window.
+- Optional Start with Windows defaults off and starts with --background.
+  The installer offers an unchecked "Start Snip Studio at Windows sign-in"
+  component, writing the same quoted per-user Run value. It never
+  launches the application during installation. Uninstall removes that Run
+  value only if it matches this installation's command.
+  The saved background preferences control whether sign-in starts just the
+  listener, a hidden retained editor, or (when both are off) the main window.
+- Print Screen is enabled by default in app preferences. Windows can reserve
+  or route the key elsewhere; the Windows keyboard-settings link lets the
+  user review the OS choice without changing it silently.
+- Replace text in snip translates recognized lines back into their source
+  bounds with estimated font/ink, sampled solid background fills and wrapped
+  fitting. Source masks and replacement text form one Undo step without
+  changing the underlying bitmap. Complex backgrounds are not reconstructed.
+- The same bundled offline English/German/Spanish/French engine, six direct
+  English model directions, English-pivot routes and license payload remain.
+- Portable ZIP replacement uses a unique previous-archive backup beside the
+  project script instead of a null File.Replace backup argument. It preserves
+  previous versions and validates every archived payload entry against source.
+
+NOT LIVE-VERIFIED FOR 0.4.2
+No live editor/listener close/Exit, shortcut availability, sign-in startup,
+Print Screen routing, translation replacement/Undo, capture/device/DPI,
+installer upgrade/uninstall, endpoint-protection acceptance or visual UI
+behavior is established for 0.4.2. Successful asynchronous source-style
+matching and replacement through the visible dialog were not live-tested.
+
+HISTORICAL 0.4.1 RECORD FOLLOWS - NOT CURRENT-VERSION VERIFICATION
+
+SNIP STUDIO 0.4.1 - VALIDATION, 2026-11-05
+
+CURRENT VERSION STATUS
+Version 0.4.1.0 builds without compiler warnings. The application has a valid,
+timestamped Automation Forge LLC signature. The original bundled Node runtime
+retains its valid OpenJS Foundation signature. All 114 translation payload files
+passed the reviewed bundle/notice/hash preparation gate.
+Application SHA256:
+F2C266176807635F315C18ECFDE750EF580E2A918EBBDE1766FADB06309B6F92
+Node SHA256:
+1C331340FA6CAC5E4294725959070A143FA0507195A78AD77EED7943F719AAC9
+Historical 0.4.0 results below are preserved unchanged.
+
+COMPLETED CURRENT-VERSION CHECKS
+153 checks passed against the signed 0.4.1 application:
+- 39 rich-text/view checks: mixed styling, transparency, full short lines and
+  descenders, wrapping/history, bounded caching, and pointer-anchor transforms.
+- 41 optional LibreTranslate protocol checks using synthetic loopback fixtures.
+- 20 document/export checks, including image-backed PDF and synthetic smaller
+  MP4 encoding with cancellation and source-file protection.
+- 19 pure motion checks, including consistent elapsed-time movement across
+  different frame cadences, continuous retargeting, reversal, and safe bounds.
+- 34 real offline-engine checks: all four languages and twelve available routes,
+  invalid input and cancellation, six direct language directions, German to
+  Spanish through English, and a successful request after canceling a live worker.
+  Eight synthetic translations completed in 5.97 seconds total. Examples:
+  Geschichte -> History; Good morning. -> Guten Morgen.; Hola mundo. -> Hello world.
+  The observed canceled worker exited, and the engine slot recovered.
+  These small fixtures do not establish broad translation quality or a network
+  isolation audit. The bridge loads installed files and has no cloud fallback.
+- Settings construction was measured without Show or a window handle, using
+  synthetic preferences. Prior 0.4.0 samples: 7229 / 6999 / 7113 ms. New 0.4.1:
+  56.7 / 4.6 / 4.3 ms. New construction preserved saved audio IDs, did not start
+  audio discovery, and did not change the original preferences. These are
+  constructor measurements, not live first-paint or perceived-opening timings.
+- The user's nine-second 15-fps recording was decoded from its file only. It
+  shows wheel zooming and a baked-in faded app window; no live desktop or audio
+  capture was used for that review.
+
+NEW PAYLOAD AND BEHAVIOR REQUIRING VERIFICATION
+- Included free/open-source Bergamot WASM engine, original signed Node
+  runtime, worker, six English<->German/Spanish/French compact model directions,
+  bundle metadata, and upstream license/attribution files under translation/.
+  Other supported pairs pivot through English locally. No Python, Docker,
+  localhost server, paid API, API key, or model download is required after
+  the complete package is installed. Auto language detection is not claimed.
+- A bundle is copied only after its required node.exe/worker.js/bundle.json,
+  complete license review, notice files and original Node publisher signature
+  are checked. Node is not re-signed by Automation Forge and no packaging
+  step invokes the engine. Real model loading and the synthetic phrases above
+  were exercised separately after signature and bundle-hash verification.
+- The portable hash list covers all runtime/model/license files and the main
+  payload except the hash list itself. ZIP validation compares every payload
+  entry, including the hash list, with its source bytes. Payload count is
+  dynamic and is no longer six files.
+- Installer translation entries are generated from the exact bundled-file
+  manifest. Uninstall deletes only those fixed translation files, then removes
+  empty known subdirectories without recursion; user additions are retained.
+- Settings discovery/audio/icon work is deferred until after the form opens.
+- Capture hides all visible snip windows, closes app menus, suppresses app
+  window transitions, and synchronizes hiding/composition before its snapshot.
+  Hidden-window hotkeys do not show the editor before beginning the capture.
+- Wheel zoom/scroll motion, pointer anchoring, Move selecting annotations
+  only, middle-button panning, and the brighter one-second Text actions
+  readiness outline and selected-text band need integration verification.
+- Add to snip opens a retained rich-text draft of the edited translation and
+  inserts one editable annotation after Apply. Initial fit and later overflow
+  checks retain the draft instead of silently clipping it. Cancel keeps the
+  translation dialog open. This button's live interaction is not verified.
+
+NOT LIVE-VERIFIED FOR 0.4.1
+No real-device Settings latency, capture ghosting, hotkey flash, wheel
+smoothness, physical DPI/pointer behavior, taskbar timing, translation quality,
+microphone/speaker fidelity, native Share/printer output, HDR fidelity, or
+endpoint-protection acceptance is established. Install/upgrade/uninstall and
+user acceptance remain untested. The standard NSIS uninstaller is unsigned.
+
+RELEASE CHECKLIST
+Build, 153 checks, bundle/license gate, original Node signature and application
+signature are complete. Release preparation verifies every portable ZIP entry
+against its source bytes before installer generation. The final Setup signature
+is recorded separately in Installer Signature Verification.json.
+Installer execution: not performed. Public staging/publication: held.
+
+HISTORICAL 0.4.0 RECORD FOLLOWS - NOT CURRENT-VERSION VERIFICATION
+
+SNIP STUDIO 0.4.0 - VALIDATION, 2026-11-05
+
+CURRENT VERSION STATUS
+Version 0.4.0.0 builds without compiler warnings. The application has a valid,
+timestamped Automation Forge LLC Authenticode signature. The final signed
+application passed 100 synthetic-data checks without showing app windows,
+capturing the desktop, accessing the clipboard, or changing user preferences.
+Application SHA256:
+92F7F3AEED5C966E22FE703705C8B2A1E1614144E193ABF25B32CB946E7723F2
+
+COMPLETED CURRENT-VERSION CHECKS
+- 39 rich-text/view checks: mixed fonts/styles/color/highlights, transparent
+  compositing, wrapping, moves/crop/history, formatting masks, range deletion,
+  trailing lines, descenders, bounded cache, and 30 pointer-anchor transforms.
+  A short-line measurement bug was found and corrected using the native
+  returned layout rectangle. Single-line text is visible; its descender band
+  matches the corresponding multiline band (496 pixels, 20 pixels high).
+- 41 translation client checks using synthetic loopback HTTP fixtures:
+  language/pair metadata, Unicode/newlines, autodetection request shape,
+  endpoint restrictions, response bounds, safe errors, cancellation/timeouts,
+  redirects, and stalled response bodies. No real engine or user text was used.
+- 20 document/export checks: wrapped text and exact identifiers, edits/Undo,
+  arrow rotation, image-backed PDF output, synthetic smaller-video encoding,
+  target/size/error/cancellation behavior, and preservation of source files.
+- A generated rich-text composite was visually inspected for mixed styling,
+  highlighting, transparency, and complete lines. This was a bitmap data proof,
+  not a screenshot of the app or a live interaction check.
+- On this machine, 200 cached rich-text draws to an existing 3840x2160 surface
+  took 33.78 ms total (0.169 ms/draw). This local measurement does not establish
+  live frame rate, capture latency, or perceived smoothness.
+
+CHANGES REQUIRING VERIFICATION
+- Rich RTF text drafts: mixed character formatting, font families and points,
+  character styles, ink/highlight, paragraph alignment/lists/indent/spacing,
+  clipboard text formatting, draft Undo/Redo, and wrapped annotation rendering.
+- Source-font matching is an ESTIMATE from screenshot pixels and installed
+  fonts, not recovered metadata or a guarantee of the original font.
+- Deleting selected bitmap words masks those regions only and leaves gaps;
+  it does not reflow the remaining screenshot text. Line replacement still
+  uses a selectable solid fill, with Undo and overlap guards.
+- Remember capture delay defaults on; its off choice starts new app sessions
+  without a delay. Mouse-anchored Ctrl+wheel zoom defaults on, with a
+  plain-wheel alternative in Settings.
+- Background original-capture saving, clipboard preparation, on-demand OCR,
+  revision/clipboard-intent reconciliation, and cancellation/error handling.
+- Always-available Save As, main-toolbar Share, and inline screenshot-border
+  preview with color/thickness controls.
+- Hide taskbars and Keep main monitor taskbar visible default on, with
+  one-time adoption of hiding for previously unconfigured profiles; an existing
+  main-taskbar visibility choice is retained.
+- Active-tool icon cursors and right-click annotation selection that switches
+  to Move, including handle interaction and preservation of existing work.
+- Right-click selected OCR text offers Copy selection and preserves the range.
+- The Exact color preview opens a honeycomb picker with RGB, hex, brightness,
+  current/new samples, keyboard navigation, and separate inner/outer Cancel.
+- LibreTranslate text client with explicit Connect/Translate/Cancel/Copy,
+  original/result panes, automatic or chosen source, and server target list.
+  Default endpoint: http://127.0.0.1:5000/. The separate open-source server and
+  Argos language models are not bundled or started by this application.
+  The no-key local/self-hosted workflow does not use Azure or a paid API.
+  A configured trusted HTTPS server receives text only on Translate; the
+  screenshot image is unchanged and is not sent. Connect retrieves languages.
+
+NOT VERIFIED FOR 0.4.0
+No live smoothness, physical-DPI appearance, pointer/keyboard interaction,
+clipboard contention, multi-monitor taskbar timing, native Share panel,
+printer output, microphone/speaker quality, HDR fidelity, or endpoint-
+protection response has been verified for this version. Installation,
+upgrade, and uninstall remain untested. The standard generated NSIS
+uninstaller is not independently signed.
+No real LibreTranslate server/model setup, language-pair coverage, translation
+quality, or live translation-dialog behavior has been verified. Protocol/unit
+checks with a stub do not establish that a real engine works.
+The official installation guide and source were read on 2026-11-05:
+https://docs.libretranslate.com/guides/installation/
+https://github.com/LibreTranslate/LibreTranslate
+
+RELEASE PACKAGING
+Build, application signing, and all 100 checks above are complete. Release
+preparation uses a six-file payload manifest and verifies each portable ZIP
+entry against its source bytes before installer generation. The final Setup
+signature is recorded separately in Installer Signature Verification.json.
+No installer execution is part of this validation. GitHub publication is held
+while the user tries the signed installer first.
+
+HISTORICAL 0.3.0 RECORD FOLLOWS - NOT CURRENT-VERSION VERIFICATION
+
+SNIP STUDIO 0.3.0 - VALIDATION, 2026-11-05
+
+BUILD AND REVIEW
+The integrated application builds with the Windows .NET Framework compiler.
+Independent source review covered text editing, OCR ownership guards, text
+wrapping and resize previews, arrow endpoints, color controls, tooltips,
+taskbar lifecycle, PDF export, and smaller-video export.
+
+DATA AND EXPORT CHECKS
+20 checks against signed application code passed using synthetic data only:
+- Text wrapping retains content and identifiers; font size/color can change.
+- Undo/Redo restore text width, arrow geometry, and original screenshot pixels.
+- OCR replacement retains existing vector annotations; empty text deletes.
+- Collapsed arrows are rejected without adding history.
+- Rendered image dimensions remain unchanged.
+- PDF output writes and parses as one correctly sized page. An independent
+  PDF reader confirms that embedded RGB pixels exactly match the PNG.
+  The rendered page was visually inspected.
+- Native H.264/AAC synthetic video is re-encoded to a smaller copy, with audio
+  track, dimensions, duration, and original-file integrity checked.
+- Canceled video export preserves an existing destination.
+
+No screenshot, microphone, or speaker recording was used for these checks.
+No app window, installer, or temporary test executable was launched. The
+checks loaded the signed application's library code in PowerShell.
+
+SIGNING AND PACKAGING
+The application and Setup use timestamped Automation Forge LLC signatures.
+See Signature Verification.json and Installer Signature Verification.json
+for verified files and SHA-256 hashes. Portable archive entries are compared
+byte-for-byte with their release files before delivery.
+Setup installs for the current Windows account and does not launch the app
+or enable Windows startup. The standard generated NSIS uninstaller is unsigned.
+
+NOT LIVE-VERIFIED
+- Installation, upgrade, uninstall, and final user acceptance.
+- UI appearance at physical DPI settings and live pointer gestures.
+- Taskbar visibility/restoration on connected monitors during actual captures.
+- Native Share panel display, printer output, Print Screen routing conflicts.
+- Endpoint protection response, physical microphone/speaker fidelity, HDR colors.
+
+FEATURE LIMITS
+- Editing recognized text uses an estimated font and selectable solid fill
+  behind the old line. Complex backgrounds and mixed overlapping raster/vector
+  text are not reconstructed; ambiguous ownership leaves the document unchanged.
+- Editable text reflows and grows in height; keep it inside screenshot edges.
+- PDF is a lossless image document, not searchable/editable PDF text.
+- Video capture is up to1920x1080 at15fps. Smaller exports trade quality for
+  size. Attachment targets are estimates; actual target misses are reported.
+- OCR can misread words. HDR tone mapping is experimental and assumes an
+  80-nit SDR white level. Image exports flatten annotations.
+- Window screenshots capture visible pixels; scrolling capture is not included.
