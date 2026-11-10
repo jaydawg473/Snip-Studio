@@ -9,8 +9,9 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.5.7.0")]
-[assembly: AssemblyFileVersion("0.5.7.0")]
+[assembly: AssemblyVersion("0.5.8.0")]
+[assembly: AssemblyFileVersion("0.5.8.0")]
+[assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 namespace SnipStudio
 {
@@ -60,9 +61,38 @@ namespace SnipStudio
             if (applicationContext != null) applicationContext.UntrackAuxiliaryWindow(form);
         }
 
+        private static int RunUpdateCheckDiagnostic()
+        {
+            try
+            {
+                UpdateCheckResult result = UpdateChecker.CheckAsync(Assembly.GetExecutingAssembly().GetName().Version, true).GetAwaiter().GetResult();
+                Console.WriteLine("Endpoint: " + UpdateChecker.LatestReleaseEndpoint);
+                Console.WriteLine("Framework: " + AppDomain.CurrentDomain.SetupInformation.TargetFrameworkName);
+                Console.WriteLine("Protocols: " + System.Net.ServicePointManager.SecurityProtocol);
+                bool disabled;
+                Console.WriteLine("StrongCryptoDisabled: " + (AppContext.TryGetSwitch("Switch.System.Net.DontEnableSchUseStrongCrypto", out disabled) && disabled));
+                Console.WriteLine("SystemDefaultTlsDisabled: " + (AppContext.TryGetSwitch("Switch.System.Net.DontEnableSystemDefaultTlsVersions", out disabled) && disabled));
+                Console.WriteLine("Status: " + result.Status);
+                Console.WriteLine(result.UserMessage);
+                return result.Status == UpdateCheckStatus.Unavailable ? 2 : 0;
+            }
+            catch (Exception)
+            {
+                Console.Error.WriteLine("The update diagnostic could not complete.");
+                return 2;
+            }
+        }
+
         [STAThread]
         private static void Main(string[] args)
         {
+            // A signed-product transport diagnostic, before preferences, IPC,
+            // native Shell integration or any window is initialized.
+            if (args != null && args.Length == 1 && String.Equals(args[0], "--check-updates", StringComparison.OrdinalIgnoreCase))
+            {
+                Environment.ExitCode = RunUpdateCheckDiagnostic();
+                return;
+            }
             ShortcutStartupRequest startupRequest;
             if (!ShortcutStartupRequest.TryFromArguments(args, out startupRequest))
             {

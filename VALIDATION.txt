@@ -1,3 +1,69 @@
+SNIP STUDIO 0.5.8 - CAPTURE VISIBILITY AND UPDATE TRANSPORT, 2026-11-10
+
+SIGNED APPLICATION COMPONENT AND OWN-HOST UPDATE VERIFICATION RECORDED.
+Final signed application SHA256:
+10E65390B07D048322B6EA714AB40D52A2CB2E2035E3447E97BCB8F7EFE9A5FE
+File and assembly version: 0.5.8.0.
+Authenticode: Valid, timestamped Automation Forge LLC (checked 2026-11-10).
+
+689 signed-library checks passed against this application: 501 core component,
+73 menu-placement and 115 offscreen update-UI/preferences fixture checks.
+The 501 core component checks comprise:
+-122 Jump List task/request/model/dispatch/wiring checks.
+-30 asynchronous taskbar refresh checks.
+-174 update checker checks, including transport/cancellation/retry behavior.
+-25 capture-visibility selection and call-graph checks.
+-88 translation replacement and existing request/lifetime regressions.
+-34 cooperative installer-exit protocol/lifecycle checks.
+-28 startup compatibility checks.
+The 73 menu-placement checks use synthetic monitor/button geometry, including
+20 monitor/button samples. The 115 UI/preferences checks use offscreen controls
+and isolated fixtures. These do not establish actual monitor/DPI/taskbar behavior.
+73 installer source-policy checks passed separately. Historical results below
+apply only to their named versions and exact bytes, not additional current tests.
+
+Capture scope: ordinary screenshots hide their initiating editor and Settings
+windows while leaving other snip editors visible. More > Capture open snips is
+an explicit one-shot action that includes the initiating editor as well. Its
+local Scrolling-to-Rectangle fallback must preserve the selected mode and timer.
+Restoration and cancellation must preserve the existing open snips and settings.
+This is not a persistent visibility preference.
+
+Update scope: distinguish cancellation from timeout/connection failures, give
+safe connection-reason messages, and allow a manual retry after ten seconds for
+transient transport failures while respecting other cooldowns and server rate
+limits. Automatic daily checks remain On by default with a Settings toggle;
+manual checks and explicit browser download choices remain available. The app
+does not silently download, execute or install an update.
+
+LIVE SIGNED PRODUCT HOST UPDATE CHECK: PASSED, 2026-11-10.
+The exact signed 0.5.8 application above was launched with its fixed
+--check-updates diagnostic. It contacted the official GitHub release endpoint
+from its own .NET Framework 4.8 host, using Windows/SystemDefault protocols.
+StrongCryptoDisabled was False; SystemDefaultTlsDisabled was False. Result:
+Status UpToDate, process exit 0, no error output, preferences unchanged.
+The diagnostic branches before preferences/IPC/native UI/Shell initialization
+and requests anonymous release metadata only. No screenshot or installer was
+downloaded, and no capture or update installation ran. The private
+product-update-host.json records this observation. This is product-host HTTPS
+evidence, not a PowerShell-hosted substitute. It does not establish why the
+original 0.5.7 host failed; that exact cause remains unconfirmed. Certificate
+validation is not bypassed, and other networks/proxies still need acceptance.
+
+Final Setup signature, portable/installer payload reconciliation, read-only
+readiness, detailed component/offscreen reports and release privacy
+evidence are recorded separately in the release receipt. No native close trial
+was repeated for 0.5.8; the earlier scoped candidate observation remains in its
+historical record below. Including this file does not establish a full install.
+
+NOT LIVE VERIFIED: capture of an open snip including the initiating editor,
+cross-monitor timing/restoration, all cancel/error paths, the original 0.5.7
+connection-failure cause, arbitrary network/proxy/TLS configurations, browser
+download/notification behavior, full installation/upgrade/uninstall or endpoint-
+security acceptance. Component/offscreen checks and the single successful
+product-host request must be kept separate from broader native acceptance.
+
+HISTORICAL RELEASE RECORDS FOLLOW
 SNIP STUDIO 0.5.7 - TASKBAR REFRESH AND UPDATE NOTIFICATIONS, 2026-11-10
 
 SIGNED APPLICATION COMPONENT VERIFICATION RECORDED.

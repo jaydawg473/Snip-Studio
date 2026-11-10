@@ -1,6 +1,6 @@
 # Pure signed-library metadata and schedule policies. No updater HTTP request, update
 # check task, application entrypoint, user preferences, registry or UI is used.
-param([string]$ReleaseFolder='release-0.5.7-signed',[string]$ExpectedVersion='0.5.7.0')
+param([string]$ReleaseFolder='release-0.5.8-signed',[string]$ExpectedVersion='0.5.8.0')
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSEdition -eq 'Core' -or $PSVersionTable.PSVersion.Major -ne 5){throw 'Use Windows PowerShell 5.'}
 if([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA'){throw 'Use powershell.exe -STA -NoProfile -File.'}
@@ -11,6 +11,7 @@ $signature=Get-AuthenticodeSignature -LiteralPath $app
 if($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or $signature.SignerCertificate.Subject -notlike '*Automation Forge LLC*'){throw 'A Valid timestamped Automation Forge signed app is required.'}
 if([Diagnostics.FileVersionInfo]::GetVersionInfo($app).FileVersion -ne $ExpectedVersion){throw 'Unexpected application version.'}
 if(@([AppDomain]::CurrentDomain.GetAssemblies()|Where-Object {$_.GetName().Name -eq 'Snip Studio'}).Count -ne 0){throw 'Use a fresh process.'}
+Add-Type -AssemblyName System.Net.Http
 $assembly=[Reflection.Assembly]::LoadFrom($app)
 $static=[Reflection.BindingFlags]'Static,Public,NonPublic'
 $instance=[Reflection.BindingFlags]'Instance,Public,NonPublic'
@@ -190,7 +191,134 @@ $unspecifiedPrevious=[DateTime]::SpecifyKind($now.AddHours(-24),[DateTimeKind]::
 $unspecifiedNow=[DateTime]::SpecifyKind($now,[DateTimeKind]::Unspecified)
 Confirm-Update (Due-Update $unspecifiedPrevious $unspecifiedNow $true) 'Persisted timestamps with unspecified kind are interpreted as UTC'
 Confirm-Update ($null -eq $service.GetField('inFlight',$static).GetValue($null) -and $null -eq $service.GetField('cached',$static).GetValue($null)) 'Pure parser and schedule checks never start or cache an HTTP request'
+$baselineChecks=$checks.Count
+
+# Exception instances are synthetic data. None starts a request or performs DNS.
+# Classification and display must use type/status, never diagnostic text that
+# could contain proxy, machine or account details.
+$classifier=$service.GetMethod('ClassifyTransportFailure',$static)
+$describe=$service.GetMethod('DescribeTransportFailure',$static)
+$failureType=$assembly.GetType('SnipStudio.UpdateTransportFailure',$true)
+$diagnosticMarker='Untrusted fixture diagnostic content'
+$transportCases=New-Object 'System.Collections.Generic.List[object]'
+function Add-UpdateTransportCase([Exception]$FailureException,[bool]$Canceled,[string]$Expected,[string]$Label){
+    $transportCases.Add([pscustomobject]@{Error=$FailureException;Canceled=$Canceled;Expected=$Expected;Label=$Label})
+}
+function New-UpdateWebError([Net.WebExceptionStatus]$Status){return [Net.WebException]::new($diagnosticMarker,$null,$Status,$null)}
+Add-UpdateTransportCase $null $false 'Connection' 'An absent underlying failure uses the generic connection category'
+Add-UpdateTransportCase $null $true 'Timeout' 'A canceled request is a timeout even without an underlying exception'
+Add-UpdateTransportCase ([Exception]::new($diagnosticMarker+' DNS proxy TLS timeout')) $false 'Connection' 'Words inside an untrusted exception message do not determine its category'
+Add-UpdateTransportCase ([Net.Http.HttpRequestException]::new($diagnosticMarker)) $false 'Connection' 'An opaque HTTP transport error remains a generic connection error'
+Add-UpdateTransportCase ([IO.IOException]::new($diagnosticMarker)) $false 'Connection' 'An opaque stream error remains a generic connection error'
+Add-UpdateTransportCase ([OperationCanceledException]::new($diagnosticMarker)) $false 'Timeout' 'A cancellation exception has the timeout category'
+Add-UpdateTransportCase ([Threading.Tasks.TaskCanceledException]::new($diagnosticMarker)) $false 'Timeout' 'A canceled HTTP task has the timeout category'
+Add-UpdateTransportCase ([Security.Authentication.AuthenticationException]::new($diagnosticMarker)) $false 'SecureConnection' 'A TLS authentication failure has the secure-connection category'
+Add-UpdateTransportCase ([Security.SecurityException]::new($diagnosticMarker)) $false 'Blocked' 'A security-policy exception has the blocked category'
+Add-UpdateTransportCase ([UnauthorizedAccessException]::new($diagnosticMarker)) $false 'Blocked' 'An access-denied exception has the blocked category'
+Add-UpdateTransportCase ([ObjectDisposedException]::new('fixture',$diagnosticMarker)) $false 'Connection' 'A disposed response without cancellation is not mislabeled as a timeout'
+Add-UpdateTransportCase ([ObjectDisposedException]::new('fixture',$diagnosticMarker)) $true 'Timeout' 'A disposed response during cancellation retains the timeout category'
+$webCases=@(
+    @{Status=[Net.WebExceptionStatus]::NameResolutionFailure;Expected='NameResolution'},
+    @{Status=[Net.WebExceptionStatus]::ProxyNameResolutionFailure;Expected='Proxy'},
+    @{Status=[Net.WebExceptionStatus]::RequestProhibitedByProxy;Expected='Proxy'},
+    @{Status=[Net.WebExceptionStatus]::SecureChannelFailure;Expected='SecureConnection'},
+    @{Status=[Net.WebExceptionStatus]::TrustFailure;Expected='SecureConnection'},
+    @{Status=[Net.WebExceptionStatus]::Timeout;Expected='Timeout'},
+    @{Status=[Net.WebExceptionStatus]::ConnectFailure;Expected='Connection'})
+foreach($case in $webCases){Add-UpdateTransportCase (New-UpdateWebError $case.Status) $false $case.Expected ('Web status '+$case.Status+' is classified without reading diagnostic text')}
+foreach($case in @(
+    @{Code=[Net.Sockets.SocketError]::HostNotFound;Expected='NameResolution'},
+    @{Code=[Net.Sockets.SocketError]::TryAgain;Expected='NameResolution'},
+    @{Code=[Net.Sockets.SocketError]::NoData;Expected='NameResolution'},
+    @{Code=[Net.Sockets.SocketError]::NoRecovery;Expected='NameResolution'},
+    @{Code=[Net.Sockets.SocketError]::TimedOut;Expected='Timeout'},
+    @{Code=[Net.Sockets.SocketError]::AccessDenied;Expected='Blocked'},
+    @{Code=[Net.Sockets.SocketError]::ConnectionRefused;Expected='Connection'})){
+    Add-UpdateTransportCase ([Net.Sockets.SocketException]::new([int]$case.Code)) $false $case.Expected ('Socket status '+$case.Code+' is classified by its numeric status')
+}
+$wrappedDns=[Net.Http.HttpRequestException]::new($diagnosticMarker,[IO.IOException]::new($diagnosticMarker,(New-UpdateWebError ([Net.WebExceptionStatus]::NameResolutionFailure))))
+$wrappedTls=[Net.Http.HttpRequestException]::new($diagnosticMarker,[IO.IOException]::new($diagnosticMarker,[Security.Authentication.AuthenticationException]::new($diagnosticMarker)))
+Add-UpdateTransportCase $wrappedDns $false 'NameResolution' 'A DNS failure survives HTTP and stream exception wrappers'
+Add-UpdateTransportCase $wrappedTls $false 'SecureConnection' 'A TLS failure survives HTTP and stream exception wrappers'
+Add-UpdateTransportCase $wrappedDns $true 'Timeout' 'Request cancellation takes precedence over a wrapped DNS failure'
+Add-UpdateTransportCase $wrappedTls $true 'Timeout' 'Request cancellation takes precedence over a wrapped TLS failure'
+$withinDepth=New-UpdateWebError ([Net.WebExceptionStatus]::NameResolutionFailure)
+for($index=0;$index -lt 11;$index++){$withinDepth=[Exception]::new($diagnosticMarker,$withinDepth)}
+Add-UpdateTransportCase $withinDepth $false 'NameResolution' 'The last supported inner-exception depth still preserves a recognized failure'
+Add-UpdateTransportCase ([Exception]::new($diagnosticMarker,$withinDepth)) $false 'Connection' 'Unbounded exception nesting falls back after twelve inspected links'
+foreach($case in $transportCases){
+    $failure=Invoke-UpdateMethod $classifier $null ([object[]]@($case.Error,$case.Canceled))
+    $message=[string](Invoke-UpdateMethod $describe $null ([object[]]@($failure)))
+    Confirm-Update ($failure.ToString() -ceq $case.Expected -and -not [String]::IsNullOrWhiteSpace($message) -and
+        -not $message.Contains($diagnosticMarker)) $case.Label
+}
+$messages=New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
+foreach($failure in [Enum]::GetValues($failureType)){
+    $message=[string](Invoke-UpdateMethod $describe $null ([object[]]@($failure)))
+    Confirm-Update ($messages.Add($message) -and -not $message.Contains($diagnosticMarker)) 'Each transport category has a distinct fixed user message without raw exception details'
+}
+$reuse=$service.GetMethod('ShouldReuseFetch',$static)
+$retryCases=@(
+    @{Checked=$now.AddSeconds(-10).AddTicks(1);Retry=[DateTime]::MinValue;Force=$true;Transient=$true;Expected=$true;Label='A transient manual retry reuses the result for less than ten seconds'},
+    @{Checked=$now.AddSeconds(-10);Retry=[DateTime]::MinValue;Force=$true;Transient=$true;Expected=$false;Label='A transient manual retry is permitted at exactly ten seconds'},
+    @{Checked=$now.AddSeconds(-11);Retry=[DateTime]::MinValue;Force=$true;Transient=$true;Expected=$false;Label='A transient error is not held for the old one-minute cooldown'},
+    @{Checked=$now.AddMinutes(-1).AddTicks(1);Retry=[DateTime]::MinValue;Force=$true;Transient=$false;Expected=$true;Label='Other manual outcomes retain the one-minute minimum interval'},
+    @{Checked=$now.AddMinutes(-1);Retry=[DateTime]::MinValue;Force=$true;Transient=$false;Expected=$false;Label='Other manual outcomes may refresh at exactly one minute'},
+    @{Checked=$now.AddHours(-24).AddTicks(1);Retry=[DateTime]::MinValue;Force=$false;Transient=$true;Expected=$true;Label='Automatic checks retain the daily interval after a transient failure'},
+    @{Checked=$now.AddHours(-24);Retry=[DateTime]::MinValue;Force=$false;Transient=$true;Expected=$false;Label='An automatic transient outcome expires at exactly twenty-four hours'},
+    @{Checked=$now.AddHours(-24);Retry=[DateTime]::MinValue;Force=$false;Transient=$false;Expected=$false;Label='An automatic ordinary outcome expires at exactly twenty-four hours'},
+    @{Checked=$now.AddMinutes(-2);Retry=$now.AddMinutes(30);Force=$true;Transient=$true;Expected=$true;Label='A manual transient retry cannot bypass an active server backoff'},
+    @{Checked=$now.AddDays(-2);Retry=$now.AddMinutes(30);Force=$false;Transient=$false;Expected=$true;Label='An overdue automatic check still honors an active server backoff'},
+    @{Checked=$now.AddSeconds(-11);Retry=$now;Force=$true;Transient=$true;Expected=$false;Label='An expired server deadline permits a retry once its own cooldown has elapsed'},
+    @{Checked=$now.AddMinutes(1);Retry=[DateTime]::MinValue;Force=$true;Transient=$true;Expected=$false;Label='A future cached check without server backoff does not strand manual checks'},
+    @{Checked=$now.AddMinutes(1);Retry=$now.AddMinutes(30);Force=$true;Transient=$true;Expected=$true;Label='Clock rollback does not override an active server-issued deadline'},
+    @{Checked=[DateTime]::MinValue;Retry=[DateTime]::MinValue;Force=$true;Transient=$false;Expected=$false;Label='An uninitialized cached check without a server deadline is not reused'},
+    @{Checked=[DateTime]::MinValue;Retry=$now.AddMinutes(30);Force=$true;Transient=$true;Expected=$true;Label='An active server deadline is honored even without a usable check timestamp'},
+    @{Checked=$now.AddSeconds(-9).ToLocalTime();Retry=[DateTime]::MinValue;Force=$true;Transient=$true;Expected=$true;Label='Equivalent local timestamps preserve the manual transport cooldown'})
+foreach($case in $retryCases){
+    $actual=[bool](Invoke-UpdateMethod $reuse $null ([object[]]@($case.Checked,$case.Retry,$now,$case.Force,$case.Transient)))
+    Confirm-Update ($actual -eq $case.Expected) $case.Label
+}
+
+# The signed product has an explicit Framework target and an isolated early
+# diagnostic path. Inspect its metadata rather than executing its entrypoint.
+$targetFramework=@($assembly.GetCustomAttributes($false)|Where-Object {$_.GetType().FullName -ceq 'System.Runtime.Versioning.TargetFrameworkAttribute'})
+Confirm-Update ($targetFramework.Count -eq 1 -and $targetFramework[0].FrameworkName -ceq '.NETFramework,Version=v4.8') 'The signed application declares the intended Framework 4.8 target'
+$opcodes=@{}
+foreach($field in [Reflection.Emit.OpCodes].GetFields([Reflection.BindingFlags]'Static,Public')){
+    $opcode=$field.GetValue($null);$opcodes[([int]$opcode.Value -band 65535).ToString([Globalization.CultureInfo]::InvariantCulture)]=$opcode
+}
+function Read-UpdateCalls([Reflection.MethodBase]$Method){
+    $body=$Method.GetMethodBody();if($null -eq $body){return}
+    $bytes=$body.GetILAsByteArray();$offset=0
+    while($offset -lt $bytes.Length){
+        $start=$offset;$code=[int]$bytes[$offset];$offset++
+        if($code -eq 254){$code=65024+[int]$bytes[$offset];$offset++}
+        $op=$opcodes[$code.ToString([Globalization.CultureInfo]::InvariantCulture)]
+        if($null -eq $op){throw 'Unknown diagnostic IL opcode.'}
+        $operand=$op.OperandType.ToString();$length=0
+        switch($operand){'InlineNone'{$length=0};'ShortInlineBrTarget'{$length=1};'ShortInlineI'{$length=1};'ShortInlineVar'{$length=1};'InlineVar'{$length=2};'InlineI8'{$length=8};'InlineR'{$length=8};'InlineSwitch'{$length=4+4*[BitConverter]::ToInt32($bytes,$offset)};default{$length=4}}
+        if($operand -eq 'InlineMethod'){
+            $target=$Method.Module.ResolveMethod([BitConverter]::ToInt32($bytes,$offset))
+            [pscustomobject]@{Offset=$start;Target=$target;Name=$target.Name;Type=$target.DeclaringType.FullName;Opcode=$op.Name}
+        }
+        $offset+=$length
+    }
+}
+$program=$assembly.GetType('SnipStudio.Program',$true)
+$diagnostic=$program.GetMethod('RunUpdateCheckDiagnostic',$static)
+$entryCalls=@(Read-UpdateCalls $assembly.EntryPoint)
+$diagnosticCall=@($entryCalls|Where-Object {$_.Target -eq $diagnostic})
+$parseCall=@($entryCalls|Where-Object {$_.Name -ceq 'TryFromArguments' -and $_.Type -ceq 'SnipStudio.ShortcutStartupRequest'})
+$forwardCall=@($entryCalls|Where-Object {$_.Name -ceq 'TryForward' -and $_.Type -ceq 'SnipStudio.ShortcutHost'})
+Confirm-Update ($diagnosticCall.Count -eq 1 -and $parseCall.Count -eq 1 -and $forwardCall.Count -ge 1 -and
+    $diagnosticCall[0].Offset -lt $parseCall[0].Offset -and
+    @($forwardCall|Where-Object {$_.Offset -le $diagnosticCall[0].Offset}).Count -eq 0) 'The dedicated update diagnostic is selected before ordinary launch parsing or every IPC forwarding attempt'
+$diagnosticCalls=@(Read-UpdateCalls $diagnostic)
+Confirm-Update (@($diagnosticCalls|Where-Object {$_.Name -ceq 'CheckAsync' -and $_.Type -ceq 'SnipStudio.UpdateChecker'}).Count -eq 1 -and
+    @($diagnosticCalls|Where-Object {$_.Type -in @('SnipStudio.Preferences','SnipStudio.ShortcutHost','SnipStudio.MainForm','SnipStudio.TaskbarJumpList') -or $_.Type.StartsWith('System.Windows.Forms.',[StringComparison]::Ordinal)}).Count -eq 0) 'The isolated product diagnostic calls the real checker without direct preferences, IPC or window initialization'
+Confirm-Update ($null -eq $service.GetField('inFlight',$static).GetValue($null) -and $null -eq $service.GetField('cached',$static).GetValue($null)) 'Synthetic transport and retry policies did not schedule or cache an updater request'
 $output=Join-Path $PSScriptRoot $ReleaseFolder.Replace('-signed','-data')
 [IO.Directory]::CreateDirectory($output)|Out-Null
-[ordered]@{Version=$ExpectedVersion;SHA256=(Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash;CheckCount=$checks.Count;Checks=$checks.ToArray();UpdaterHTTPRequestsSent=$false;CheckAsyncInvoked=$false;ApplicationEntrypointExecuted=$false;UserPreferencesRead=$false;ApplicationRegistryAccessed=$false;UIOpened=$false;Scope='Pure stable-release JSON validation, exact owned HTTPS link/installer identity, version/result policies and daily-check scheduling against synthetic fixtures only. Standard Windows signature verification is outside the updater HTTP scope.';Unverified='Real GitHub connectivity, redirect/content-type/byte-stream limits, timeout and rate-limit behavior, HTTP caching/coalescing, automatic preference persistence, notification appearance, browser actions and installer execution.'}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $output 'update-checker.json') -Encoding UTF8
+[ordered]@{Version=$ExpectedVersion;SHA256=(Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash;CheckCount=$checks.Count;OriginalMetadataAndScheduleChecks=$baselineChecks;Checks=$checks.ToArray();UpdaterHTTPRequestsSent=$false;CheckAsyncInvoked=$false;ApplicationEntrypointExecuted=$false;UserPreferencesRead=$false;ApplicationRegistryAccessed=$false;UIOpened=$false;Scope='Pure stable-release JSON validation, exact owned HTTPS link/installer identity, result/daily schedule policies, synthetic transport classification/manual retry/server backoff policies, Framework target and diagnostic call metadata. Standard Windows signature verification is outside the updater HTTP scope.';Unverified='Real signed-process connectivity, redirect/content-type/byte-stream limits, runtime timeout and server backoff behavior, HTTP request caching/coalescing, automatic preference persistence, notification appearance, browser actions and installer execution.'}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $output 'update-checker.json') -Encoding UTF8
 Write-Output ('PASS: '+$checks.Count+' pure signed update-checker checks; no updater HTTP, user settings or UI were used.')

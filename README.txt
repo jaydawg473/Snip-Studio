@@ -1,7 +1,7 @@
-SNIP STUDIO 0.5.7 — AUTOMATION FORGE
+SNIP STUDIO 0.5.8 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Install with "SnipStudio-0.5.7-Setup.exe", then open Snip Studio from the
+Install with "SnipStudio-0.5.8-Setup.exe", then open Snip Studio from the
 Start menu. Installation is for your Windows account, with an optional desktop
 shortcut. It does not launch the app or enable Windows startup automatically.
 The optional "Start Snip Studio at Windows sign-in" installer component is
@@ -50,6 +50,9 @@ checks the official GitHub releases in the background at most once a day.
 Turn this off under Settings > Updates > Check for updates automatically.
 More > Check for updates and the notification-area menu offer a manual check.
 Manual requests still respect short cooldowns and GitHub rate limits.
+After a transient connection failure, a manual check can retry after ten
+seconds. Connection and cancellation outcomes are reported separately;
+unavailability is not presented as an up-to-date result.
 When a newer release is found, choose Download or Download update to open its
 official installer link in your browser. Snip Studio does not silently download,
 install, or run an update. You choose whether to download and run Setup.
@@ -63,9 +66,14 @@ Selections span the entire virtual desktop, including across monitors.
 Escape/right-click cancels selection. Delayed capture has a Cancel button.
 The app starts compact and can resize to fit a new snip. The clock shows the
 selected delay (Off, 3s, 5s, or 10s).
-Capture closes app menus, hides all open Snip Studio windows for the snapshot,
-and suppresses those windows' fade transitions before restoring them. Starting
-a hidden-window hotkey capture does not first show and hide the editor.
+Normal capture closes app menus and hides the initiating editor and Settings
+windows for the snapshot. Other open snips stay visible so you can capture them.
+Use More > Capture open snips to include the initiating editor's snip as well;
+that one capture keeps the editors visible while hiding Settings. A previous
+Scrolling choice uses Rectangle for this shot, then keeps your chosen mode and
+timer. This is a one-shot action rather than a saved visibility preference.
+Hidden windows' fade transitions are suppressed before restoration. Starting a
+hidden-window hotkey capture does not first show and hide the editor.
 Remember capture delay is on by default. Turn it off in Settings to start
 each new app session with no delay; you can still choose a delay while open.
 Window capture copies the visible desktop area, including overlapping content.
@@ -273,7 +281,27 @@ Icon sources and regeneration tool are in assets\ and tools\.
 
 An independent Automation Forge app; not affiliated with Microsoft.
 
-0.5.7 VERIFICATION STATUS
+0.5.8 VERIFICATION STATUS
+The final application has a Valid timestamped Automation Forge signature.
+689 signed-library checks passed: 501 core component checks, 73 synthetic
+menu-placement checks and 115 offscreen update-UI/preferences fixture checks.
+The core set includes 122 Jump List, 30 taskbar refresh, 174 update checker,
+25 capture visibility, 88 translation/request, 34 installer-exit and 28 startup
+checks. 73 installer source-policy checks passed separately. Offscreen and
+synthetic checks do not prove actual monitor/taskbar capture behavior.
+The exact signed product also completed a live update check from its own
+.NET Framework 4.8 host, using Windows/SystemDefault TLS with strong crypto
+enabled. It exited successfully with an up-to-date result and left preferences
+unchanged. This was not a PowerShell-hosted network check and did not initialize
+the editor, capture, shortcuts, or Shell integration. The earlier 0.5.7 connection
+failure's exact cause remains unconfirmed; other network setups still need
+acceptance. No certificate-validation bypass, silent download or automatic
+installation is introduced. See VALIDATION.txt for exact bytes and scope.
+Actual capture/restoration across open snips and monitors, all cancellation
+paths, native taskbar/cache behavior and full installation/upgrade/uninstall
+still need live acceptance. Earlier release counts do not add to these totals.
+
+HISTORICAL 0.5.7 VERIFICATION STATUS
 The final application has a Valid timestamped Automation Forge signature.
 418 signed-library checks passed: 122 Jump List, 30 taskbar refresh, 116 update
 checker, 88 translation/request, 34 installer-exit and 28 startup checks.

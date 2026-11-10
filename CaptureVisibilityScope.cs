@@ -8,8 +8,8 @@ using System.Windows.Forms;
 
 namespace SnipStudio
 {
-    // This scope changes only this process's own snip windows. It does not use
-    // screen-capture APIs, modify system animation preferences, or close work.
+    // This scope hides the initiating editor and Settings, leaving other open
+    // snips available to capture. It does not close work or change system policy.
     internal sealed class CaptureVisibilityScope : IDisposable
     {
         private sealed class WindowState
@@ -37,6 +37,13 @@ namespace SnipStudio
 
         internal static CaptureVisibilityScope HideApplicationWindows(MainForm owner)
         {
+            return HideApplicationWindows(owner, false);
+        }
+
+        // The explicit Capture open snips action also retains the initiating
+        // editor. Ordinary New, recording and scrolling still hide their owner.
+        internal static CaptureVisibilityScope HideApplicationWindows(MainForm owner, bool includeOpenSnips)
+        {
             if (owner == null) throw new ArgumentNullException("owner");
             if (owner.IsDisposed || owner.Disposing) throw new ObjectDisposedException("owner");
             if (owner.InvokeRequired) throw new InvalidOperationException("Prepare capture on the application window's thread.");
@@ -49,6 +56,7 @@ namespace SnipStudio
             }
             try
             {
+                List<Form> popupWindows = new List<Form>();
                 // Snapshot before mutation. Hiding an owner must not obscure an
                 // unsaved modal dialog and leave it inaccessible after capture.
                 foreach (Form form in Application.OpenForms)
@@ -62,7 +70,13 @@ namespace SnipStudio
                     if (form.Modal && form.Visible)
                         throw new InvalidOperationException("Close the open Snip Studio dialog before starting a capture.");
                     if (form.Visible && form.WindowState != FormWindowState.Minimized && form.IsHandleCreated)
-                        scope.windows.Add(new WindowState { Form = form, Handle = form.Handle, OriginalWindowState = form.WindowState });
+                    {
+                        bool hide = ShouldHideWindowForCapture(snip != null, settings != null,
+                            Object.ReferenceEquals(form, owner), includeOpenSnips);
+                        if (hide)
+                            scope.windows.Add(new WindowState { Form = form, Handle = form.Handle, OriginalWindowState = form.WindowState });
+                        if (hide || Object.ReferenceEquals(form, owner)) popupWindows.Add(form);
+                    }
                 }
                 foreach (WindowState state in scope.windows)
                 {
@@ -76,11 +90,14 @@ namespace SnipStudio
                     if (!state.ChangedTransitions) scope.needsFallbackSettle = true;
                 }
                 scope.needsFallbackSettle = owner.CloseCapturePopups() || scope.needsFallbackSettle;
+                // Other editors remain untouched, including their open menus.
+                // Only the initiator's menu and the hidden Settings are closed.
+                foreach (Form form in popupWindows)
+                {
+                    if (ClosePopups(form)) scope.needsFallbackSettle = true;
+                }
                 foreach (WindowState state in scope.windows)
                 {
-                    MainForm snip = state.Form as MainForm;
-                    if (snip != null && snip != owner && snip.CloseCapturePopups()) scope.needsFallbackSettle = true;
-                    if (ClosePopups(state.Form)) scope.needsFallbackSettle = true;
                     if (SameWindow(state)) state.Form.Hide();
                 }
                 scope.hiddenAt = Stopwatch.GetTimestamp();
@@ -91,6 +108,12 @@ namespace SnipStudio
                 scope.Dispose();
                 throw;
             }
+        }
+
+        internal static bool ShouldHideWindowForCapture(bool isEditor, bool isSettings,
+            bool isInitiator, bool includeOpenSnips)
+        {
+            return isSettings || (isEditor && isInitiator && !includeOpenSnips);
         }
 
         // Use on a newly created countdown/selection window before it is shown.

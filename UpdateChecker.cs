@@ -4,6 +4,8 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -13,6 +15,7 @@ using System.Web.Script.Serialization;
 namespace SnipStudio
 {
     internal enum UpdateCheckStatus { UpToDate, UpdateAvailable, Unavailable }
+    internal enum UpdateTransportFailure { Connection, NameResolution, Proxy, SecureConnection, Timeout, Blocked }
 
     internal sealed class UpdateCheckResult
     {
@@ -58,8 +61,9 @@ namespace SnipStudio
         private static Task<FetchResult> inFlight;
         private static FetchResult cached;
 
-        // A manual request (force=true) bypasses the daily automatic cache, but
-        // not the one-minute cooldown or a server-provided rate-limit delay.
+        // Manual checks can retry a transient connection failure after ten
+        // seconds. Successful metadata and server rate limits retain their
+        // longer cooldowns so repeated clicks cannot flood the release API.
         internal static async Task<UpdateCheckResult> CheckAsync(Version currentVersion, bool force)
         {
             Version current = NormalizeVersion(currentVersion);
@@ -141,8 +145,8 @@ namespace SnipStudio
             {
                 DateTime now = DateTime.UtcNow;
                 if (inFlight != null) return inFlight;
-                if (cached != null && cached.CheckedUtc <= now &&
-                    (now < cached.RetryAfterUtc || now - cached.CheckedUtc < (force ? TimeSpan.FromMinutes(1) : TimeSpan.FromHours(24))))
+                if (cached != null && ShouldReuseFetch(cached.CheckedUtc, cached.RetryAfterUtc,
+                    now, force, cached.TransientTransportFailure))
                     return Task.FromResult(cached);
                 Task<FetchResult> pending = FetchBoundedAsync(currentVersion);
                 inFlight = pending;
@@ -175,7 +179,7 @@ namespace SnipStudio
                         CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
                         TaskScheduler.Default);
                     GC.KeepAlive(observer);
-                    return FetchResult.Failed("The update check timed out. Please try again later.");
+                    return FetchResult.TransportFailed(UpdateTransportFailure.Timeout);
                 }
                 return await request.ConfigureAwait(false);
             }
@@ -234,12 +238,90 @@ namespace SnipStudio
                     }
                 }
             }
-            catch (OperationCanceledException) { return FetchResult.Failed("The update check timed out. Please try again later."); }
-            catch (HttpRequestException) { return FetchResult.Failed("Couldn't check for updates. Check your connection and try again."); }
-            catch (IOException) { return FetchResult.Failed("Couldn't check for updates. Check your connection and try again."); }
-            catch (ObjectDisposedException) { return FetchResult.Failed("The update check timed out. Please try again later."); }
+            catch (OperationCanceledException) { return FetchResult.TransportFailed(UpdateTransportFailure.Timeout); }
+            catch (HttpRequestException error) { return FetchResult.TransportFailed(ClassifyTransportFailure(error, cancellation.IsCancellationRequested)); }
+            catch (IOException error) { return FetchResult.TransportFailed(ClassifyTransportFailure(error, cancellation.IsCancellationRequested)); }
+            catch (AuthenticationException error) { return FetchResult.TransportFailed(ClassifyTransportFailure(error, cancellation.IsCancellationRequested)); }
+            catch (SocketException error) { return FetchResult.TransportFailed(ClassifyTransportFailure(error, cancellation.IsCancellationRequested)); }
+            catch (ObjectDisposedException error) { return FetchResult.TransportFailed(ClassifyTransportFailure(error, cancellation.IsCancellationRequested)); }
             catch (DecoderFallbackException) { return FetchResult.Failed(InvalidInformation); }
-            catch (System.Security.SecurityException) { return FetchResult.Failed("Windows did not allow the update check. Please try again later."); }
+            catch (System.Security.SecurityException) { return FetchResult.TransportFailed(UpdateTransportFailure.Blocked); }
+            catch (UnauthorizedAccessException) { return FetchResult.TransportFailed(UpdateTransportFailure.Blocked); }
+        }
+
+        // Pure policy seam: transport failures should not trap a user behind
+        // an old error, while a rate-limit deadline must still be respected.
+        internal static bool ShouldReuseFetch(DateTime checkedUtc, DateTime retryAfterUtc,
+            DateTime nowUtc, bool force, bool transientTransportFailure)
+        {
+            DateTime now = AsUtc(nowUtc), checkedAt = AsUtc(checkedUtc);
+            // A clock adjustment must not allow a server-issued cooldown to
+            // be bypassed just because the cached check now looks future-dated.
+            if (now < AsUtc(retryAfterUtc)) return true;
+            if (checkedAt == DateTime.MinValue || checkedAt > now) return false;
+            TimeSpan cooldown = !force ? TimeSpan.FromHours(24) :
+                transientTransportFailure ? TimeSpan.FromSeconds(10) : TimeSpan.FromMinutes(1);
+            return now - checkedAt < cooldown;
+        }
+
+        // Classify only known exception types and numeric status values. Never
+        // display exception messages: those can contain proxy or account data.
+        internal static UpdateTransportFailure ClassifyTransportFailure(Exception error, bool cancellationRequested)
+        {
+            if (cancellationRequested) return UpdateTransportFailure.Timeout;
+            for (int depth = 0; error != null && depth < 12; depth++, error = error.InnerException)
+            {
+                if (error is OperationCanceledException) return UpdateTransportFailure.Timeout;
+                if (error is AuthenticationException) return UpdateTransportFailure.SecureConnection;
+                if (error is System.Security.SecurityException || error is UnauthorizedAccessException)
+                    return UpdateTransportFailure.Blocked;
+                WebException webError = error as WebException;
+                if (webError != null)
+                {
+                    switch (webError.Status)
+                    {
+                        case WebExceptionStatus.NameResolutionFailure: return UpdateTransportFailure.NameResolution;
+                        case WebExceptionStatus.ProxyNameResolutionFailure:
+                        case WebExceptionStatus.RequestProhibitedByProxy: return UpdateTransportFailure.Proxy;
+                        case WebExceptionStatus.SecureChannelFailure:
+                        case WebExceptionStatus.TrustFailure: return UpdateTransportFailure.SecureConnection;
+                        case WebExceptionStatus.Timeout: return UpdateTransportFailure.Timeout;
+                    }
+                }
+                SocketException socketError = error as SocketException;
+                if (socketError != null)
+                {
+                    switch (socketError.SocketErrorCode)
+                    {
+                        case SocketError.HostNotFound:
+                        case SocketError.TryAgain:
+                        case SocketError.NoData:
+                        case SocketError.NoRecovery: return UpdateTransportFailure.NameResolution;
+                        case SocketError.TimedOut: return UpdateTransportFailure.Timeout;
+                        case SocketError.AccessDenied: return UpdateTransportFailure.Blocked;
+                    }
+                }
+            }
+            return UpdateTransportFailure.Connection;
+        }
+
+        internal static string DescribeTransportFailure(UpdateTransportFailure failure)
+        {
+            switch (failure)
+            {
+                case UpdateTransportFailure.NameResolution:
+                    return "Couldn't find GitHub's update service (DNS). Check your connection and try again.";
+                case UpdateTransportFailure.Proxy:
+                    return "The network proxy could not reach GitHub's update service. Check your proxy connection and try again.";
+                case UpdateTransportFailure.SecureConnection:
+                    return "Couldn't establish a secure connection to GitHub (TLS or certificate). Check Windows and network security settings.";
+                case UpdateTransportFailure.Timeout:
+                    return "The update check timed out. Please try again later.";
+                case UpdateTransportFailure.Blocked:
+                    return "Windows or a network policy did not allow the update check. Please try again later.";
+                default:
+                    return "Couldn't connect to GitHub's update service. Check your connection and try again.";
+            }
         }
 
         private static DateTime ReadRetryAfter(HttpResponseMessage response)
@@ -316,11 +398,19 @@ namespace SnipStudio
             internal readonly string Message;
             internal readonly DateTime CheckedUtc;
             internal readonly DateTime RetryAfterUtc;
+            internal readonly bool TransientTransportFailure;
             internal FetchResult(string json, string message, DateTime checkedUtc, DateTime retryAfterUtc)
-            { Json = json; Message = message; CheckedUtc = checkedUtc; RetryAfterUtc = retryAfterUtc; }
+                : this(json, message, checkedUtc, retryAfterUtc, false) { }
+            private FetchResult(string json, string message, DateTime checkedUtc, DateTime retryAfterUtc, bool transientTransportFailure)
+            {
+                Json = json; Message = message; CheckedUtc = checkedUtc; RetryAfterUtc = retryAfterUtc;
+                TransientTransportFailure = transientTransportFailure;
+            }
             internal static FetchResult Failed(string message) { return Failed(message, DateTime.MinValue); }
             internal static FetchResult Failed(string message, DateTime retryAfterUtc)
             { return new FetchResult(null, message, DateTime.UtcNow, retryAfterUtc); }
+            internal static FetchResult TransportFailed(UpdateTransportFailure failure)
+            { return new FetchResult(null, DescribeTransportFailure(failure), DateTime.UtcNow, DateTime.MinValue, true); }
         }
     }
 }

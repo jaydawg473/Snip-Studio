@@ -54,6 +54,9 @@ namespace SnipStudio
             AddMenuItem("Open file…", "open", delegate { ChooseImage(); });
             AddMenuItem("Full-screen capture (choose monitor)", "camera", delegate { SetCaptureKind(false); mode.SelectedIndex = 3; StartCapture(); });
             AddMenuItem("Capture all monitors", "fullscreen", delegate { SetCaptureKind(false); mode.SelectedIndex = 5; StartCapture(); });
+            ToolStripMenuItem captureOpenSnipsItem = AddMenuItem("Capture open snips…", "camera", delegate { CaptureOpenSnips(); });
+            captureOpenSnipsItem.AccessibleName = "Capture open Snip Studio windows";
+            captureOpenSnipsItem.ToolTipText = "Take a screenshot with all open snips visible, including this window. Uses your selected capture mode and timer; Scrolling uses Rectangle for this capture only.";
             AddMenuItem("Full-screen view                 F11", "fit", delegate { ToggleFullScreenEditor(); });
             AddMenuItem("Paste image", "paste", delegate { PasteImage(); });
             AddMenuItem("Open screenshots folder", "open", delegate { OpenScreenshotFolder(); });
@@ -84,6 +87,7 @@ namespace SnipStudio
                 reloadExternalItem.Enabled = !String.IsNullOrEmpty(externalWorkingCopy) && File.Exists(externalWorkingCopy);
                 refreshTaskbarItem.Enabled = !refreshingTaskbarMenu;
                 checkUpdatesItem.Enabled = !checkingForUpdates;
+                captureOpenSnipsItem.Enabled = CanStartBackgroundCapture() && !IsCaptureSavePending;
                 shareItem.Enabled = canvas.HasImage && !capturePending && !preparingShare;
                 foreach (ToolStripItem item in moreMenu.Items) item.ForeColor = StudioTheme.Text;
             };
