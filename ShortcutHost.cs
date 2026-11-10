@@ -107,6 +107,7 @@ namespace SnipStudio
 
         internal event Action<string> OpenRequested;
         internal event Action CaptureRequested;
+        internal event Action<int> TaskCaptureRequested;
         internal event Action ExitRequested;
 
         internal bool IsPrimary { get { return ownsMutex && !disposed; } }
@@ -410,7 +411,11 @@ namespace SnipStudio
             if (pending.Count != 0) ScheduleDispatch();
             if (request.Kind == ShortcutStartupRequest.RequestKind.Capture)
             {
-                if (CaptureRequested != null) CaptureRequested();
+                if (request.CaptureDelaySeconds.HasValue)
+                {
+                    if (TaskCaptureRequested != null) TaskCaptureRequested(request.CaptureDelaySeconds.Value);
+                }
+                else if (CaptureRequested != null) CaptureRequested();
             }
             else if (request.Kind == ShortcutStartupRequest.RequestKind.Open && OpenRequested != null) OpenRequested(request.ImagePath);
         }
@@ -533,20 +538,36 @@ namespace SnipStudio
     }
 
     // Pure command/payload parsing, also usable by focused checks without creating
-    // a window or registering a key. IPC only ever opens an image; never a command.
+    // a window or registering a key. Only image opening and fixed capture actions
+    // are accepted; incoming arguments are never passed to a command interpreter.
     internal sealed class ShortcutStartupRequest
     {
         internal enum RequestKind { Open, Capture, Background }
         internal RequestKind Kind { get; private set; }
         internal string ImagePath { get; private set; }
+        internal int? CaptureDelaySeconds { get; private set; }
         private ShortcutStartupRequest(RequestKind kind, string imagePath) { Kind = kind; ImagePath = imagePath; }
         internal static ShortcutStartupRequest Open(string imagePath) { return new ShortcutStartupRequest(RequestKind.Open, imagePath); }
         internal static ShortcutStartupRequest Capture() { return new ShortcutStartupRequest(RequestKind.Capture, null); }
+        internal static ShortcutStartupRequest Capture(int seconds)
+        {
+            if (seconds != 0 && seconds != 3 && seconds != 5 && seconds != 10)
+                throw new ArgumentOutOfRangeException("seconds");
+            return new ShortcutStartupRequest(RequestKind.Capture, null) { CaptureDelaySeconds = seconds };
+        }
 
         internal static bool TryFromArguments(string[] args, out ShortcutStartupRequest request)
         {
             request = null;
             if (args == null || args.Length == 0) { request = Open(null); return true; }
+            if (args.Length == 3 && String.Equals(args[0], "--capture", StringComparison.OrdinalIgnoreCase) &&
+                String.Equals(args[1], "--delay", StringComparison.OrdinalIgnoreCase))
+            {
+                int seconds;
+                if (!TryCaptureDelay(args[2], out seconds)) return false;
+                request = Capture(seconds);
+                return true;
+            }
             if (args.Length != 1 || args[0] == null) return false;
             string value = args[0];
             if (String.Equals(value, "--background", StringComparison.OrdinalIgnoreCase) ||
@@ -564,7 +585,8 @@ namespace SnipStudio
 
         internal string ToBody()
         {
-            return Kind == RequestKind.Background ? "BACKGROUND" : Kind == RequestKind.Capture ? "CAPTURE" :
+            return Kind == RequestKind.Background ? "BACKGROUND" : Kind == RequestKind.Capture ?
+                (CaptureDelaySeconds.HasValue ? "CAPTURE\n" + CaptureDelaySeconds.Value.ToString(System.Globalization.CultureInfo.InvariantCulture) : "CAPTURE") :
                 ImagePath == null ? "OPEN" : "IMAGE\n" + ImagePath;
         }
 
@@ -573,6 +595,12 @@ namespace SnipStudio
             request = null;
             if (body == "BACKGROUND") request = new ShortcutStartupRequest(RequestKind.Background, null);
             else if (body == "CAPTURE") request = Capture();
+            else if (body != null && body.StartsWith("CAPTURE\n", StringComparison.Ordinal))
+            {
+                int seconds;
+                if (!TryCaptureDelay(body.Substring(8), out seconds)) return false;
+                request = Capture(seconds);
+            }
             else if (body == "OPEN") request = Open(null);
             else if (body != null && body.StartsWith("IMAGE\n", StringComparison.Ordinal))
             {
@@ -581,6 +609,16 @@ namespace SnipStudio
                 request = Open(path);
             }
             return request != null;
+        }
+
+        private static bool TryCaptureDelay(string value, out int seconds)
+        {
+            seconds = 0;
+            if (value == "0") return true;
+            if (value == "3") { seconds = 3; return true; }
+            if (value == "5") { seconds = 5; return true; }
+            if (value == "10") { seconds = 10; return true; }
+            return false;
         }
 
         private static bool TryImagePath(string value, out string path)

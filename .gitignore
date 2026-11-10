@@ -18,6 +18,7 @@ checks/*
 !checks/Verify-ZoomFrames.ps1
 !checks/Verify-InstallerExit.ps1
 !checks/Verify-InstallerClosePolicy.ps1
+!checks/Verify-TaskbarJumpList.ps1
 !checks/Verify-ScrollingSession.ps1
 !checks/Verify-ScrollingAnimation.ps1
 !checks/Verify-ScrollingCapture.ps1

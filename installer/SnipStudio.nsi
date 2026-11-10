@@ -12,7 +12,7 @@ Var InstalledClosePath
 Var InstalledCloseScanCount
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.5-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.6-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -28,7 +28,7 @@ Var InstalledCloseScanCount
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.5.5-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-0.5.6-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -38,10 +38,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.5.5.0"
+VIProductVersion "0.5.6.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.5.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.5.5.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.6.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.5.6.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -410,7 +410,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.5"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.6"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"
@@ -447,9 +447,27 @@ Function un.onInit
   StrCpy $PreflightCheckOnly 0
 FunctionEnd
 
+Function un.RemoveImageFileRegistration
+  ; Startup registers only a non-default Open with handler. Remove it only if
+  ; this exact executable still owns the command; retain a portable copy's entry.
+  ReadRegStr $0 HKCU "Software\Classes\AutomationForge.SnipStudio.Image\shell\open\command" ""
+  ${If} $0 == '$\"$INSTDIR\Snip Studio.exe$\" $\"%1$\"'
+    DeleteRegValue HKCU "Software\Classes\.png\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.jpg\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.jpeg\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.bmp\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.gif\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.tif\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegValue HKCU "Software\Classes\.tiff\OpenWithProgids" "AutomationForge.SnipStudio.Image"
+    DeleteRegKey HKCU "Software\Classes\AutomationForge.SnipStudio.Image"
+    System::Call '$SYSDIR\shell32.dll::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
+  ${EndIf}
+FunctionEnd
+
 Section "Uninstall"
   SetShellVarContext current
   Call un.CheckInstalledApplication
+  Call un.RemoveImageFileRegistration
   ; This generated list deletes only files shipped in this exact bundle and
   ; removes only empty known subdirectories. User additions are retained.
   !include "${TRANSLATION_UNINSTALL_INCLUDE}"

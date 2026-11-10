@@ -136,6 +136,10 @@ namespace SnipStudio
                 CaptureProcessingResult result = await EncodeCaptureAsync(job).ConfigureAwait(true);
                 failure = result.SaveError;
                 saveSucceeded = job.SaveOriginal ? failure == null : true;
+                // The await resumes on the UI/STA thread. A saved original is a
+                // real recent document even if another image has since opened;
+                // failed saves and clipboard-only snips never enter the list.
+                if (job.SaveOriginal && saveSucceeded) TaskbarJumpList.RecordRecentFile(job.Destination);
                 if (CaptureCompletionIsCurrent(job))
                 {
                     if (job.SaveOriginal && saveSucceeded && String.IsNullOrEmpty(currentPath))

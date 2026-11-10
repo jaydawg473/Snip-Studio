@@ -1,6 +1,6 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.5.5
+# Snip Studio 0.5.6
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
@@ -24,6 +24,14 @@ Ctrl+wheel zooms toward the pointer by default; the wheel alone scrolls. Setting
 The 0.5.5 wheel animation keeps its drawing position separate from native scrollbar updates until the motion finishes or is interrupted. This addresses jitter during rapid wheel input and direction changes while retaining pointer anchoring. Component checks passed; physical wheel feel and painting still need live acceptance.
 
 The More menu anchors to its button and clamps its position to that monitor's working area. Oversized menus use native scrolling. Left/right toolbars contribute their complete measured height to the editor minimum, bounded by the working area; shorter displays keep a scrolling fallback. Physical monitor/DPI placement and pointer dragging still need live acceptance.
+
+## Taskbar shortcuts and recent images
+
+Open Snip Studio once, then right-click its Windows taskbar icon. **Tasks** offers an immediate screenshot or one in **3, 5, or 10 seconds**, including when the editor is closed. Each task applies its delay to that one snip; it does not change the saved timer or **Remember capture delay**. Taskbar capture uses Photo mode, and a previous Scrolling choice returns to Rectangle so the countdown is honored.
+
+**Recent** contains successfully opened or saved PNG, JPG, JPEG, BMP, GIF, TIF, and TIFF images, including automatically saved originals. Choose an entry to reopen the image in Snip Studio. Unsaved clipboard images, canceled or failed saves, PDF exports, and recordings are not added to this image list. Windows owns the history, removed entries and recent-item privacy setting; the app does not keep a separate recent-file database or change the default image application. Windows also supplies **Pin/Unpin** and **Close window** according to the taskbar icon's state.
+
+Native Jump List appearance, existing-pin refresh and Windows recent-item behavior require live acceptance; component checks alone do not establish those outcomes.
 
 ## Scrolling capture
 
@@ -57,7 +65,7 @@ Taskbar hiding applies to screenshots and video. Hide taskbars and Keep main mon
 
 Requires Windows 10 or 11 and .NET Framework 4.8. Use a complete signed per-user release installer or extract a portable ZIP. Setup does not launch the app. Its optional sign-in component is unchecked by default. Save work and choose **Exit Snip Studio** before an upgrade; the installer does not force-close running copies.
 
-The 0.5.5 installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and diagnostic checks never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
+The installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and diagnostic checks never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
 
 Closing an editor closes that snip. **Keep capture shortcuts after closing** is on by default, leaving a small notification-area listener for Ctrl+Alt+S and Print Screen. Choose **Exit** from its menu to stop the listener, or disable that preference to exit with the last editor. Keeping the full editor hidden in the notification area is a separate opt-in. Windows can reserve Print Screen; Snip Studio does not silently change Windows' routing.
 
@@ -69,10 +77,10 @@ Build the application in PowerShell on Windows:
 
 The C# 5 build uses the installed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; a local build is unsigned. The build compiles the app without launching it or running development checks. Optional development checks require separate invocation. Omitting `-UseExistingIcons` compiles and runs the checked-in icon generator.
 
-Selected `checks/Verify-*.ps1` sources cover menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
+Selected `checks/Verify-*.ps1` sources cover taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
 ```powershell
-powershell.exe -STA -NoProfile -File .\checks\Verify-MenuPlacement.ps1 -ReleaseFolder release-0.5.5-signed -ExpectedVersion 0.5.5.0
+powershell.exe -STA -NoProfile -File .\checks\Verify-TaskbarJumpList.ps1 -ReleaseFolder release-0.5.6-signed -ExpectedVersion 0.5.6.0
 ```
 
 The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
@@ -83,8 +91,12 @@ See [installer packaging](installer/README.md) for the signed-release inputs. Pr
 
 Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Sharing, external-editor opening, and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-The 0.5.5 application has a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` records these results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
+The 0.5.6 application builds without compiler warnings or errors and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **272 signed-library checks passed**: 122 taskbar command/model/dispatch/wiring checks, 88 translation and existing-request regressions, 34 cooperative-exit checks, and 28 startup-compatibility checks. A further **35 native Windows Shell-link/property round trips** passed using objects held only in memory: no shortcut was saved, and no application entry point, recent-history API, Jump List update or association helper was called. **39 installer close source-policy checks** passed separately. `VALIDATION.txt` records the exact application hash, coverage and limits.
 
-Historically, 658 focused checks passed against signed **0.5.4**; those results and earlier scrolling suites do not verify 0.5.5. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
+Native Jump List rendering, existing-pin refresh, Windows recent-item privacy/removal and file-opening behavior, real cold/resident capture countdowns and installation/upgrade/uninstall require live acceptance. Component results and in-memory native objects do not establish those outcomes; package signatures, payload hashes and read-only installer readiness evidence are recorded separately.
+
+Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` retains those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
+
+Historically, 658 focused checks passed against signed **0.5.4**; neither those results nor the 0.5.5 and earlier suites verify 0.5.6. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
 
 An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.

@@ -1,3 +1,55 @@
+SNIP STUDIO 0.5.6 - TASKBAR JUMP LIST, 2026-11-10
+
+APPLICATION VALIDATION COMPLETE. The C#5/.NET Framework 4.8 product build
+completed without compiler warnings or errors. The exact signed application is:
+D36F1B6339DD01C15545A599FDBBA686DA62C90309E1DB3F090C7A2AC211FFBB
+File and assembly version: 0.5.6.0.
+Authenticode: Valid, timestamped Automation Forge LLC (checked 2026-11-10).
+No unsigned test launcher or compiled helper was used.
+
+272 signed-library checks passed against this version:
+-122 taskbar task models, strict startup/IPC round trips, canonical delays,
+ managed duplicate-ID/typed-dispatch fixtures, quoting/path rules, native ABI
+ metadata and cold/resident/one-shot/recent-registration call wiring.
+-88 translation replacement, raster/export preservation and existing request/
+ packet/lifetime regression checks.
+-34 cooperative installer-exit protocol/lifecycle checks.
+-28 startup compatibility checks.
+
+35 additional native Windows Shell-link/property round trips passed, covering
+all four capture actions and a quoted recent-image destination. Objects were
+held only in memory. No shortcut was saved; no application entry point,
+registry/association helper, recent-history API or Jump List update was called.
+39 installer close source-policy checks passed independently of app execution.
+Read-only Setup readiness, distribution signatures, manifest/payload comparison
+and release privacy evidence are recorded separately in the final release
+receipt; this file's inclusion in the package does not establish a live install.
+
+Historical results below apply only to their stated versions and artifact
+hashes. They are not additional current-version checks.
+
+Scope: Windows taskbar Recent images and four screenshot tasks: immediate,
+3 seconds, 5 seconds and 10 seconds. Explicit task delays are one-shot values;
+the saved timer and Remember capture delay preference remain unchanged.
+Cold launch and existing-listener forwarding use the same strict request
+parser. Recent registration follows successful raster open/save/auto-save;
+unsaved images, canceled/failed saves, PDF and video are outside that list.
+Windows owns the recent-item history and privacy controls. Shell integration
+must not select Snip Studio as the default image application or force a pin.
+
+Native design and ABI were reviewed against Microsoft's ProgID, Open With,
+SHARDAPPIDINFOLINK, ICustomDestinationList and property-store documentation.
+https://learn.microsoft.com/en-us/windows/win32/shell/fa-progids
+https://learn.microsoft.com/en-us/windows/win32/shell/how-to-include-an-application-on-the-open-with-dialog-box
+https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/ns-shlobj_core-shardappidinfolink
+
+NOT LIVE VERIFIED: native taskbar rendering, existing-pin refresh, actual
+Windows privacy/removal behavior, file association/open routing, cold-start
+and resident screenshot countdowns, desktop capture, installation/upgrade/
+uninstall and endpoint-security acceptance. Pure library and source checks
+must be reported separately from these native outcomes.
+
+HISTORICAL RELEASE RECORDS FOLLOW
 SNIP STUDIO 0.5.5 - APPROVED UPDATE CLOSE AND ZOOM FRAME GEOMETRY, 2026-11-06
 
 Signed application SHA256:

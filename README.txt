@@ -1,7 +1,7 @@
-SNIP STUDIO 0.5.5 — AUTOMATION FORGE
+SNIP STUDIO 0.5.6 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Install with "SnipStudio-0.5.5-Setup.exe", then open Snip Studio from the
+Install with "SnipStudio-0.5.6-Setup.exe", then open Snip Studio from the
 Start menu. Installation is for your Windows account, with an optional desktop
 shortcut. It does not launch the app or enable Windows startup automatically.
 The optional "Start Snip Studio at Windows sign-in" installer component is
@@ -13,6 +13,25 @@ Uninstalling keeps your screenshots, recordings, and preferences.
 For portable use, extract the ZIP and run "Snip Studio.exe". Keep the matching
 .exe.config beside it. Requires Windows 10/11 with .NET Framework 4.8.
 No account is needed. If an older or different portable copy is still running, startup now explains the conflict instead of silently opening that copy. Save your work, choose Exit Snip Studio from its tray menu, then reopen the installed app.
+
+TASKBAR RIGHT-CLICK MENU
+Open Snip Studio once, then right-click its Windows taskbar icon. The Tasks
+section offers Take a new screenshot and new screenshots in 3, 5, or 10 seconds.
+These actions can start the app when it is closed or use its existing listener.
+Take a new screenshot has no delay. Each timed action applies to that one snip;
+it does not change the clock's saved delay or Remember capture delay setting.
+Taskbar screenshot actions use Photo mode. A previous Scrolling choice returns
+to Rectangle so it cannot bypass the requested countdown.
+
+Recent lists successfully opened or saved PNG, JPG, JPEG, BMP, GIF, TIF, and
+TIFF images, including originals saved automatically after capture. Select a
+recent image to reopen it in Snip Studio. Unsaved clipboard images, canceled or
+failed saves, PDF exports, and recordings are not added to this image list.
+Windows manages the list and its privacy controls. Recent items may be hidden
+when Windows' recent-item setting is off. Windows controls which items appear;
+Snip Studio does not rebuild a separate list. Image defaults are not changed.
+Pin to taskbar, Unpin, and
+Close window are Windows commands and depend on the icon's current state.
 
 CAPTURE
 Choose Photo mode, select a capture mode, then New. Full screen lets you click one monitor to capture; All monitors captures the complete connected desktop. Rectangle, Freeform, Window, and Scrolling remain available.
@@ -209,25 +228,33 @@ YOUR DATA
 Editing, recognition, recording, and bundled translation run locally. The
 included translator does not send the text or image to a translation server.
 Sharing, opening an external editor, and the website happen when selected.
+Windows keeps recent-image paths locally for the taskbar menu, subject to its
+recent-item settings. Snip Studio does not upload or keep its own recent list.
 Preferences: %LOCALAPPDATA%\SnipStudio\preferences.xml.
 Share/editor/video working copies stay in that local application folder so
 other apps can finish reading or editing them after a dialog closes.
 Protected content may appear black. Scrolling capture is available in Photo mode > Scrolling. Select only the moving content, leaving out sidebars and fixed message boxes. Small animations are tolerated only when a unique overlap remains verifiable. Broad animation or streaming/reflowing content can still stop capture. Smaller-step retries briefly reverse only the pinned scrolling target and continue only after the previous view is verified. Finish opens a preview; Cancel discards. Review the joins and bottom before Use capture. Partial results do not confirm that the bottom was reached. Limits are three minutes, 300 scroll requests, 100 accepted frames, 30,000 pixels high and 64 million pixels.
 
 DEVELOPMENT
-Build the application without running the icon generator or checks:
+Source is beside build.ps1. Build without running helpers or checks:
 .\build.ps1 -UseExistingIcons
-The public build creates an unsigned application and has no -Check switch.
-It uses the Windows Framework C# compiler and system WinRT metadata.
-Selected synthetic checks are source-only PowerShell 5 scripts under checks/;
-invoke them separately against the matching verified signed release. They do
-not establish live desktop, device, browser or installer behavior.
-The full translator payload is supplied in the signed release. Public
-translation preparation source requires additional reviewed inputs; the
-checkout does not automatically reproduce a complete signed release.
-Icon sources and the optional regeneration tool are in assets/ and tools/.
+The optional -Check switch runs development check executables.
+The build uses the Windows Framework C# compiler and system WinRT metadata.
+Native video checks: .\checks\video\run-checks.ps1
+-LiveAudio deliberately checks actual audio devices.
+Icon sources and regeneration tool are in assets\ and tools\.
 
 An independent Automation Forge app; not affiliated with Microsoft.
 
-0.5.5 VERIFICATION STATUS
+0.5.6 VERIFICATION STATUS
+The application builds and has a Valid timestamped Automation Forge signature.
+272 signed-library checks passed, including 122 taskbar command, dispatch and
+registration-wiring checks. A further 35 in-memory native Windows Shell-link
+round trips and 39 installer source-policy checks passed. See VALIDATION.txt
+for the exact application hash and coverage. Native taskbar appearance, existing-pin
+refresh, Windows recent-item privacy behavior, real capture/countdown and
+installation/upgrade/uninstall require live acceptance; parser or library
+checks alone do not establish those outcomes.
+
+HISTORICAL 0.5.5 VERIFICATION STATUS
 590 signed-library app checks passed, including 181 deterministic wheel-frame checks and 34 cooperative-updater-exit protocol/lifecycle checks. 38 installer source-policy checks passed. The previous signed0.5.4 reproduced per-frame native scrollbar churn. These checks do not establish physical wheel feel, native close prompts, recording shutdown or full installation/upgrade/uninstall; those still need acceptance. See VALIDATION.txt for exact coverage and limits.

@@ -1,4 +1,4 @@
-param([string]$Destination = 'dist', [switch]$UseExistingIcons)
+param([switch]$Check, [string]$Destination = 'dist', [switch]$UseExistingIcons)
 $ErrorActionPreference = 'Stop'
 $compiler = Join-Path $env:WINDIR 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 if (-not (Test-Path -LiteralPath $compiler)) { throw '.NET Framework C# compiler was not found.' }
@@ -26,4 +26,31 @@ $appFile = Join-Path $outputFolder 'Snip Studio.exe'
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'app.config') -Destination ($appFile + '.config') -Force
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'README.txt') -Destination (Join-Path $outputFolder 'README.txt') -Force
+if ($Check) {
+    $checksFolder = Join-Path $PSScriptRoot 'checks'
+    $checkSources = @(Get-ChildItem -LiteralPath $checksFolder -Filter '*.cs' | ForEach-Object { $_.FullName })
+    $checkFile = Join-Path $checksFolder 'SnipStudio.Checks.exe'
+    & $compiler /nologo /target:exe /platform:anycpu /optimize+ /utf8output "/out:$checkFile" $references "/reference:$appFile" $checkSources
+    if ($LASTEXITCODE -ne 0) { throw 'Check build failed.' }
+    Copy-Item -LiteralPath $appFile -Destination (Join-Path $checksFolder 'Snip Studio.exe') -Force
+    & $checkFile
+    if ($LASTEXITCODE -ne 0) { throw 'Checks failed.' }
+    $ocrChecks = Join-Path $checksFolder 'ocr\OcrChecks.exe'
+    & $compiler /nologo /target:exe /platform:anycpu /optimize+ /utf8output "/out:$ocrChecks" $references (Join-Path $PSScriptRoot 'TextRecognition.cs') (Join-Path $checksFolder 'ocr\OcrChecks.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Text-recognition checks could not be built.' }
+    & $ocrChecks
+    if ($LASTEXITCODE -ne 0) { throw 'Text-recognition checks failed.' }
+    $snapChecks = Join-Path $checksFolder 'ocr\SnapChecks.exe'
+    & $compiler /nologo /target:exe /platform:anycpu /optimize+ /utf8output "/out:$snapChecks" $references (Join-Path $PSScriptRoot 'TextRecognition.cs') (Join-Path $PSScriptRoot 'TextSnapSelection.cs') (Join-Path $checksFolder 'ocr\SnapChecks.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'Highlight snapping checks could not be built.' }
+    & $snapChecks
+    if ($LASTEXITCODE -ne 0) { throw 'Highlight snapping checks failed.' }
+    $hdrChecks = Join-Path $checksFolder 'hdr\HdrChecks.exe'
+    & $compiler /nologo /target:exe /platform:anycpu /optimize+ /utf8output "/out:$hdrChecks" $references (Join-Path $PSScriptRoot 'HdrCaptureService.cs') (Join-Path $checksFolder 'hdr\HdrChecks.cs')
+    if ($LASTEXITCODE -ne 0) { throw 'HDR conversion checks could not be built.' }
+    & $hdrChecks
+    if ($LASTEXITCODE -ne 0) { throw 'HDR conversion checks failed.' }
+    & (Join-Path $checksFolder 'video\run-checks.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Video checks failed.' }
+}
 Write-Output "Built $appFile"

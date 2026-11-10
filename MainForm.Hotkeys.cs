@@ -180,9 +180,21 @@ namespace SnipStudio
 
         internal void CaptureFromShortcut(bool closeEmptyOnCancel)
         {
+            CaptureFromShortcut(closeEmptyOnCancel, null);
+        }
+
+        internal void CaptureFromShortcut(bool closeEmptyOnCancel, int? captureDelaySeconds)
+        {
             if (!CanStartBackgroundCapture()) return;
+            if (captureDelaySeconds.HasValue)
+            {
+                // Jump List actions always take a still image. A previous scrolling
+                // choice cannot bypass the requested countdown.
+                SetCaptureKind(false);
+                if (mode.SelectedIndex == 4) mode.SelectedIndex = 0;
+            }
             closeEmptyShortcutCapture = closeEmptyOnCancel && !Visible && !canvas.HasImage;
-            StartCapture();
+            StartCapture(captureDelaySeconds);
         }
 
         private bool TryHideToTray(FormClosingEventArgs e)

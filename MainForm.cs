@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -282,7 +282,12 @@ namespace SnipStudio
             }
         }
 
-        private async void StartCapture()
+        private void StartCapture()
+        {
+            StartCapture(null);
+        }
+
+        private async void StartCapture(int? captureDelaySeconds)
         {
             if (mode.SelectedIndex == 4) { StartScrollingCapture(); return; }
             if (!CanStartBackgroundCapture()) return;
@@ -290,7 +295,9 @@ namespace SnipStudio
             if (recordingModeSelected) SetCaptureKind(false);
             if (!preferences.MultipleWindows && !ConfirmReplace("starting a new capture")) return;
             capturePending = true;
-            int seconds = new int[] { 0, 3, 5, 10 }[Math.Max(0, delay.SelectedIndex)];
+            // The taskbar timer is a one-shot override, independent of the saved
+            // timer and its Remember setting. Do not assign the delay control.
+            int seconds = captureDelaySeconds ?? new int[] { 0, 3, 5, 10 }[Math.Max(0, delay.SelectedIndex)];
             CaptureMode captureMode = (CaptureMode)mode.SelectedIndex;
             newButton.Enabled = false;
             FormWindowState previousState = WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState;
@@ -403,6 +410,7 @@ namespace SnipStudio
                 canvas.MarkSaved();
                 UpdateDocumentState();
                 SetStatus("Opened " + Path.GetFileName(path) + ". Edits are kept until you save.");
+                TaskbarJumpList.RecordRecentFile(currentPath);
             }
             catch (Exception ex) { ShowFailure("The image could not be opened", ex); }
         }
@@ -494,6 +502,8 @@ namespace SnipStudio
                 canvas.MarkSaved();
                 UpdateDocumentState();
                 SetStatus("Saved " + Path.GetFileName(path));
+                // PDF exports are not editable image documents on a later launch.
+                if (extension != ".pdf") TaskbarJumpList.RecordRecentFile(currentPath);
                 return true;
             }
             catch (Exception ex) { ShowFailure("The snip could not be saved. Your snip is still open", ex); return false; }
@@ -645,6 +655,7 @@ namespace SnipStudio
             return String.Join("\r\n\r\n", new string[]
             {
                 "CAPTURE\r\nChoose Rectangle, Freeform, Window, Full screen, Scrolling, or All monitors, then New snip. Drag a region across connected monitors when needed. Full screen lets you click the monitor to capture. All monitors captures the complete connected desktop. Use a delay to prepare menus or tooltips. Escape or right-click cancels the selection.\r\n\r\nWindow mode captures the visible screen area inside the selected window, including anything covering it. Protected content may appear black.",
+                "TASKBAR RIGHT-CLICK MENU\r\nRight-click Snip Studio on the Windows taskbar for Take a new screenshot or a new screenshot in 3, 5, or 10 seconds. These actions also work when Snip Studio is closed. The selected taskbar delay applies to that capture only; your saved timer choice is kept. Recent saved or opened snips reopen in Snip Studio. Windows manages this list and its privacy setting: Settings > Personalization > Start > Show recently opened items in Start, Jump Lists, and File Explorer. Unsaved snips are not added. Windows supplies Pin to taskbar and Close window; use More > Exit Snip Studio to stop the background shortcut listener.",
                 "ANNOTATE AND MOVE\r\nUse Pen, Highlight, Arrow, Box, or Text to make your point. The pointer matches the active drawing tool. Color and stroke width apply to new annotations. Choose Move, click any annotation, then drag to reposition it, or right-click an annotation to select it and switch to Move. Move selects annotations and removal selection boxes; clicking blank space clears the selection. Arrow keys nudge a selected annotation; Delete removes it. Use the middle mouse button or scrollbars to pan the image.\r\n\r\nClick the Exact color square in the palette for a honeycomb picker with RGB, hex, and brightness controls. Cancel keeps the previous color. Eraser removes annotations without changing the captured pixels. Crop keeps the area you drag across. Undo and Redo let you recover edits and crops. Save and Copy image export at the image's actual resolution, regardless of zoom.",
                 "SMART HIGHLIGHT\r\nWith Highlight selected, leave Snap to text checked to highlight detected words and lines. Text recognition runs locally. The readiness message shows when recognition is pending, ready, or unavailable. Hold Shift while dragging to draw a freehand highlight, or turn Snap to text off.",
                 "TEXT NOTES AND ARROWS\r\nText has its own size selector. Double-click an existing note in Move/Text mode, or select it and press F2, for font family and size, bold, italic, underline, strikeout, colors, highlighting, alignment, lists, indentation, spacing, and scripts. Formatting applies to selected words or the insertion point. Drag the side handles to make a note narrower; its height grows as words wrap. Keep your note inside the screenshot edges. In Move, select an arrow and drag its tip or tail handle to rotate it and change its length.",
@@ -659,7 +670,7 @@ namespace SnipStudio
                 "KEYBOARD\r\nF11 — Toggle full-screen editor on this monitor; Escape returns when no canvas action needs it\r\nCtrl+N — New capture in the selected Photo/Video mode\r\nCtrl+Alt+S — Capture from another app while Snip Studio is open\r\nCtrl+O — Open an image\r\nCtrl+V — Paste an image\r\nCtrl+C — Copy image, or selected words in text-overlay mode\r\nCtrl+Shift+C — Toggle text overlay\r\nCtrl+S — Save\r\nCtrl+Shift+S — Save as\r\nCtrl+P — Print\r\nCtrl+Z — Undo\r\nCtrl+Y / Ctrl+Shift+Z — Redo\r\nCtrl+mouse wheel — Zoom\r\nF1 — Help",
                 hotkeyRegistered ? "The global capture shortcut is ready." : "The global shortcut could not be registered. Another app may already use it. Use New snip or Ctrl+N instead.",
                 "SETTINGS AND YOUR FILES\r\nUse Settings to choose automatic copies and saves, edit prompts, save folders, capture borders, appearance, and recording audio defaults. Closing a window closes that snip; the editor releases its snip when closed. Keep capture shortcuts ready after closing is on by default: a small tray listener keeps Print Screen and Ctrl+Alt+S available. Exit Snip Studio stops it. Start with Windows is optional and keeps capture available after sign-in. Windows can reserve Print Screen; use the Windows keyboard settings link to review that assignment. Keep running in the notification area is an optional Settings choice that makes Close hide the window instead. Annotation toolbar position in Settings chooses Top, Right, Bottom or Left. Settings stays independent so other snips remain usable while it is open. Recognition and editing run on this computer. Your screenshots and recordings are not uploaded by Snip Studio.",
-                "SNIP STUDIO 0.5.5\r\nCreated by Automation Forge. Open About for app information and automation-forge.com. Snip Studio is an independent app and is not affiliated with Microsoft. Choose Scrolling mode for long vertical content. Select only the scrolling content, leaving out sidebars and fixed message boxes. Let capture finish, then review the joins and bottom before choosing Use capture. Pause streaming text or videos when possible. Partial captures may not reach the bottom. Finish opens the accepted portion; Cancel or Escape discards it. Unsupported, animated, covered or unalignable content stops capture for review."
+                "SNIP STUDIO 0.5.6\r\nCreated by Automation Forge. Open About for app information and automation-forge.com. Snip Studio is an independent app and is not affiliated with Microsoft. Choose Scrolling mode for long vertical content. Select only the scrolling content, leaving out sidebars and fixed message boxes. Let capture finish, then review the joins and bottom before choosing Use capture. Pause streaming text or videos when possible. Partial captures may not reach the bottom. Finish opens the accepted portion; Cancel or Escape discards it. Unsupported, animated, covered or unalignable content stops capture for review."
             });
         }
 

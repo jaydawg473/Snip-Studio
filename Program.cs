@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.5.5.0")]
-[assembly: AssemblyFileVersion("0.5.5.0")]
+[assembly: AssemblyVersion("0.5.6.0")]
+[assembly: AssemblyFileVersion("0.5.6.0")]
 
 namespace SnipStudio
 {
@@ -63,6 +63,13 @@ namespace SnipStudio
         [STAThread]
         private static void Main(string[] args)
         {
+            ShortcutStartupRequest startupRequest;
+            if (!ShortcutStartupRequest.TryFromArguments(args, out startupRequest))
+            {
+                MessageBox.Show("This shortcut could not be opened. Open Snip Studio normally, choose a taskbar capture action, or open a supported image file.",
+                    "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
             // Reuse this user's existing editor/listener, including when all editor
             // windows have closed. A second process must not compete for hotkeys.
             string startupProblem;
@@ -95,21 +102,26 @@ namespace SnipStudio
                             "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
+                TaskbarJumpList.Initialize();
                 Preferences preferences = Preferences.Load();
                 using (StudioApplicationContext context = new StudioApplicationContext(shortcuts, preferences))
                 {
                     applicationContext = context;
                     try
                     {
-                        bool backgroundRequested = args.Length > 0 && (String.Equals(args[0], "--background", StringComparison.OrdinalIgnoreCase) || String.Equals(args[0], "--shortcut-listener", StringComparison.OrdinalIgnoreCase));
-                        bool captureRequested = args.Length > 0 && String.Equals(args[0], "--capture", StringComparison.OrdinalIgnoreCase);
+                        bool backgroundRequested = startupRequest.Kind == ShortcutStartupRequest.RequestKind.Background;
+                        bool captureRequested = startupRequest.Kind == ShortcutStartupRequest.RequestKind.Capture;
                         if (backgroundRequested && preferences.KeepShortcutsAfterClose && !preferences.KeepRunningInTray)
                             context.StartIdleListener();
-                        else if (captureRequested) context.CaptureFromShortcut();
+                        else if (captureRequested)
+                        {
+                            if (startupRequest.CaptureDelaySeconds.HasValue) context.CaptureFromTaskbar(startupRequest.CaptureDelaySeconds.Value);
+                            else context.CaptureFromShortcut();
+                        }
                         else
                         {
                             bool background = backgroundRequested && preferences.KeepRunningInTray;
-                            string imagePath = !backgroundRequested && args.Length > 0 ? args[0] : null;
+                            string imagePath = backgroundRequested ? null : startupRequest.ImagePath;
                             OpenWindow(new MainForm(imagePath), !background);
                         }
                         Application.Run(context);
@@ -137,6 +149,7 @@ namespace SnipStudio
             preferences = initialPreferences.Clone();
             shortcuts.OpenRequested += OpenFromShortcut;
             shortcuts.CaptureRequested += CaptureFromShortcut;
+            shortcuts.TaskCaptureRequested += CaptureFromTaskbar;
             shortcuts.ExitRequested += RequestGracefulExit;
         }
 
@@ -160,16 +173,26 @@ namespace SnipStudio
 
         internal void CaptureFromShortcut()
         {
+            CaptureFromShortcut(null);
+        }
+
+        internal void CaptureFromTaskbar(int seconds)
+        {
+            CaptureFromShortcut(seconds);
+        }
+
+        private void CaptureFromShortcut(int? captureDelaySeconds)
+        {
             if (exiting || exitRequested) return;
             foreach (MainForm form in windows)
-                if (!form.IsDisposed) { form.CaptureFromShortcut(); return; }
+                if (!form.IsDisposed) { form.CaptureFromShortcut(false, captureDelaySeconds); return; }
             shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
             MainForm created = null;
             try
             {
                 created = new MainForm(null);
                 OpenWindow(created, false);
-                created.BeginInvoke((MethodInvoker)delegate { if (!created.IsDisposed) created.CaptureFromShortcut(true); });
+                created.BeginInvoke((MethodInvoker)delegate { if (!created.IsDisposed) created.CaptureFromShortcut(true, captureDelaySeconds); });
             }
             catch
             {
@@ -341,6 +364,7 @@ namespace SnipStudio
                 auxiliaryWindows.Clear();
                 shortcuts.OpenRequested -= OpenFromShortcut;
                 shortcuts.CaptureRequested -= CaptureFromShortcut;
+                shortcuts.TaskCaptureRequested -= CaptureFromTaskbar;
                 shortcuts.ExitRequested -= RequestGracefulExit;
                 shortcuts.SetIdleShortcuts(false, preferences.UsePrintScreen);
             }
