@@ -1,3 +1,73 @@
+SNIP STUDIO 0.5.7 - TASKBAR REFRESH AND UPDATE NOTIFICATIONS, 2026-11-10
+
+SIGNED APPLICATION COMPONENT VERIFICATION RECORDED.
+Final signed application SHA256:
+2D797B74A7BA45356B6E81AEB76EDE72E963EECCA48EE32BC26312462BEE3DF3
+File and assembly version: 0.5.7.0.
+Authenticode: Valid, timestamped Automation Forge LLC (checked 2026-11-10).
+
+418 signed-library checks passed against this final application:
+-122 Jump List task/request/model/dispatch/wiring checks.
+-30 asynchronous taskbar refresh checks.
+-116 update checker checks.
+-88 translation replacement and existing request/lifetime regressions.
+-34 cooperative installer-exit protocol/lifecycle checks.
+-28 startup compatibility checks.
+73 installer source-policy checks passed separately. Historical results below
+apply only to their named versions and exact bytes, not additional current checks.
+
+Final Setup signature, portable/installer manifest and payload comparison,
+read-only readiness and privacy evidence are recorded separately in the release
+receipt. Including this file in a package does not establish a live install.
+
+Scope: add Refresh taskbar menu to More and both notification-area menu modes,
+with automatic refresh at startup. Shell work remains on a bounded background
+STA worker. Concurrent requests share queued generations and complete with the
+corresponding registration result and warnings, rather than a premature claim
+that Windows has redrawn the taskbar.
+
+An actual application-owned Start menu shortcut reproduced STG_ACCESS_DENIED
+after a read-only IPersistFile.Load. Loading the same shortcut with mode 2
+(STGM_READWRITE) succeeded, and its AppUserModelID was observed correct. The
+source now requests read/write access before updating matching shortcut
+metadata. This scoped live observation does not verify every desktop/pinned
+shortcut or native taskbar-cache response.
+
+Refresh is limited to shortcuts whose target is this exact application copy.
+It does not force pinning/unpinning or select a default image application.
+Changed shortcut items and their parent directories receive Shell change
+notifications with asynchronous flush flags; visual cache acceptance remains
+unverified. No shortcut target or argument is replaced merely to repair identity.
+
+UPDATE NOTIFICATION SCOPE: automatic checks default On and run at app opening,
+at most once a day. Settings can disable them; More and both notification-area
+menu modes offer manual checks. The service uses the fixed official GitHub
+release endpoint and validates versions and installer URLs. Requests include
+the app version rather than screenshots, recognized text, preferences or user
+identity. Download is an explicit browser action; no silent installer download,
+execution or installation is performed. Cooldowns, bounded responses/timeouts,
+rate-limit failures and unavailable states are handled separately from success.
+
+NATIVE APPROVED CLOSE DIAGNOSTIC: PASSED ON A SIGNED CANDIDATE.
+Candidate installer SHA256:
+C0C59FCBCD173F1E89E037F3A15EDD5DCAE98A7CF290CC405B2CD1F8FD1F972C
+This 0.5.7.0 candidate contained an older application payload. In a user-approved,
+interactive CHECKCLOSE run, the installed 0.5.6 application exited; diagnostic
+exit was 0. Its installed executable was unchanged, no installation occurred,
+and no forced termination was used. The local approved-close-test.json records
+the observation. This verifies that specific candidate/protocol/installed-copy
+interaction. It does not establish the final installer's full upgrade behavior,
+all save-cancel or recording shutdown cases, or the cause of the user's earlier
+reported 0.5.5 approval/tray-stays-open failure. No root-cause fix is claimed.
+
+NOT LIVE VERIFIED: immediate native taskbar redraw, all existing pins and
+monitor/DPI layouts, Windows recent-item privacy/removal/open routing, full
+production-installer close/save-cancel/recording shutdown, browser download and
+new-release notification acceptance, full installation/upgrade/uninstall and
+endpoint-security acceptance. Component, metadata or offscreen checks and the
+specific diagnostic above must not be presented as proof of these outcomes.
+
+HISTORICAL RELEASE RECORDS FOLLOW
 SNIP STUDIO 0.5.6 - TASKBAR JUMP LIST, 2026-11-10
 
 APPLICATION VALIDATION COMPLETE. The C#5/.NET Framework 4.8 product build

@@ -62,6 +62,7 @@ namespace SnipStudio
         private SettingsToggle hideTaskbars, keepPrimaryTaskbar, rememberCaptureDelay;
         private SettingsToggle recordingCopy, recordingAutoSave, recordingAskSave, defaultMic, defaultSystem;
         private SettingsToggle compactStart, resizeToSnip, showTooltips, requireCtrlWheel;
+        private SettingsToggle autoCheckForUpdates;
         private SettingsToggle usePrintScreen, keepShortcutsAfterClose, keepRunningInTray, startupWithWindows;
 
         internal bool CaptureRestoreWithoutActivation { get; set; }
@@ -222,6 +223,10 @@ namespace SnipStudio
             requireCtrlWheel = AddToggle(appearance, "Hold Ctrl to zoom with the mouse wheel", "On: Ctrl + wheel zooms and the wheel alone scrolls. Off: the wheel alone zooms. Both modes zoom toward your pointer.");
             compactStart = AddToggle(appearance, "Start in a compact window", "Open with a small capture workspace instead of a large empty canvas.");
             resizeToSnip = AddToggle(appearance, "Resize the window to each snip", "Adjust the preview window to the captured image while keeping it within the screen.");
+
+            TableLayoutPanel updates = Card("Updates", "Get notified when a newer Snip Studio release is available.");
+            autoCheckForUpdates = AddToggle(updates, "Check for updates automatically", "Check the official GitHub releases when you open Snip Studio, at most once a day. On by default.");
+            AddBody(updates, "Update requests include the app version. Your captures and settings are not sent. Use More > Check for updates at any time; choose Download when you want the installer.", true);
 
             TableLayoutPanel editor = Card("External editor", "Send a copy of your snip to the editing app you prefer.");
             AddExternalEditor(editor);
@@ -1029,6 +1034,7 @@ namespace SnipStudio
             UpdateAudioChoiceStatus();
             compactStart.Checked = edited.StartCompact;
             showTooltips.Checked = edited.ShowTooltips;
+            autoCheckForUpdates.Checked = edited.AutoCheckForUpdates;
             requireCtrlWheel.Checked = edited.RequireCtrlForWheelZoom;
             resizeToSnip.Checked = edited.ResizeToSnip;
             usePrintScreen.Checked = edited.UsePrintScreen;
@@ -1292,6 +1298,7 @@ namespace SnipStudio
                 edited.RememberCaptureDelay = rememberCaptureDelay.Checked;
                 edited.StartCompact = compactStart.Checked;
                 edited.ShowTooltips = showTooltips.Checked;
+                edited.AutoCheckForUpdates = autoCheckForUpdates.Checked;
                 edited.RequireCtrlForWheelZoom = requireCtrlWheel.Checked;
                 edited.ResizeToSnip = resizeToSnip.Checked;
                 edited.UsePrintScreen = usePrintScreen.Checked;

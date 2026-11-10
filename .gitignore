@@ -17,8 +17,11 @@ checks/*
 !checks/Verify-RemovalSelectionMove.ps1
 !checks/Verify-ZoomFrames.ps1
 !checks/Verify-InstallerExit.ps1
+!checks/Verify-InstallerPreflight.ps1
 !checks/Verify-InstallerClosePolicy.ps1
 !checks/Verify-TaskbarJumpList.ps1
+!checks/Verify-TaskbarRefresh.ps1
+!checks/Verify-UpdateChecker.ps1
 !checks/Verify-ScrollingSession.ps1
 !checks/Verify-ScrollingAnimation.ps1
 !checks/Verify-ScrollingCapture.ps1

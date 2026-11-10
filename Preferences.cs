@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Globalization;
 using System.IO;
 using System.Reflection;
 using System.Xml;
@@ -42,6 +43,8 @@ namespace SnipStudio
         public string Theme = "Dark";
         public string AnnotationToolbarPosition = "Top";
         public bool ShowTooltips = true;
+        public bool AutoCheckForUpdates = true;
+        public string LastUpdateCheckUtc = "";
         public bool RequireCtrlForWheelZoom = true;
         public string TranslationServerUrl = "http://127.0.0.1:5000/";
         public string TranslationTargetLanguage = "en";
@@ -60,6 +63,8 @@ namespace SnipStudio
         // Retain settings written by another compatible version rather than silently
         // dropping them when this version changes one of its own preferences.
         [XmlAnyElement] public XmlElement[] AdditionalSettings;
+        private static readonly object fileGate = new object();
+        private static DateTime latestUpdateCheckUtc = DateTime.MinValue;
 
         private static string DefaultScreenshotFolder()
         {
@@ -132,6 +137,7 @@ namespace SnipStudio
             if (TranslationSourceLanguage == null || TranslationSourceLanguage.Length > 32) TranslationSourceLanguage = "";
             if (RecentInkColors == null) RecentInkColors = new int[0];
             if (RecentInkColors.Length > 8) Array.Resize(ref RecentInkColors, 8);
+            if (LastUpdateCheckUtc == null) LastUpdateCheckUtc = "";
         }
 
         private static string FileName
@@ -140,6 +146,11 @@ namespace SnipStudio
         }
 
         public static Preferences Load()
+        {
+            lock (fileGate) return LoadCore();
+        }
+
+        private static Preferences LoadCore()
         {
             try
             {
@@ -157,6 +168,25 @@ namespace SnipStudio
 
         public void Save()
         {
+            lock (fileGate)
+            {
+                // A window or Settings draft can predate an asynchronous check.
+                // Merge only this metadata so saving it cannot move the date back.
+                DateTime nowUtc = DateTime.UtcNow;
+                DateTime checkedUtc = GetLastUpdateCheckUtc();
+                if (checkedUtc > nowUtc) checkedUtc = DateTime.MinValue;
+                if (latestUpdateCheckUtc > nowUtc) latestUpdateCheckUtc = DateTime.MinValue;
+                if (latestUpdateCheckUtc > checkedUtc) checkedUtc = latestUpdateCheckUtc;
+                DateTime diskUtc = ReadUpdateCheckUtc(FileName);
+                if (diskUtc > nowUtc) diskUtc = DateTime.MinValue;
+                if (diskUtc > checkedUtc) checkedUtc = diskUtc;
+                LastUpdateCheckUtc = checkedUtc == DateTime.MinValue ? "" : FormatUpdateCheckUtc(checkedUtc);
+                SaveCore();
+            }
+        }
+
+        private void SaveCore()
+        {
             string path = FileName;
             string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -168,6 +198,87 @@ namespace SnipStudio
                 else File.Move(temporary, path);
             }
             finally { if (File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
+        }
+
+        internal DateTime GetLastUpdateCheckUtc() { return ParseUpdateCheckUtc(LastUpdateCheckUtc); }
+
+        internal static DateTime ParseUpdateCheckUtc(string value)
+        {
+            DateTime parsed;
+            if (String.IsNullOrWhiteSpace(value) || !DateTime.TryParseExact(value, "o", CultureInfo.InvariantCulture,
+                DateTimeStyles.RoundtripKind, out parsed)) return DateTime.MinValue;
+            return parsed.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(parsed, DateTimeKind.Utc) : parsed.ToUniversalTime();
+        }
+
+        private static string FormatUpdateCheckUtc(DateTime value)
+        {
+            DateTime utc = value.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(value, DateTimeKind.Utc) : value.ToUniversalTime();
+            return utc.ToString("o", CultureInfo.InvariantCulture);
+        }
+
+        private static XmlDocument ReadPreferencesDocument(string path)
+        {
+            XmlDocument document = new XmlDocument();
+            document.XmlResolver = null;
+            document.PreserveWhitespace = true;
+            XmlReaderSettings settings = new XmlReaderSettings { DtdProcessing = DtdProcessing.Prohibit, XmlResolver = null };
+            using (XmlReader reader = XmlReader.Create(path, settings)) document.Load(reader);
+            if (document.DocumentElement == null || document.DocumentElement.Name != "Preferences")
+                throw new InvalidDataException("The preference document is unavailable.");
+            return document;
+        }
+
+        private static DateTime ReadUpdateCheckUtc(string path)
+        {
+            try
+            {
+                if (!File.Exists(path)) return DateTime.MinValue;
+                XmlDocument document = ReadPreferencesDocument(path);
+                XmlNode node = document.DocumentElement.SelectSingleNode("LastUpdateCheckUtc");
+                return node == null ? DateTime.MinValue : ParseUpdateCheckUtc(node.InnerText);
+            }
+            catch (Exception) { return DateTime.MinValue; }
+        }
+
+        internal static void RecordUpdateCheckAttempt(DateTime checkedUtc)
+        {
+            if (checkedUtc == DateTime.MinValue) return;
+            lock (fileGate)
+            {
+                DateTime nowUtc = DateTime.UtcNow;
+                DateTime normalized = ParseUpdateCheckUtc(FormatUpdateCheckUtc(checkedUtc));
+                // Recover after a clock correction instead of retaining a future
+                // value that would make every reopened process check again.
+                if (normalized > nowUtc) normalized = nowUtc;
+                if (latestUpdateCheckUtc > nowUtc) latestUpdateCheckUtc = DateTime.MinValue;
+                if (normalized > latestUpdateCheckUtc) latestUpdateCheckUtc = normalized;
+                string path = FileName;
+                if (!File.Exists(path))
+                {
+                    new Preferences { LastUpdateCheckUtc = FormatUpdateCheckUtc(latestUpdateCheckUtc) }.SaveCore();
+                    return;
+                }
+                // Update only the timestamp, retaining saved settings and unknown
+                // compatible fields instead of saving an older editor snapshot.
+                XmlDocument document = ReadPreferencesDocument(path);
+                XmlElement node = document.DocumentElement.SelectSingleNode("LastUpdateCheckUtc") as XmlElement;
+                DateTime diskUtc = node == null ? DateTime.MinValue : ParseUpdateCheckUtc(node.InnerText);
+                if (diskUtc > nowUtc) diskUtc = DateTime.MinValue;
+                if (diskUtc >= latestUpdateCheckUtc) return;
+                if (node == null)
+                {
+                    node = document.CreateElement("LastUpdateCheckUtc");
+                    document.DocumentElement.AppendChild(node);
+                }
+                node.InnerText = FormatUpdateCheckUtc(latestUpdateCheckUtc);
+                string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    using (XmlWriter writer = XmlWriter.Create(temporary, new XmlWriterSettings { Indent = true })) document.Save(writer);
+                    File.Replace(temporary, path, null);
+                }
+                finally { if (File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
+            }
         }
     }
 }

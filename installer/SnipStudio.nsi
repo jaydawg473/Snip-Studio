@@ -5,14 +5,16 @@
 !include "FileFunc.nsh"
 
 Var PreflightCheckOnly
+Var PreflightProbeOnly
 Var PreflightCloseApproved
 Var InstalledCloseResult
 Var InstalledCloseDetail
 Var InstalledClosePath
 Var InstalledCloseScanCount
+Var InstalledProbeExitCode
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.6-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.7-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -28,7 +30,7 @@ Var InstalledCloseScanCount
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.5.6-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-0.5.7-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -38,10 +40,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.5.6.0"
+VIProductVersion "0.5.7.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.6.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.5.6.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.7.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.5.7.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -65,6 +67,8 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC
 Function .onInit
   SetShellVarContext current
   StrCpy $PreflightCheckOnly 0
+  StrCpy $PreflightProbeOnly 0
+  StrCpy $PreflightCloseApproved 0
   ${GetParameters} $0
   ClearErrors
   ${GetOptions} $0 "/CHECKREADY" $1
@@ -75,6 +79,31 @@ Function .onInit
     StrCpy $PreflightCheckOnly 1
     Call CheckInstalledApplication
     SetErrorLevel 0
+    Quit
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/CHECKBROKER" $1
+  ${IfNot} ${Errors}
+    ; Read-only native diagnostic. It shares discovery and the capability probe
+    ; with interactive updates, never grants consent and always exits before UI
+    ; or an installation section. /CHECKREADY above retains precedence.
+    StrCpy $PreflightProbeOnly 1
+    Call RequestInstalledApplicationExit
+    SetErrorLevel $InstalledProbeExitCode
+    Quit
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $0 "/CHECKCLOSE" $1
+  ${IfNot} ${Errors}
+    ; Interactive close-only acceptance check. Use the exact normal file-use
+    ; query and Yes/No/Cancel prompt; no close approval is granted by this mode.
+    ; Both completion and refusal exit before wizard or installation sections.
+    IfSilent init_check_close_silent
+    Call CheckInstalledApplication
+    SetErrorLevel 0
+    Quit
+init_check_close_silent:
+    SetErrorLevel 3
     Quit
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
@@ -98,6 +127,7 @@ FunctionEnd
 Function ${Prefix}RequestInstalledApplicationExit
   System::Store "s"
   StrCpy $InstalledCloseResult 0
+  StrCpy $InstalledProbeExitCode 20 ; No matching broker caption found.
   StrCpy $InstalledCloseDetail "A running Snip Studio from this installation could not be identified. No other program was closed."
   StrCpy $3 0 ; Owned process handle.
   StrCpy $7 0 ; Owned GetProcessTimes buffer.
@@ -105,8 +135,10 @@ Function ${Prefix}RequestInstalledApplicationExit
   StrCpy $R1 0 ; Owned Restart Manager key buffer.
   StrCpy $R3 0 ; Whether the separate process-only RM session started.
   StrCmp $PreflightCheckOnly 1 close_done
+  StrCmp $PreflightProbeOnly 1 close_discovery
   IfSilent close_done
   StrCmp $PreflightCloseApproved 1 0 close_done
+close_discovery:
   GetFullPathName $InstalledClosePath "$INSTDIR\Snip Studio.exe"
   StrCpy $InstalledCloseScanCount 0
   StrCpy $0 0
@@ -115,26 +147,30 @@ close_find_broker:
   ; Message-only brokers are on this desktop. Bound discovery rather than
   ; enumerating/closing arbitrary same-named executables or other sessions.
   IntOp $InstalledCloseScanCount $InstalledCloseScanCount + 1
-  IntCmp $InstalledCloseScanCount 512 close_done 0 close_done
+  IntCmp $InstalledCloseScanCount 512 close_find_limit 0 close_find_limit
   System::Call '$SYSDIR\user32.dll::FindWindowExW(p -3, p r0, p 0, p 0) p.r0'
   StrCmp $0 0 close_done
-  StrCmp $0 "error" close_done
+  StrCmp $0 "error" close_find_error
   System::Call '$SYSDIR\user32.dll::GetWindowTextW(p r0, w .r1, i ${NSIS_MAX_STRLEN}) i.r4'
   StrLen $4 "AutomationForge.SnipStudio.ShortcutHost.v1."
   StrCpy $1 $1 $4
   StrCmp $1 "AutomationForge.SnipStudio.ShortcutHost.v1." 0 close_find_broker
+  StrCpy $InstalledProbeExitCode 22 ; Caption matched, PID unavailable.
   System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 r2) i.r4'
   StrCmp $4 0 close_find_broker
   StrCmp $4 "error" close_find_broker
   StrCmp $2 0 close_find_broker
+  StrCpy $InstalledProbeExitCode 23 ; Cannot open/query the identified process.
   ; QUERY_LIMITED_INFORMATION | SYNCHRONIZE. No terminate or write access.
   System::Call '$SYSDIR\kernel32.dll::OpenProcess(i 0x101000, i 0, i r2) p.r3'
   StrCmp $3 0 close_find_broker
   StrCmp $3 "error" close_find_broker
   System::Call '$SYSDIR\kernel32.dll::QueryFullProcessImageNameW(p r3, i 0, w .r1, *i ${NSIS_MAX_STRLEN} r6) i.r4'
   StrCmp $4 1 0 close_skip_process
+  StrCpy $InstalledProbeExitCode 24 ; Queried executable differs from INSTDIR.
   ; NSIS StrCmp is case-insensitive, like ordinary Windows executable paths.
   StrCmp $1 $InstalledClosePath 0 close_skip_process
+  StrCpy $InstalledProbeExitCode 25 ; Process exited or broker ownership changed.
   System::Call '$SYSDIR\kernel32.dll::GetExitCodeProcess(p r3, *i 0 r5) i.r4'
   StrCmp $4 1 0 close_done
   StrCmp $5 259 0 close_done ; STILL_ACTIVE
@@ -145,15 +181,36 @@ close_find_broker:
 
   ; Probe support before sending a close request. The probe does not queue
   ; an exit. An unresponsive/uncertain probe never falls back to another close.
+  StrCpy $InstalledProbeExitCode 26 ; The fixed message could not be registered.
   System::Call '$SYSDIR\user32.dll::RegisterWindowMessageW(w "AutomationForge.SnipStudio.RequestInstallerExit.v1") i.R4'
   StrCmp $R4 0 close_done
   StrCmp $R4 "error" close_done
+  StrCpy $InstalledProbeExitCode 27 ; Capability delivery failed or timed out.
   System::Call '$SYSDIR\user32.dll::SendMessageTimeoutW(p r0, i R4, p 0x5355, p 1, i 0x23, i 1000, *p 0 R8) p.R7'
   StrCmp $R7 0 close_probe_failed
   StrCmp $R7 "error" close_probe_failed
+  StrCpy $InstalledProbeExitCode 28 ; Delivered, but unsupported/nonmatching ACK.
+  StrCmp $PreflightProbeOnly 1 close_probe_only_result
   StrCmp $R8 0x5355 close_cooperative
   StrCmp $R8 21333 close_cooperative
   Goto close_legacy
+
+close_find_error:
+  StrCpy $InstalledProbeExitCode 21
+  Goto close_done
+
+close_find_limit:
+  StrCpy $InstalledProbeExitCode 29
+  Goto close_done
+
+close_probe_only_result:
+  ; This is the only post-probe diagnostic path. It never enters a close,
+  ; foreground, legacy shutdown or wait path, regardless of the ACK value.
+  StrCmp $R8 0x5355 close_probe_only_ack
+  StrCmp $R8 21333 close_probe_only_ack close_done
+close_probe_only_ack:
+  StrCpy $InstalledProbeExitCode 0
+  Goto close_done
 
 close_skip_process:
   System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
@@ -166,6 +223,8 @@ close_probe_failed:
   Goto close_done
 
 close_cooperative:
+  StrCmp $PreflightProbeOnly 1 close_done
+  StrCmp $PreflightCloseApproved 1 0 close_done
   ; Hold the process handle across both requests, and pin the broker HWND's
   ; process again so a destroyed/reused window cannot receive the close.
   System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 R6) i.R7'
@@ -189,6 +248,8 @@ close_cooperative_accepted:
   Goto close_wait
 
 close_legacy:
+  StrCmp $PreflightProbeOnly 1 close_done
+  StrCmp $PreflightCloseApproved 1 0 close_done
   ; Older releases do not understand the app's graceful-exit protocol. Use
   ; a NEW RM session containing only this validated PID and creation time.
   ; Never register files/services here, and never use RmForceShutdown.
@@ -227,6 +288,8 @@ close_legacy:
   StrCpy $InstalledCloseResult 2
 
 close_wait:
+  StrCmp $PreflightProbeOnly 1 close_done
+  StrCmp $PreflightCloseApproved 1 0 close_done
   ; Poll for at most 15 seconds after the request/API call returns. Windows
   ; controls any preceding RmShutdown duration. The final file-use query is
   ; authoritative even after the process exits.
@@ -410,7 +473,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.6"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.7"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"
@@ -445,6 +508,37 @@ LangString DESC_StartupShortcuts ${LANG_ENGLISH} "Start Snip Studio when you sig
 Function un.onInit
   SetShellVarContext current
   StrCpy $PreflightCheckOnly 0
+  StrCpy $PreflightProbeOnly 0
+  StrCpy $PreflightCloseApproved 0
+  ${un.GetParameters} $0
+  ClearErrors
+  ${un.GetOptions} $0 "/CHECKREADY" $1
+  ${IfNot} ${Errors}
+    StrCpy $PreflightCheckOnly 1
+    Call un.CheckInstalledApplication
+    SetErrorLevel 0
+    Quit
+  ${EndIf}
+  ClearErrors
+  ${un.GetOptions} $0 "/CHECKBROKER" $1
+  ${IfNot} ${Errors}
+    StrCpy $PreflightProbeOnly 1
+    Call un.RequestInstalledApplicationExit
+    SetErrorLevel $InstalledProbeExitCode
+    Quit
+  ${EndIf}
+  ClearErrors
+  ${un.GetOptions} $0 "/CHECKCLOSE" $1
+  ${IfNot} ${Errors}
+    IfSilent un_init_check_close_silent
+    Call un.CheckInstalledApplication
+    SetErrorLevel 0
+    Quit
+un_init_check_close_silent:
+    SetErrorLevel 3
+    Quit
+  ${EndIf}
+  ClearErrors
 FunctionEnd
 
 Function un.RemoveImageFileRegistration

@@ -1,6 +1,6 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.5.6
+# Snip Studio 0.5.7
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
@@ -32,6 +32,14 @@ Open Snip Studio once, then right-click its Windows taskbar icon. **Tasks** offe
 **Recent** contains successfully opened or saved PNG, JPG, JPEG, BMP, GIF, TIF, and TIFF images, including automatically saved originals. Choose an entry to reopen the image in Snip Studio. Unsaved clipboard images, canceled or failed saves, PDF exports, and recordings are not added to this image list. Windows owns the history, removed entries and recent-item privacy setting; the app does not keep a separate recent-file database or change the default image application. Windows also supplies **Pin/Unpin** and **Close window** according to the taskbar icon's state.
 
 Native Jump List appearance, existing-pin refresh and Windows recent-item behavior require live acceptance; component checks alone do not establish those outcomes.
+
+If the menu is missing or stale, choose **More → Refresh taskbar menu**, or use the same action in either notification-area menu mode. Startup also refreshes registration and repairs the identity on Start menu, desktop and pinned shortcuts whose target is this exact application copy. Refresh runs in the background, combines concurrent requests and reports the completed attempt or warnings. It does not force pinning/unpinning or choose a default image application. Windows controls its taskbar cache; a completed registration attempt is not proof of an immediate redraw.
+
+## Update notifications
+
+**Check for updates automatically** is **On by default**. The app checks the official GitHub releases in the background when it opens, at most once a day. Turn it off under **Settings → Updates**. **More → Check for updates** and the notification-area menus offer a manual check; short cooldowns and server rate limits still apply.
+
+When a newer version is available, choose **Download** or **Download update** to open its official installer URL in your browser. Snip Studio does not silently download, install or run an update. Requests include the app version, not captures, recognized text, preferences or user identity. A failed check reports an unavailable state rather than claiming that the app is up to date.
 
 ## Scrolling capture
 
@@ -65,7 +73,7 @@ Taskbar hiding applies to screenshots and video. Hide taskbars and Keep main mon
 
 Requires Windows 10 or 11 and .NET Framework 4.8. Use a complete signed per-user release installer or extract a portable ZIP. Setup does not launch the app. Its optional sign-in component is unchecked by default. Save work and choose **Exit Snip Studio** before an upgrade; the installer does not force-close running copies.
 
-The installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and diagnostic checks never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
+The installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and read-only **CHECKREADY/CHECKBROKER** diagnostics never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
 
 Closing an editor closes that snip. **Keep capture shortcuts after closing** is on by default, leaving a small notification-area listener for Ctrl+Alt+S and Print Screen. Choose **Exit** from its menu to stop the listener, or disable that preference to exit with the last editor. Keeping the full editor hidden in the notification area is a separate opt-in. Windows can reserve Print Screen; Snip Studio does not silently change Windows' routing.
 
@@ -80,7 +88,7 @@ The C# 5 build uses the installed Windows Framework compiler and WinRT metadata,
 Selected `checks/Verify-*.ps1` sources cover taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
 ```powershell
-powershell.exe -STA -NoProfile -File .\checks\Verify-TaskbarJumpList.ps1 -ReleaseFolder release-0.5.6-signed -ExpectedVersion 0.5.6.0
+powershell.exe -STA -NoProfile -File .\checks\Verify-TaskbarRefresh.ps1 -ReleaseFolder release-0.5.7-signed -ExpectedVersion 0.5.7.0
 ```
 
 The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
@@ -89,14 +97,18 @@ See [installer packaging](installer/README.md) for the signed-release inputs. Pr
 
 ## Files and verification
 
-Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Sharing, external-editor opening, and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
+Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Automatic update checks contact the official GitHub release endpoint by default and can be disabled in Settings; capture content, recognized text, preferences and user identity are not sent. Browser downloads, sharing, external-editor opening and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-The 0.5.6 application builds without compiler warnings or errors and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **272 signed-library checks passed**: 122 taskbar command/model/dispatch/wiring checks, 88 translation and existing-request regressions, 34 cooperative-exit checks, and 28 startup-compatibility checks. A further **35 native Windows Shell-link/property round trips** passed using objects held only in memory: no shortcut was saved, and no application entry point, recent-history API, Jump List update or association helper was called. **39 installer close source-policy checks** passed separately. `VALIDATION.txt` records the exact application hash, coverage and limits.
+The final 0.5.7 application has a valid timestamped Automation Forge LLC signature. Against exact application bytes, **418 signed-library checks passed**: 122 Jump List, 30 taskbar refresh, 116 update checker, 88 translation/request, 34 cooperative-exit and 28 startup-compatibility checks. **73 installer source-policy checks** passed separately. `VALIDATION.txt` records the exact application hash and coverage.
 
-Native Jump List rendering, existing-pin refresh, Windows recent-item privacy/removal and file-opening behavior, real cold/resident capture countdowns and installation/upgrade/uninstall require live acceptance. Component results and in-memory native objects do not establish those outcomes; package signatures, payload hashes and read-only installer readiness evidence are recorded separately.
+A user-approved native **CHECKCLOSE** diagnostic on a signed 0.5.7 candidate closed the installed 0.5.6 listener, left its executable unchanged and installed no files. The candidate contained an older application payload; this does not identify the cause of the earlier reported 0.5.5 approval/tray-stays-open failure or establish the final full upgrade. No root-cause fix is claimed.
+
+Native Jump List redraw and all existing pins, Windows recent-item behavior, browser download and notification acceptance, real cold/resident capture countdowns, save-cancel/recording shutdown and full installation/upgrade/uninstall require live acceptance. Component or offscreen checks do not establish those outcomes; package signatures, payload hashes and read-only installer readiness evidence are recorded separately.
+
+Historically, the signed 0.5.6 application passed **272 signed-library checks**, plus **35 in-memory native Windows Shell-link/property round trips** and **39 installer source-policy checks**. Those objects were held only in memory: no shortcut was saved and no application entry point, recent-history API, Jump List update or association helper was called. These counts do not add to the current 0.5.7 totals.
 
 Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` retains those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
 
-Historically, 658 focused checks passed against signed **0.5.4**; neither those results nor the 0.5.5 and earlier suites verify 0.5.6. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
+Historically, 658 focused checks passed against signed **0.5.4**; earlier release results do not verify 0.5.7. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
 
 An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.

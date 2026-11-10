@@ -7,6 +7,7 @@ using System.Runtime.InteropServices.ComTypes;
 using System.Security;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -28,6 +29,7 @@ namespace SnipStudio
         private static bool workerRunning;
         private static bool shellReady;
         private static string lastError;
+        private static TaskCompletionSource<TaskbarRefreshResult> pendingRefresh;
 
         internal static bool IsAvailable { get { lock (sync) return shellReady; } }
         internal static string LastError { get { lock (sync) return lastError; } }
@@ -36,24 +38,62 @@ namespace SnipStudio
         // loading this type performs no COM, registry or Shell operations.
         internal static void Initialize()
         {
+            // The returned task never faults for an optional Shell failure.
+            // Startup does not wait for Explorer, registry or shortcut work.
+            RefreshAsync();
+        }
+
+        internal static Task<TaskbarRefreshResult> RefreshAsync()
+        {
             try
             {
                 if (Environment.OSVersion.Platform != PlatformID.Win32NT ||
-                    Environment.OSVersion.Version < new Version(6, 1)) return;
-                int result = SetCurrentProcessExplicitAppUserModelID(ApplicationId);
-                if (result < 0) { SetFailure("Windows could not assign the taskbar identity."); return; }
+                    Environment.OSVersion.Version < new Version(6, 1))
+                    return CompletedFailure("Taskbar menus are unavailable on this version of Windows.");
+                bool assignIdentity;
+                lock (sync) assignIdentity = !identityReady;
+                if (assignIdentity && SetCurrentProcessExplicitAppUserModelID(ApplicationId) < 0)
+                    return CompletedFailure("Windows could not assign the taskbar identity.");
                 lock (sync)
                 {
                     identityReady = true;
+                    // One task represents each queued generation. A concurrent
+                    // call shares it; at most one in-flight and one queued
+                    // generation exist, without retaining a list of waiters.
+                    if (pendingRefresh != null) return pendingRefresh.Task;
+                    TaskCompletionSource<TaskbarRefreshResult> completion =
+                        new TaskCompletionSource<TaskbarRefreshResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+                    pendingRefresh = completion;
                     initializePending = true;
-                    EnsureWorkerLocked();
+                    try { EnsureWorkerLocked(); }
+                    catch (Exception exception)
+                    {
+                        if (IsFatal(exception)) throw;
+                        initializePending = false;
+                        pendingRefresh = null;
+                        TaskbarRefreshResult failure = FailedRefresh("Windows could not start the taskbar refresh.");
+                        lastError = failure.Warnings[0];
+                        completion.TrySetResult(failure);
+                    }
+                    return completion.Task;
                 }
             }
             catch (Exception exception)
             {
                 if (IsFatal(exception)) throw;
-                SetFailure("Windows taskbar integration is unavailable.");
+                return CompletedFailure("Windows taskbar integration is unavailable.");
             }
+        }
+
+        private static Task<TaskbarRefreshResult> CompletedFailure(string message)
+        {
+            SetFailure(message);
+            return Task.FromResult(FailedRefresh(message));
+        }
+
+        private static TaskbarRefreshResult FailedRefresh(string message)
+        {
+            return new TaskbarRefreshResult(false, false, new string[] { message });
         }
 
         // Called only after a real successful open/save. File checks and COM are
@@ -194,11 +234,13 @@ namespace SnipStudio
             for (;;)
             {
                 bool initialize;
+                TaskCompletionSource<TaskbarRefreshResult> completion = null;
                 string recent = null;
                 lock (sync)
                 {
                     initialize = initializePending;
                     initializePending = false;
+                    if (initialize) { completion = pendingRefresh; pendingRefresh = null; shellReady = false; }
                     if (!initialize && pendingFiles.Count > 0) recent = pendingFiles.Dequeue();
                     if (!initialize && recent == null) { workerRunning = false; return; }
                 }
@@ -208,33 +250,56 @@ namespace SnipStudio
                     {
                         string executable = Application.ExecutablePath;
                         lock (sync) lastError = null;
-                        Optional(delegate { RegisterImageHandler(executable); }, "Windows could not register recent image support.");
-                        // Populate Tasks before touching potentially stale cloud
-                        // or desktop shortcuts. Registry failure is optional;
-                        // the editor's own UI thread never waits on this work.
-                        Optional(delegate { CreateJumpList(executable); lock (sync) shellReady = true; },
+                        List<string> warnings = new List<string>();
+                        RefreshStep(delegate { RegisterImageHandler(executable); }, warnings, "Windows could not register recent image support.");
+                        // Populate capture Tasks before any potentially stale
+                        // cloud/desktop shortcut is loaded. Every following
+                        // shortcut repair still has an independent outcome.
+                        bool recentAvailable = true;
+                        bool menuUpdated = RefreshStep(delegate { recentAvailable = CreateJumpListCore(executable); }, warnings,
                             "Windows could not update the taskbar menu.");
-                        Optional(delegate { RepairOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),
-                            "Automation Forge", "Snip Studio", "Snip Studio.lnk"), executable); }, "Windows could not refresh the Start menu shortcut.");
-                        Optional(delegate { RepairOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                            "Snip Studio.lnk"), executable); }, "Windows could not refresh the desktop shortcut.");
-                        Optional(delegate { RepairOwnedPinnedShortcuts(executable); }, "Windows could not refresh a pinned taskbar shortcut.");
+                        if (menuUpdated && !recentAvailable) AddWarning(warnings, "Windows recent snips are unavailable; capture tasks remain available.");
+                        // Each shortcut is independently owned/validated. An
+                        // inaccessible shortcut must not suppress capture Tasks.
+                        bool shortcutsUpdated = RefreshStep(delegate { RepairOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Programs),
+                            "Automation Forge", "Snip Studio", "Snip Studio.lnk"), executable); }, warnings, "Windows could not refresh the Start menu shortcut.");
+                        shortcutsUpdated &= RefreshStep(delegate { RepairOwnedShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
+                            "Snip Studio.lnk"), executable); }, warnings, "Windows could not refresh the desktop shortcut.");
+                        bool pinsUpdated = true;
+                        bool pinsEnumerated = RefreshStep(delegate { pinsUpdated = RepairOwnedPinnedShortcuts(executable, warnings); }, warnings,
+                            "Windows could not check pinned taskbar shortcuts.");
+                        shortcutsUpdated &= pinsEnumerated && pinsUpdated;
+                        TaskbarRefreshResult result = new TaskbarRefreshResult(menuUpdated, shortcutsUpdated, warnings);
+                        lock (sync) { shellReady = menuUpdated; lastError = result.HasWarnings ? String.Join(" ", result.Warnings) : null; }
+                        if (completion != null) completion.TrySetResult(result);
                     }
                     else AddRecentFile(recent, Application.ExecutablePath);
                 }
                 catch (Exception exception)
                 {
                     if (IsFatal(exception)) throw;
-                    SetFailure(initialize ? "Windows could not update the taskbar menu." : "Windows could not update recent snips.");
+                    string failure = initialize ? "Windows could not finish the taskbar refresh." : "Windows could not update recent snips.";
+                    SetFailure(failure);
+                    if (completion != null) completion.TrySetResult(FailedRefresh(failure));
                 }
             }
         }
 
         private static void SetFailure(string message) { lock (sync) lastError = message; }
-        private static void Optional(Action action, string failure)
+        private static bool RefreshStep(Action action, IList<string> warnings, string failure)
         {
-            try { action(); }
-            catch (Exception exception) { if (IsFatal(exception)) throw; SetFailure(failure); }
+            try { action(); return true; }
+            catch (Exception exception)
+            {
+                if (IsFatal(exception)) throw;
+                AddWarning(warnings, failure);
+                return false;
+            }
+        }
+
+        private static void AddWarning(IList<string> warnings, string message)
+        {
+            if (warnings.Count < 8 && !warnings.Contains(message)) warnings.Add(message);
         }
         private static bool IsFatal(Exception exception)
         {
@@ -286,6 +351,8 @@ namespace SnipStudio
                 linkObject = new ShellLinkComObject();
                 IShellLinkW link = (IShellLinkW)linkObject;
                 IPersistFile file = (IPersistFile)linkObject;
+                // Read/validate ownership before requesting write access; the
+                // pinned folder also contains shortcuts belonging to other apps.
                 file.Load(shortcutPath, 0);
                 StringBuilder target = new StringBuilder(32768);
                 int result = link.GetPath(target, target.Capacity, IntPtr.Zero, 4);
@@ -301,9 +368,31 @@ namespace SnipStudio
                 int read = store.GetValue(ref key, out existing);
                 try
                 {
-                    if (read >= 0 && existing.Kind == 31 && String.Equals(Marshal.PtrToStringUni(existing.Pointer), ApplicationId, StringComparison.Ordinal)) return;
+                    if (read >= 0 && existing.Kind == 31 && String.Equals(Marshal.PtrToStringUni(existing.Pointer), ApplicationId, StringComparison.Ordinal))
+                    {
+                        // A manual refresh is also useful when the file is
+                        // correct but Explorer still holds older cached data.
+                        NotifyShortcutChanged(shortcutPath);
+                        return;
+                    }
                 }
                 finally { PropVariantClear(ref existing); }
+                // The implementation-default mode returned a read-only property
+                // store on actual installed shortcuts. Explicit write access is
+                // required only for a matching link whose AppID needs repair.
+                // Reopen a fresh ShellLink so no read-only property-store object
+                // obtained from the first load is reused for the write.
+                ReleaseComObject(linkObject);
+                linkObject = null;
+                linkObject = new ShellLinkComObject();
+                link = (IShellLinkW)linkObject;
+                file = (IPersistFile)linkObject;
+                file.Load(shortcutPath, 2); // STGM_READWRITE
+                target.Length = 0;
+                result = link.GetPath(target, target.Capacity, IntPtr.Zero, 4);
+                if (result != 0 || !TryNormalizeAbsolutePath(Environment.ExpandEnvironmentVariables(target.ToString()), out expanded) ||
+                    !String.Equals(expanded, expected, StringComparison.OrdinalIgnoreCase)) return;
+                store = (IPropertyStore)linkObject;
                 SetStringProperty(store, ApplicationIdKey, ApplicationId);
                 Check(store.Commit());
                 file.Save(shortcutPath, true);
@@ -312,30 +401,45 @@ namespace SnipStudio
             finally { ReleaseComObject(linkObject); }
         }
 
-        private static void RepairOwnedPinnedShortcuts(string executable)
+        private static bool RepairOwnedPinnedShortcuts(string executable, IList<string> warnings)
         {
             string folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 "Microsoft", "Internet Explorer", "Quick Launch", "User Pinned", "TaskBar");
-            if (!Directory.Exists(folder)) return;
+            if (!Directory.Exists(folder)) return true;
             int count = 0;
+            bool succeeded = true;
             foreach (string shortcut in Directory.EnumerateFiles(folder, "*.lnk", SearchOption.TopDirectoryOnly))
             {
                 if (count++ == 64) break;
                 string candidate = shortcut;
                 // Only the AppID property of an exact target match is changed.
                 // Do not create/delete pins or alter shortcut arguments/titles.
-                Optional(delegate { RepairOwnedShortcut(candidate, executable); }, "Windows could not refresh a pinned taskbar shortcut.");
+                succeeded &= RefreshStep(delegate { RepairOwnedShortcut(candidate, executable); }, warnings,
+                    "Windows could not refresh a pinned taskbar shortcut.");
             }
+            return succeeded;
         }
 
         private static void NotifyShortcutChanged(string shortcut)
         {
+            // SHCNF_PATHW buffers are documented as MAX_PATH. Refuse an invalid
+            // notification rather than send a truncated path for another item.
+            if (shortcut.Length >= 260) throw new InvalidOperationException("The shortcut path is too long for a Windows refresh notification.");
             IntPtr pointer = Marshal.StringToCoTaskMemUni(shortcut);
-            try { SHChangeNotify(0x00002000, 0x0005, pointer, IntPtr.Zero); }
+            try { SHChangeNotify(0x00002000, 0x3005, pointer, IntPtr.Zero); } // UPDATEITEM; PATHW | FLUSHNOWAIT
+            finally { Marshal.FreeCoTaskMem(pointer); }
+            string folder = Path.GetDirectoryName(shortcut);
+            pointer = Marshal.StringToCoTaskMemUni(folder);
+            try { SHChangeNotify(0x00001000, 0x3005, pointer, IntPtr.Zero); } // UPDATEDIR
             finally { Marshal.FreeCoTaskMem(pointer); }
         }
 
         private static void CreateJumpList(string executable)
+        {
+            CreateJumpListCore(executable);
+        }
+
+        private static bool CreateJumpListCore(string executable)
         {
             object listObject = null;
             object collectionObject = null;
@@ -353,8 +457,7 @@ namespace SnipStudio
                 begun = true;
                 // This is the OS-managed category, not a replay of our own cache.
                 // Windows may leave it empty when recent-document privacy is off.
-                if (list.AppendKnownCategory(2) < 0)
-                    SetFailure("Windows recent snips are unavailable; capture tasks remain available.");
+                bool recentAvailable = list.AppendKnownCategory(2) >= 0;
                 collectionObject = new EnumerableObjectCollectionComObject();
                 IObjectCollection collection = (IObjectCollection)collectionObject;
                 foreach (CaptureTask task in GetCaptureTasks())
@@ -370,6 +473,7 @@ namespace SnipStudio
                 Check(list.AddUserTasks((IObjectArray)collectionObject));
                 Check(list.CommitList());
                 committed = true;
+                return recentAvailable;
             }
             finally
             {
@@ -448,6 +552,36 @@ namespace SnipStudio
             internal readonly int DelaySeconds;
             internal string Arguments { get { return BuildCaptureArguments(DelaySeconds); } }
             internal CaptureTask(string title, int delaySeconds) { Title = title; DelaySeconds = delaySeconds; }
+        }
+
+        internal sealed class TaskbarRefreshResult
+        {
+            private readonly string[] warnings;
+            internal bool MenuUpdated { get; private set; }
+            // True means all applicable owned shortcuts were checked/refreshed.
+            // Missing links and links owned by another executable stay untouched.
+            internal bool ShortcutsUpdated { get; private set; }
+            internal bool HasWarnings { get { return warnings.Length != 0; } }
+            internal string[] Warnings { get { return (string[])warnings.Clone(); } }
+            internal string Message
+            {
+                get
+                {
+                    if (MenuUpdated && ShortcutsUpdated)
+                        return HasWarnings ? "Taskbar menu refreshed with a warning. Windows has been asked to refresh matching shortcuts." :
+                            "Taskbar menu refreshed. Windows has been asked to refresh matching shortcuts.";
+                    if (MenuUpdated) return "Taskbar menu refreshed, but some matching shortcuts could not be refreshed.";
+                    return ShortcutsUpdated ? "Matching shortcuts were checked, but Windows could not rebuild the taskbar menu." :
+                        "Windows could not finish refreshing the taskbar menu and shortcuts.";
+                }
+            }
+            internal TaskbarRefreshResult(bool menuUpdated, bool shortcutsUpdated, IList<string> messages)
+            {
+                MenuUpdated = menuUpdated;
+                ShortcutsUpdated = shortcutsUpdated;
+                warnings = new string[Math.Min(messages.Count, 8)];
+                for (int index = 0; index < warnings.Length; index++) warnings[index] = messages[index];
+            }
         }
 
         private static PropertyKey TitleKey { get { return new PropertyKey(new Guid("F29F85E0-4FF9-1068-AB91-08002B27B3D9"), 2); } }

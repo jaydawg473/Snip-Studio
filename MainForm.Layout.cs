@@ -55,6 +55,7 @@ namespace SnipStudio
         private int CompactChromeHeight
         {
             get { return captureToolbar == null ? Ui(82) : captureToolbar.Height +
+                updateNoticeHeight +
                 (canvas.HasImage && !AnnotationToolbarIsVertical ? annotationToolbar.Height : 0) +
                 (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter) ? contextToolbar.Height : 0) + footerStrip.Height; }
         }
@@ -80,6 +81,7 @@ namespace SnipStudio
             chromeRoot.Controls.Add(contextToolbar);
             chromeRoot.Controls.Add(workspace);
             chromeRoot.Controls.Add(footerStrip);
+            BuildUpdateIndicator();
             editorToolShelf = annotationToolbar;
             editorContextBar = contextToolbar;
 
@@ -363,6 +365,7 @@ namespace SnipStudio
                 }
                 int y = rowY + rowHeight + Ui(10);
                 captureToolbar.SetBounds(0, 0, w, y);
+                y += LayoutUpdateIndicator(y, w);
                 annotationToolbar.Visible = canvas.HasImage;
                 bool verticalAnnotation = AnnotationToolbarIsVertical;
                 bool bottomAnnotation = String.Equals(preferences.AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase);
@@ -459,6 +462,18 @@ namespace SnipStudio
                 }
                 else if (!canvas.HasImage) footer = WrappedTextHeight(status, statusWidth, footer);
                 int bottomAnnotationHeight = bottomAnnotation ? annotationHeight : 0;
+                if (!canvas.HasImage && updateNoticeHeight > 0 && (!layoutTestMode || HasLayoutWorkingAreaOverride) &&
+                    !IsFullScreenEditor && WindowState == FormWindowState.Normal)
+                {
+                    // Keep the compact prompt and its actions reachable when a
+                    // high-DPI update notice needs a second row.
+                    Rectangle work = EditorWorkingArea();
+                    int requiredHeight = Math.Min(work.Height, y + footer + Ui(72) + Math.Max(0, Height - ClientSize.Height));
+                    if (Height < requiredHeight) Height = requiredHeight;
+                    int top = Math.Max(work.Top, Math.Min(Top, work.Bottom - Height));
+                    if (Top != top) Top = top;
+                    h = ClientSize.Height;
+                }
                 if (canvas.HasImage && (!layoutTestMode || HasLayoutWorkingAreaOverride) && !IsFullScreenEditor && WindowState == FormWindowState.Normal)
                 {
                     // A side toolbar must fit all its controls when the monitor

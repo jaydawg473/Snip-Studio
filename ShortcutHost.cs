@@ -281,6 +281,51 @@ namespace SnipStudio
             trayMenu.ShowImageMargin = false;
             trayMenu.Items.Add("New snip", null, delegate { QueueRequest(ShortcutStartupRequest.Capture()); });
             trayMenu.Items.Add("Open Snip Studio", null, delegate { QueueRequest(ShortcutStartupRequest.Open(null)); });
+            ToolStripMenuItem refreshTaskbarItem = new ToolStripMenuItem("Refresh taskbar menu");
+            refreshTaskbarItem.Click += async delegate
+            {
+                if (disposed) return;
+                refreshTaskbarItem.Enabled = false;
+                try
+                {
+                    TaskbarJumpList.TaskbarRefreshResult result = await TaskbarJumpList.RefreshAsync();
+                    if (!disposed && trayIcon != null)
+                        trayIcon.ShowBalloonTip(4000, "Snip Studio taskbar menu", result.Message,
+                            result.HasWarnings ? ToolTipIcon.Warning : ToolTipIcon.Info);
+                }
+                catch (Exception error)
+                {
+                    if (!disposed) MessageBox.Show("The taskbar menu could not be refreshed.\n\n" + error.Message,
+                        "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                finally { if (!disposed && !refreshTaskbarItem.IsDisposed) refreshTaskbarItem.Enabled = true; }
+            };
+            trayMenu.Items.Add(refreshTaskbarItem);
+            ToolStripMenuItem checkUpdatesItem = new ToolStripMenuItem("Check for updates…");
+            checkUpdatesItem.Click += async delegate
+            {
+                if (disposed) return;
+                checkUpdatesItem.Enabled = false;
+                try
+                {
+                    UpdateCheckResult result = await UpdateNotifications.CheckAsync(false);
+                    if (!disposed && trayIcon != null)
+                        trayIcon.ShowBalloonTip(5000, "Snip Studio updates", result.UserMessage,
+                            result.Status == UpdateCheckStatus.Unavailable ? ToolTipIcon.Warning : ToolTipIcon.Info);
+                }
+                catch (Exception error)
+                {
+                    if (!disposed) MessageBox.Show("Updates could not be checked.\n\n" + error.Message,
+                        "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                finally { if (!disposed && !checkUpdatesItem.IsDisposed) checkUpdatesItem.Enabled = true; }
+            };
+            trayMenu.Items.Add(checkUpdatesItem);
+            ToolStripMenuItem downloadUpdateItem = new ToolStripMenuItem("Download update");
+            downloadUpdateItem.Click += delegate { OpenAvailableUpdate(); };
+            downloadUpdateItem.Visible = false;
+            trayMenu.Items.Add(downloadUpdateItem);
+            trayMenu.Opening += delegate { downloadUpdateItem.Visible = UpdateNotifications.AvailableUpdate != null; };
             trayMenu.Items.Add(new ToolStripSeparator());
             printScreenState = new ToolStripMenuItem();
             printScreenState.Enabled = false;
@@ -306,6 +351,19 @@ namespace SnipStudio
                 }
             }
             return (Icon)SystemIcons.Application.Clone();
+        }
+
+        private static void OpenAvailableUpdate()
+        {
+            UpdateCheckResult result = UpdateNotifications.AvailableUpdate;
+            if (result == null || result.NewVersion == null) return;
+            string version = result.NewVersion.ToString(3);
+            string expected = "https://github.com/jaydawg473/Snip-Studio/releases/download/v" + version +
+                "/SnipStudio-" + version + "-Setup.exe";
+            if (!String.Equals(result.DownloadUrl, expected, StringComparison.Ordinal)) return;
+            try { Process.Start(new ProcessStartInfo(expected) { UseShellExecute = true }); }
+            catch (Exception error) { MessageBox.Show("The official update download could not open.\n\n" + error.Message,
+                "Snip Studio", MessageBoxButtons.OK, MessageBoxIcon.Information); }
         }
 
         private static void OpenKeyboardSettings()

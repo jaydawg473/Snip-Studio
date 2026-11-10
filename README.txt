@@ -1,7 +1,7 @@
-SNIP STUDIO 0.5.6 — AUTOMATION FORGE
+SNIP STUDIO 0.5.7 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Install with "SnipStudio-0.5.6-Setup.exe", then open Snip Studio from the
+Install with "SnipStudio-0.5.7-Setup.exe", then open Snip Studio from the
 Start menu. Installation is for your Windows account, with an optional desktop
 shortcut. It does not launch the app or enable Windows startup automatically.
 The optional "Start Snip Studio at Windows sign-in" installer component is
@@ -23,6 +23,17 @@ it does not change the clock's saved delay or Remember capture delay setting.
 Taskbar screenshot actions use Photo mode. A previous Scrolling choice returns
 to Rectangle so it cannot bypass the requested countdown.
 
+If the taskbar menu is missing or stale, choose More > Refresh taskbar menu.
+The same action is available from the notification-area menu, including when
+only the capture-shortcut listener is open. Refresh runs in the background and
+reports the completed registration attempt and any warnings; repeated requests
+are combined rather than starting unlimited work.
+Startup also refreshes the menu and updates the taskbar identity on matching
+Snip Studio Start menu, desktop and pinned shortcuts. It changes shortcut
+metadata only when the target is this exact application copy; it does not force
+a pin/unpin or change the default image application. Windows controls its
+taskbar cache, so a completed refresh is not proof of immediate visual change.
+
 Recent lists successfully opened or saved PNG, JPG, JPEG, BMP, GIF, TIF, and
 TIFF images, including originals saved automatically after capture. Select a
 recent image to reopen it in Snip Studio. Unsaved clipboard images, canceled or
@@ -32,6 +43,19 @@ when Windows' recent-item setting is off. Windows controls which items appear;
 Snip Studio does not rebuild a separate list. Image defaults are not changed.
 Pin to taskbar, Unpin, and
 Close window are Windows commands and depend on the icon's current state.
+
+UPDATE NOTIFICATIONS
+Check for updates automatically is On by default. When Snip Studio opens, it
+checks the official GitHub releases in the background at most once a day.
+Turn this off under Settings > Updates > Check for updates automatically.
+More > Check for updates and the notification-area menu offer a manual check.
+Manual requests still respect short cooldowns and GitHub rate limits.
+When a newer release is found, choose Download or Download update to open its
+official installer link in your browser. Snip Studio does not silently download,
+install, or run an update. You choose whether to download and run Setup.
+Update requests include the app version, not screenshots, recognized text,
+preferences, or machine/user identity. A failed check leaves current work intact
+and reports that the service is unavailable rather than claiming up to date.
 
 CAPTURE
 Choose Photo mode, select a capture mode, then New. Full screen lets you click one monitor to capture; All monitors captures the complete connected desktop. Rectangle, Freeform, Window, and Scrolling remain available.
@@ -227,7 +251,10 @@ opens the main window. Existing saved background preferences are respected.
 YOUR DATA
 Editing, recognition, recording, and bundled translation run locally. The
 included translator does not send the text or image to a translation server.
-Sharing, opening an external editor, and the website happen when selected.
+Sharing, opening an external editor, and browser visits happen when selected.
+Automatic update checks contact the official GitHub release endpoint by default;
+turn them off in Settings > Updates if preferred. Requests include the app
+version, not capture content, recognized text, preferences or user identity.
 Windows keeps recent-image paths locally for the taskbar menu, subject to its
 recent-item settings. Snip Studio does not upload or keep its own recent list.
 Preferences: %LOCALAPPDATA%\SnipStudio\preferences.xml.
@@ -246,7 +273,22 @@ Icon sources and regeneration tool are in assets\ and tools\.
 
 An independent Automation Forge app; not affiliated with Microsoft.
 
-0.5.6 VERIFICATION STATUS
+0.5.7 VERIFICATION STATUS
+The final application has a Valid timestamped Automation Forge signature.
+418 signed-library checks passed: 122 Jump List, 30 taskbar refresh, 116 update
+checker, 88 translation/request, 34 installer-exit and 28 startup checks.
+73 installer source-policy checks passed separately. See VALIDATION.txt for
+the exact signed application hash and coverage. Package/installer evidence is
+recorded separately; these checks do not establish native taskbar appearance.
+A user-approved native close diagnostic on a signed installer candidate closed
+the installed 0.5.6 listener without changing its executable or installing files.
+That candidate contained an older payload. This does not identify the cause of
+the earlier reported 0.5.5 tray-close failure or prove the final full upgrade.
+Taskbar cache/pin behavior, save-cancel/recording shutdown, full installation and
+device/UI acceptance remain unverified. If files stay busy, save work, choose
+Exit from the notification-area menu and Retry, or cancel Setup.
+
+HISTORICAL 0.5.6 VERIFICATION STATUS
 The application builds and has a Valid timestamped Automation Forge signature.
 272 signed-library checks passed, including 122 taskbar command, dispatch and
 registration-wiring checks. A further 35 in-memory native Windows Shell-link

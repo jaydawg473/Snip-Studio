@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.5.6.0")]
-[assembly: AssemblyFileVersion("0.5.6.0")]
+[assembly: AssemblyVersion("0.5.7.0")]
+[assembly: AssemblyFileVersion("0.5.7.0")]
 
 namespace SnipStudio
 {

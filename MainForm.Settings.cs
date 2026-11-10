@@ -22,6 +22,7 @@ namespace SnipStudio
         private bool positioningMoreMenu;
         private ToolStripMenuItem reloadExternalItem;
         private bool preparingShare;
+        private bool refreshingTaskbarMenu;
         private static SettingsForm sharedSettings;
 
         private bool ShouldAskToSaveEdits
@@ -66,6 +67,10 @@ namespace SnipStudio
             moreMenu.Items.Add(new ToolStripSeparator());
             AddMenuItem("Print…                       Ctrl+P", "print", delegate { PrintImage(); });
             AddMenuItem("Save as PDF…", "save", delegate { SaveImage(true, true); });
+            ToolStripMenuItem refreshTaskbarItem = AddMenuItem("Refresh taskbar menu", "settings", delegate { RefreshTaskbarMenu(); });
+            refreshTaskbarItem.ToolTipText = "Refresh Snip Studio's capture tasks, recent snips and existing Windows shortcuts.";
+            checkUpdatesItem = AddMenuItem("Check for updates", "help", delegate { CheckForUpdates(false); });
+            checkUpdatesItem.ToolTipText = "Check for a newer Snip Studio installer on the official GitHub release page.";
             AddMenuItem("Settings", "settings", delegate { ShowSettings(); });
             AddMenuItem("Help                           F1", "help", delegate { ShowHelp(); });
             AddMenuItem("About Snip Studio", "help", delegate { using (AboutForm about = new AboutForm()) about.ShowDialog(this); });
@@ -77,11 +82,34 @@ namespace SnipStudio
                 moreMenu.BackColor = StudioTheme.Surface;
                 moreMenu.ForeColor = StudioTheme.Text;
                 reloadExternalItem.Enabled = !String.IsNullOrEmpty(externalWorkingCopy) && File.Exists(externalWorkingCopy);
+                refreshTaskbarItem.Enabled = !refreshingTaskbarMenu;
+                checkUpdatesItem.Enabled = !checkingForUpdates;
                 shareItem.Enabled = canvas.HasImage && !capturePending && !preparingShare;
                 foreach (ToolStripItem item in moreMenu.Items) item.ForeColor = StudioTheme.Text;
             };
             StudioTheme.StyleMenu(moreMenu);
             return more;
+        }
+
+        private async void RefreshTaskbarMenu()
+        {
+            if (refreshingTaskbarMenu || IsDisposed || closing) return;
+            refreshingTaskbarMenu = true;
+            SetStatus("Refreshing the Windows taskbar menu…");
+            try
+            {
+                TaskbarJumpList.TaskbarRefreshResult result = await TaskbarJumpList.RefreshAsync();
+                if (IsDisposed || closing) return;
+                SetStatus(result.Message);
+                if (!Visible && trayIcon != null && !hotkeysTrayDisposed)
+                    trayIcon.ShowBalloonTip(4000, "Snip Studio taskbar menu", result.Message,
+                        result.HasWarnings ? ToolTipIcon.Warning : ToolTipIcon.Info);
+            }
+            catch (Exception error)
+            {
+                if (!IsDisposed && !closing) ShowFailure("The taskbar menu could not be refreshed", error);
+            }
+            finally { refreshingTaskbarMenu = false; }
         }
 
         private void ShowMoreMenu(object sender, EventArgs e)

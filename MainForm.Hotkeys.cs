@@ -132,6 +132,13 @@ namespace SnipStudio
                 StartCapture();
             });
             trayMenu.Items.Add("Open Snip Studio", null, delegate { ShowFromTray(); });
+            trayMenu.Items.Add("Refresh taskbar menu", null, delegate { RefreshTaskbarMenu(); });
+            trayMenu.Items.Add("Check for updates…", null, delegate { CheckForUpdates(false); });
+            ToolStripMenuItem downloadUpdateItem = new ToolStripMenuItem("Download update");
+            downloadUpdateItem.Click += delegate { ApplyUpdateNotice(UpdateNotifications.AvailableUpdate); OpenUpdateDownload(); };
+            downloadUpdateItem.Visible = false;
+            trayMenu.Items.Add(downloadUpdateItem);
+            trayMenu.Opening += delegate { downloadUpdateItem.Visible = UpdateNotifications.AvailableUpdate != null; };
             trayMenu.Items.Add("Settings…", null, delegate
             {
                 if (capturePending || recordingSession || ModalOpenCount() != 0) return;
