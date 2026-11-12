@@ -1,7 +1,7 @@
 param([string]$CompilerPath = '')
 $ErrorActionPreference = 'Stop'
 $snipProjectFolder = Split-Path $PSScriptRoot -Parent
-$snipReleaseFolder = [IO.Path]::GetFullPath((Join-Path $snipProjectFolder 'release-0.5.8-signed'))
+$snipReleaseFolder = [IO.Path]::GetFullPath((Join-Path $snipProjectFolder 'release-0.5.9-signed'))
 $snipTranslationFolder = Join-Path $snipReleaseFolder 'translation'
 $snipOutputFolder = Join-Path $PSScriptRoot 'output'
 $snipCompiler = $CompilerPath
@@ -33,7 +33,7 @@ function ConvertTo-NsisLiteral([string]$Text) {
 
 # Packaging accepts an already verified official release, including the full
 # runtime. Public source builds remain unsigned; no private signing is used.
-if (-not (Test-Path -LiteralPath $snipTranslationFolder -PathType Container)) { throw 'Extract the complete official portable release into release-0.5.8-signed first.' }
+if (-not (Test-Path -LiteralPath $snipTranslationFolder -PathType Container)) { throw 'Extract the complete official portable release into release-0.5.9-signed first.' }
 $snipCursor = $snipTranslationFolder
 while ($snipCursor.Length -gt $snipProjectFolder.Length) {
     if ((Get-Item -LiteralPath $snipCursor -Force).LinkType -in @('SymbolicLink','Junction')) { throw 'Release paths cannot be filesystem links.' }
@@ -89,7 +89,7 @@ if (@(Compare-Object $snipManifestExpected @($snipManifestNames | Sort-Object) -
 $snipAppPath = Join-Path $snipReleaseFolder 'Snip Studio.exe'
 $snipSignature = Get-AuthenticodeSignature -LiteralPath $snipAppPath
 if ($snipSignature.Status -ne 'Valid' -or $null -eq $snipSignature.TimeStamperCertificate -or $snipSignature.SignerCertificate.Subject -notlike '*Automation Forge LLC*') { throw 'Only a verified, timestamped Automation Forge application can be packaged.' }
-if ([Diagnostics.FileVersionInfo]::GetVersionInfo($snipAppPath).FileVersion -ne '0.5.8.0') { throw 'Unexpected application version.' }
+if ([Diagnostics.FileVersionInfo]::GetVersionInfo($snipAppPath).FileVersion -ne '0.5.9.0') { throw 'Unexpected application version.' }
 $snipPackageKb = [Math]::Max(1,[int][Math]::Ceiling($snipPackageBytes / 1024.0))
 [IO.Directory]::CreateDirectory($snipOutputFolder) | Out-Null
 $snipInstallInclude = Join-Path $snipOutputFolder 'translation-install.nsh'
@@ -124,7 +124,7 @@ try {
     & $snipCompiler /V3 "/DRELEASE_DIR=$snipReleaseFolder" "/DOUTPUT_DIR=$snipOutputFolder" "/DPACKAGE_KB=$snipPackageKb" "/DTRANSLATION_INSTALL_INCLUDE=$snipInstallInclude" "/DTRANSLATION_UNINSTALL_INCLUDE=$snipUninstallInclude" (Join-Path $PSScriptRoot 'SnipStudio.nsi')
     if ($LASTEXITCODE -ne 0) { throw 'NSIS installer build failed.' }
 } finally { Pop-Location; $env:NSISDIR = $snipPreviousNsisDir }
-$snipInstallerPath = Join-Path $snipOutputFolder 'SnipStudio-0.5.8-Setup.exe'
+$snipInstallerPath = Join-Path $snipOutputFolder 'SnipStudio-0.5.9-Setup.exe'
 if (-not (Test-Path -LiteralPath $snipInstallerPath -PathType Leaf)) { throw 'The installer output was not created.' }
 Write-Output ('Built ' + $snipInstallerPath + ' with ' + $snipTranslationFiles.Count + ' translation runtime/model/license files.')
 Write-Output 'The installer has not been run. Sign the installer before distribution.'

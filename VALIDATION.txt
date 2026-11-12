@@ -1,3 +1,52 @@
+SNIP STUDIO 0.5.9 - EDITABLE CROP FRAME, 2026-11-12
+
+SIGNED APPLICATION COMPONENT AND OFFSCREEN CROP VERIFICATION RECORDED.
+The C#5/.NET Framework 4.8 application built without compiler warnings.
+Final signed application SHA256:
+7CDA2CEF0427C1A92F5F7D6E656AC572E36CF7147310A96F2CBD3EA7E6461F47
+File and assembly version: 0.5.9.0.
+Authenticode: Valid, timestamped Automation Forge LLC (checked 2026-11-12).
+
+593 signed-library checks passed against this application:
+-78 crop-frame geometry and unshown in-memory canvas checks.
+-88 translation replacement and existing request/lifetime regressions.
+-181 deterministic zoom-frame/anchor checks.
+-45 removal-selection movement checks.
+These form 392 core component checks. A further 201 offscreen crop-layout
+checks covered eight toolbar/dimension/scale cases at scales 1, 1.5 and 2,
+busy-state keyboard guards and preservation of zoom/image center on entry.
+Two synthetic offscreen renders were visually inspected: full-image and
+adjusted crop frames with eight handles. Render inspection is not additional
+automated checks or physical mouse/DPI acceptance.
+73 installer source-policy checks passed separately. Historical results below
+apply only to their named versions and exact bytes, not additional current tests.
+
+Scope: choosing Crop initializes a frame around the full image. Eight edge and
+corner handles resize the frame; its interior moves it. The frame previews the
+pending crop. Apply or Enter commits the crop as one Undo operation; Cancel or
+Escape preserves the current image. Retained annotations remain editable.
+Tests verified exact pixel/annotation restoration through Undo and that the
+unchanged full-image frame is a no-op that does not dirty the document.
+
+SETTINGS PRESERVATION: Preferences.cs is byte-identical to published 0.5.8:
+FE1AC75D37379BBAE87216860043C7315485F4E469FAB31FBDC2F75D84AE886F
+The crop feature adds no preference fields and reuses the existing preference
+file/location and saved values. Installer logic is unchanged apart from its
+version metadata and keeps preference/capture files. This is source evidence;
+an installed upgrade with the user's profile was not executed for this record.
+
+Final Setup signature, portable/installer payload reconciliation, read-only
+readiness and release privacy evidence are recorded separately in the release
+receipt. Including this file in a package does not establish a live install.
+
+NOT LIVE VERIFIED: actual mouse dragging and pointer hit regions at physical
+DPI/zoom levels, native toolbar/keyboard interaction, capture and taskbar
+behavior, full installation/upgrade/uninstall with a real saved profile or
+endpoint-security acceptance. Component/offscreen checks and synthetic render
+inspection must be distinguished from native input, visual and device acceptance.
+No new update-host or approved-close trial is claimed by this record.
+
+HISTORICAL RELEASE RECORDS FOLLOW
 SNIP STUDIO 0.5.8 - CAPTURE VISIBILITY AND UPDATE TRANSPORT, 2026-11-10
 
 SIGNED APPLICATION COMPONENT AND OWN-HOST UPDATE VERIFICATION RECORDED.

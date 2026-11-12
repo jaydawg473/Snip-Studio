@@ -57,7 +57,7 @@ namespace SnipStudio
             get { return captureToolbar == null ? Ui(82) : captureToolbar.Height +
                 updateNoticeHeight +
                 (canvas.HasImage && !AnnotationToolbarIsVertical ? annotationToolbar.Height : 0) +
-                (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter) ? contextToolbar.Height : 0) + footerStrip.Height; }
+                (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter || IsCropContext) ? contextToolbar.Height : 0) + footerStrip.Height; }
         }
 
         private bool AnnotationToolbarIsVertical
@@ -134,7 +134,7 @@ namespace SnipStudio
             AddCompactTool("Box", EditorTool.Rectangle, "box", "Draw a box");
             AddCompactTool("Add text", EditorTool.Text, "text", "Add text, then use Move to reposition it");
             AddCompactTool("Eraser", EditorTool.Eraser, "eraser", "Erase annotations");
-            AddCompactTool("Crop", EditorTool.Crop, "crop", "Crop the image");
+            AddCompactTool("Crop", EditorTool.Crop, "crop", "Drag an edge or corner to crop. Enter applies; Escape cancels.");
             AddCompactTool("Remove area", EditorTool.RemoveArea, "remove-area", "Remove captured content. Click a flat-color object or drag an area, review the selection, then press Delete. Undo restores it.");
             StudioButton color = IconButton("Ink color", "", delegate { ChooseColor(); });
             color.Swatch = true;
@@ -208,6 +208,7 @@ namespace SnipStudio
             contextToolbar.Controls.Add(editRecognizedLineButton);
             contextToolbar.Controls.Add(deleteRecognizedTextButton);
             contextToolbar.Controls.Add(closeTextActionsButton);
+            BuildCropActions();
             tips.SetToolTip(editRecognizedLineButton, "Edit one recognized line. Select words from a single line first.");
             tips.SetToolTip(translateTextButton, "Translate selected words, or all recognized text, using the included offline translator. Choose the original and target languages inside Snip Studio.");
             tips.SetToolTip(deleteRecognizedTextButton, "Remove the selected recognized text. Use Undo to restore it.");
@@ -408,10 +409,11 @@ namespace SnipStudio
                     recordingOptions.SetBounds(0, y, w, 0);
                 }
                 bool textMode = canvas.HasImage && canvas.TextActionsMode;
-                bool context = textMode || (canvas.HasImage && canvas.Tool == EditorTool.Highlighter);
+                bool cropMode = IsCropContext;
+                bool context = cropMode || textMode || (canvas.HasImage && canvas.Tool == EditorTool.Highlighter);
                 contextToolbar.Visible = context;
-                snapToText.Visible = context && !textMode;
-                recognitionStatus.Visible = context;
+                snapToText.Visible = context && !textMode && !cropMode;
+                recognitionStatus.Visible = context && !cropMode;
                 copyAllTextButton.Visible = copySelectedTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Enabled = textMode && canvas.TextActionCommandsReady && !capturePending && !String.IsNullOrWhiteSpace(canvas.AllRecognizedText);
@@ -420,7 +422,9 @@ namespace SnipStudio
                 editRecognizedLineButton.Enabled = textMode && !capturePending && canvas.CanEditRecognizedLine;
                 deleteRecognizedTextButton.Enabled = textMode && !capturePending && canvas.CanDeleteRecognizedText;
                 int contextHeight = 0;
-                if (context)
+                UpdateCropActionControls();
+                if (cropMode) contextHeight = LayoutCropActions(w);
+                else if (context)
                 {
                     x = Ui(12); rowY = Ui(3);
                     int contextRowHeight = textMode ? rowHeight : Ui(24);
@@ -484,7 +488,7 @@ namespace SnipStudio
                         ? Math.Max(Ui(96), MeasureVerticalAnnotationToolbar(showTextSize, false).Height) : Ui(96);
                     int minimumHeight = Math.Min(work.Height, y + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
                     if (MinimumSize.Height != minimumHeight) MinimumSize = new Size(MinimumSize.Width, minimumHeight);
-                    if (verticalAnnotation)
+                    if (verticalAnnotation || cropMode)
                     {
                         if (Height > work.Height) Height = work.Height;
                         int top = Math.Max(work.Top, Math.Min(Top, work.Bottom - Height));

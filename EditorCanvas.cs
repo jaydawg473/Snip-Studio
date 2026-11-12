@@ -54,6 +54,7 @@ namespace SnipStudio
                 if (textActionsMode == value) return;
                 CancelGesture();
                 textActionsMode = value;
+                ResetCropFrame();
                 if (value) BeginTextActionFeedback();
                 else { EndTextActionFeedback(); CancelSourceStyleMatching(); }
                 selectedIndex = -1;
@@ -93,6 +94,7 @@ namespace SnipStudio
                 CancelGesture(keepRemoval);
                 selectedIndex = -1;
                 tool = value;
+                ResetCropFrame();
                 UpdateCursor();
                 RaiseTextStyleChanged();
                 RaiseToolChanged();
@@ -143,6 +145,7 @@ namespace SnipStudio
             StopViewAnimations();
             document.SetImage(image);
             CancelGesture();
+            ResetCropFrame();
             selectedIndex = -1;
             fit = true;
             firstImagePainted = false;
@@ -262,7 +265,6 @@ namespace SnipStudio
                 graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 document.Draw(graphics, moving ? selectedIndex : -1, moveDelta, AnnotationPreviewIndex);
                 if (preview != null) preview.Draw(graphics);
-                if (drawing && tool == EditorTool.Crop) DrawCrop(graphics);
                 if (selectedIndex >= 0 && selectedIndex < document.AnnotationCount)
                 {
                     GraphicsState selectionState = graphics.Save();
@@ -272,10 +274,12 @@ namespace SnipStudio
                 }
                 if (textActionsMode) DrawTextOverlay(graphics);
                 DrawSourceRemoval(graphics);
+                DrawCropFrame(graphics);
             }
             finally { graphics.Restore(state); }
-            using (Pen border = new Pen(Color.FromArgb(59, 73, 94)))
-                graphics.DrawRectangle(border, origin.X - 1, origin.Y - 1, width + 1, height + 1);
+            if (!CropModeActive)
+                using (Pen border = new Pen(Color.FromArgb(59, 73, 94)))
+                    graphics.DrawRectangle(border, origin.X - 1, origin.Y - 1, width + 1, height + 1);
             DrawTextScanFeedback(graphics, origin, width, height);
         }
 
@@ -297,19 +301,6 @@ namespace SnipStudio
                 centered.LineAlignment = StringAlignment.Center;
                 graphics.DrawString(EmptyMessage ?? "Choose New, open an image, or paste from the clipboard.", title, ink,
                     new RectangleF(12, 0, Math.Max(1, ClientSize.Width - 24), Math.Max(1, ClientSize.Height)), centered);
-            }
-        }
-
-        private void DrawCrop(Graphics graphics)
-        {
-            RectangleF crop = BoundsBetween(start, end);
-            using (Brush shade = new SolidBrush(Color.FromArgb(100, 15, 23, 42)))
-            using (Region outside = new Region(new Rectangle(0, 0, ImageSize.Width, ImageSize.Height)))
-            using (Pen line = new Pen(Color.FromArgb(0, 114, 206), 1.5f / zoom))
-            {
-                outside.Exclude(crop);
-                graphics.FillRegion(shade, outside);
-                graphics.DrawRectangle(line, crop.X, crop.Y, crop.Width, crop.Height);
             }
         }
 
@@ -357,6 +348,8 @@ namespace SnipStudio
             StopViewAnimations();
             Focus();
             if (!HasImage) return;
+            if (CropModeActive && e.Button == MouseButtons.Right) { CancelCrop(); return; }
+            if (BeginCropDrag(e)) return;
             if (e.Button == MouseButtons.Right) { HandleAnnotationRightClick(e); return; }
             if (BeginSourceRemoval(e)) return;
             if (TryBeginAnnotationHandleDrag(e)) return;
@@ -393,6 +386,7 @@ namespace SnipStudio
             }
             if (e.Button == MouseButtons.Middle)
             {
+                if (CropDragging) CancelGesture();
                 BeginPanView();
                 panning = true;
                 lastPan = e.Location;
@@ -458,6 +452,7 @@ namespace SnipStudio
                 return;
             }
             if (!HasImage) return;
+            if (UpdateCropDrag(e)) return;
             if (UpdateSourceRemoval(e)) return;
             if (erasing)
             {
@@ -481,6 +476,7 @@ namespace SnipStudio
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (EndCropDrag(e)) return;
             if (CompleteSourceRemoval(e)) return;
             if (textSelectionDragging && e.Button == MouseButtons.Left)
             {
@@ -526,22 +522,6 @@ namespace SnipStudio
                 }
                 else if (tool == EditorTool.Arrow) document.AddArrow(start, end, inkColor, strokeWidth);
                 else if (tool == EditorTool.Rectangle) document.AddRectangle(BoundsBetween(start, end), inkColor, strokeWidth);
-                else if (tool == EditorTool.Crop)
-                {
-                    RectangleF bounds = BoundsBetween(start, end);
-                    Rectangle crop = Rectangle.FromLTRB((int)Math.Floor(bounds.Left), (int)Math.Floor(bounds.Top),
-                        Math.Min(ImageSize.Width, (int)Math.Ceiling(bounds.Right)),
-                        Math.Min(ImageSize.Height, (int)Math.Ceiling(bounds.Bottom)));
-                    if (crop.Width >= 2 && crop.Height >= 2)
-                    {
-                        ChangeViewIntent();
-                        document.Crop(crop);
-                        selectedIndex = -1;
-                        fit = true;
-                        RecalculateFit();
-                        AutoScrollPosition = Point.Empty;
-                    }
-                }
                 RaiseChanged();
             }
             finally { points.Clear(); Invalidate(); }
@@ -577,7 +557,7 @@ namespace SnipStudio
         {
             base.OnMouseCaptureChanged(e);
             if (!Capture && textSelectionDragging) { textSelectionDragging = false; UpdateCursor(); }
-            if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging)) CancelGesture();
+            if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging || CropDragging)) CancelGesture();
         }
 
         private void CancelGesture()
@@ -589,6 +569,7 @@ namespace SnipStudio
         {
             StopViewAnimations();
             CancelAnnotationHandleDrag();
+            CancelCropDrag();
             CancelSourceRemoval(preserveRemovalSelection);
             drawing = false; panning = false; erasing = false; moving = false; snapping = false; moveDelta = PointF.Empty; preview = null;
             textSelectionDragging = false;
@@ -605,6 +586,7 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (HandleCropKey(keyData)) return true;
             if (HandleSourceRemovalKey(keyData)) return true;
             if (keyData == Keys.F2) { EditSelectedText(); return true; }
             if (textActionsMode && keyData == Keys.Delete) { DeleteRecognizedText(); return true; }
@@ -724,6 +706,7 @@ namespace SnipStudio
 
         private void RaiseChanged()
         {
+            if (CropModeActive) { EnsureCropFrame(); RaiseCropSelectionChanged(); }
             RefreshRecognitionIfNeeded();
             RaiseTextStyleChanged();
             Invalidate();

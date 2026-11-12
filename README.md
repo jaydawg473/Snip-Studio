@@ -1,6 +1,6 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.5.8
+# Snip Studio 0.5.9
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
@@ -13,12 +13,15 @@ Capture across monitors, annotate images, edit recognized text, and export the r
 - Movable pen strokes, highlights, arrows, boxes, and rich text notes, with Undo and Redo. Right-click a mark to select it and switch to Move; use the middle mouse button to pan.
 - A pending **Remove area** box also survives switching to **Move**. Drag it within the image or nudge with arrow keys (Shift moves ten pixels), then press **Delete** to apply the removal at its new position. **Escape** cancels. Moving this review box changes no captured pixels, annotations or Undo history; Undo restores pixels after deletion.
 - Drag an arrow's tip or tail to rotate or resize it. Drag a text note's side handles to change wrapping width without shrinking its font.
+- Choose **Crop** to start with a full-image frame. Drag its eight edge/corner handles or move the frame by dragging inside. **Apply crop / Enter** commits one Undo step; **Cancel / Escape** keeps the image unchanged. Applying the unchanged full-image frame is a no-op, and entering Crop preserves zoom and image center. Retained annotations stay editable.
 - Double-click a text note, or select it and press F2, to edit font families, point sizes, mixed character styles, ink/highlighting, paragraph alignment, lists, indentation, and spacing.
 - Local, on-demand Windows OCR for copying words, snapped highlighting, and line editing. Deleting selected bitmap words masks those words and leaves gaps; it does not reposition the remaining screenshot text.
 - Color swatches, recent colors, hex input, and an Exact color honeycomb picker. Tooltips are on by default and can be turned off in Settings.
 - PNG, JPEG, BMP, lossless image-backed PDF, clipboard copy, print, external-editor working copies, and Windows Share. Save As is available from the menu and Ctrl+Shift+S.
 
 Source-font matching is an **estimate** from screenshot pixels and installed fonts. Line replacement uses a selectable solid fill; complex backgrounds are not reconstructed. Ambiguous overlapping text is guarded. Exports flatten annotations; notes remain editable in the open editor. PDFs are not searchable text documents or editable forms, and transparency becomes white.
+
+Updating to **0.5.9 retains your existing saved app settings**. The crop feature adds no preference fields or reset; it reuses the existing profile.
 
 Ctrl+wheel zooms toward the pointer by default; the wheel alone scrolls. Settings can switch to plain-wheel zoom, remember or reset capture delay, and preview screenshot-border color and thickness inline.
 
@@ -40,7 +43,7 @@ If the menu is missing or stale, choose **More → Refresh taskbar menu**, or us
 
 **Check for updates automatically** is **On by default**. The app checks the official GitHub releases in the background when it opens, at most once a day. Turn it off under **Settings → Updates**. **More → Check for updates** and the notification-area menus offer a manual check; short cooldowns and server rate limits still apply.
 
-After a transient connection failure, manual checking can retry after ten seconds. Cancellation, timeout and connection outcomes are reported separately with safe reason messages. The signed product's own .NET Framework 4.8 host has completed a live HTTPS metadata check using Windows/SystemDefault TLS; the exact cause of the earlier 0.5.7 connection error remains unconfirmed, and other networks/proxies still need acceptance. Certificate validation is not bypassed.
+After a transient connection failure, manual checking can retry after ten seconds. Cancellation, timeout and connection outcomes are reported separately with safe reason messages. Historical 0.5.8 product-host HTTPS evidence is recorded below; the exact cause of the earlier 0.5.7 connection error remains unconfirmed, and other networks/proxies still need acceptance. Certificate validation is not bypassed.
 
 When a newer version is available, choose **Download** or **Download update** to open its official installer URL in your browser. Snip Studio does not silently download, install or run an update. Requests include the app version, not captures, recognized text, preferences or user identity. A failed check reports an unavailable state rather than claiming that the app is up to date.
 
@@ -88,13 +91,15 @@ Build the application in PowerShell on Windows:
 
 The C# 5 build uses the installed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; a local build is unsigned. The build compiles the app without launching it or running development checks. Optional development checks require separate invocation. Omitting `-UseExistingIcons` compiles and runs the checked-in icon generator.
 
-Selected `checks/Verify-*.ps1` sources cover taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
+Selected `checks/Verify-*.ps1` sources cover crop frames, taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
 ```powershell
-powershell.exe -STA -NoProfile -File .\checks\Verify-CaptureVisibility.ps1 -ReleaseFolder release-0.5.8-signed -ExpectedVersion 0.5.8.0
+powershell.exe -STA -NoProfile -File .\checks\Verify-CropFrame.ps1 -ReleaseFolder release-0.5.9-signed -ExpectedVersion 0.5.9.0
 ```
 
 The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
+
+The source also includes a Python installer integrity checker. Run `python checks/Verify-InstallerIntegrity.py path/to/Setup.exe` on the compiled Setup before signing and again after signing. It reads the embedded NSIS checksum without launching Setup; a mismatch fails the check. Release verification also requires a valid timestamped Authenticode signature and matching payload hashes. The installer's own integrity checks remain enabled. Python is needed only for this development check, not to run Snip Studio.
 
 See [installer packaging](installer/README.md) for the signed-release inputs. Private signing credentials and the publisher's signing workflow are excluded.
 
@@ -102,11 +107,13 @@ See [installer packaging](installer/README.md) for the signed-release inputs. Pr
 
 Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Automatic update checks contact the official GitHub release endpoint by default and can be disabled in Settings; capture content, recognized text, preferences and user identity are not sent. Browser downloads, sharing, external-editor opening and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-The final 0.5.8 application has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **689 signed-library checks passed**: 501 core components, 73 synthetic menu-placement checks and 115 offscreen update-UI/preferences fixture checks. The core set comprises 122 Jump List, 30 taskbar refresh, 174 update checker, 25 capture visibility, 88 translation/request, 34 cooperative-exit and 28 startup-compatibility checks. **73 installer source-policy checks** passed separately. `VALIDATION.txt` records the exact application hash and coverage.
+The final 0.5.9 application built without compiler warnings and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **593 signed-library checks passed**: 392 core checks (78 crop frame, 88 translation, 181 zoom frame and 45 removal movement) plus 201 offscreen crop-layout checks across eight toolbar/dimension/scale cases at scales 1, 1.5 and 2. **73 installer source-policy checks** passed separately. Two synthetic offscreen renders were visually inspected for full and adjusted frames with eight handles; those inspections do not add to the automated count. `VALIDATION.txt` records the exact application hash and coverage.
 
-The exact signed product also passed a live **own-host** update check: .NET Framework 4.8, Windows/SystemDefault protocols, strong-crypto/system-default TLS opt-ins, UpToDate status, exit 0 and preferences unchanged. Its fixed diagnostic runs before preferences, IPC, native editor or Shell initialization. This is actual product-host HTTPS evidence rather than a PowerShell substitute; it does not establish the original 0.5.7 connection failure's exact cause or behavior on every network.
+The preferences source is byte-identical to 0.5.8 and reuses the existing settings file; the crop feature adds no preference fields or reset. Installer logic is unchanged apart from version metadata. This is source evidence for saved-setting preservation, not an executed upgrade with the user's installed profile.
 
-Capture of other open snips and the initiating editor, cross-monitor restoration/cancellation, native Jump List redraw and all existing pins, Windows recent-item behavior, browser download and notification acceptance, real cold/resident countdowns, save-cancel/recording shutdown and full installation/upgrade/uninstall require live acceptance. Component/offscreen checks and the single own-host network request do not establish those broader outcomes; package signatures, payload hashes and readiness evidence are recorded separately.
+Physical mouse/keyboard/DPI behavior, capture of open snips, cross-monitor restoration, native taskbar/cache behavior, browser download/notification acceptance, installed upgrades and endpoint-security acceptance still require live checks. Component/offscreen checks and synthetic render inspection do not establish those outcomes; package signatures, payload hashes and readiness evidence are recorded separately. No new own-host update or approved-close trial is claimed for 0.5.9.
+
+Historically, the signed **0.5.8** application passed 689 signed-library checks and 73 installer source-policy checks. Its exact product host also completed a live HTTPS metadata request with .NET Framework 4.8/Windows TLS defaults, UpToDate status, exit 0 and preferences unchanged. This was actual product-host evidence rather than a PowerShell substitute, but does not identify the earlier 0.5.7 failure's exact cause or prove behavior on every network. These historical checks do not add to the current 0.5.9 totals.
 
 Historically, the signed 0.5.7 application passed **418 component checks** and **73 installer source-policy checks**. A user-approved **CHECKCLOSE** diagnostic on a signed candidate with an older payload closed the installed 0.5.6 listener without changing its executable or installing files. This does not identify the earlier reported 0.5.5 tray-close failure's cause or prove the final full upgrade. No native close trial was repeated for 0.5.8.
 
@@ -114,6 +121,6 @@ Historically, the signed 0.5.6 application passed **272 signed-library checks**,
 
 Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` retains those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
 
-Historically, 658 focused checks passed against signed **0.5.4**; earlier release results do not verify 0.5.8. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
+Historically, 658 focused checks passed against signed **0.5.4**; earlier release results do not verify 0.5.9. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
 
 An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.

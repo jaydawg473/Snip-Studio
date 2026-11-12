@@ -1,7 +1,7 @@
-SNIP STUDIO 0.5.8 — AUTOMATION FORGE
+SNIP STUDIO 0.5.9 — AUTOMATION FORGE
 https://automation-forge.com/
 
-Install with "SnipStudio-0.5.8-Setup.exe", then open Snip Studio from the
+Install with "SnipStudio-0.5.9-Setup.exe", then open Snip Studio from the
 Start menu. Installation is for your Windows account, with an optional desktop
 shortcut. It does not launch the app or enable Windows startup automatically.
 The optional "Start Snip Studio at Windows sign-in" installer component is
@@ -9,6 +9,8 @@ unchecked by default. It uses the saved background preferences at sign-in;
 installation itself does not start the listener or editor.
 When installed Snip Studio files are in use, Setup asks Yes/No/Cancel before attempting to close that installed copy. No is the default. Yes requests a normal exit with save/cancel prompts and recording finalization; it never forces termination. No or Cancel stops without replacing files. Setup waits, then checks file locks again. Older versions may not exit their shortcut listener automatically; if files stay in use, choose Exit from the tray and Retry. Silent installation and /CHECKREADY never close applications.
 Uninstalling keeps your screenshots, recordings, and preferences.
+Updating to 0.5.9 reuses your existing saved app settings; the crop feature does
+not reset them or add new preference fields.
 
 For portable use, extract the ZIP and run "Snip Studio.exe". Keep the matching
 .exe.config beside it. Requires Windows 10/11 with .NET Framework 4.8.
@@ -90,7 +92,14 @@ image pixels. Escape cancels a move. Delete removes the selected annotation.
 The pointer shows the active drawing tool's icon. Right-click an annotation
 to select it and switch to Move, then drag it or use its available handles.
 Pen, Highlight, Arrow, Box, Text, Eraser, Crop, Undo, and Redo are available.
-Crop preserves editable annotations. Eraser removes marks rather than pixels.
+Choose Crop to open a frame around the full image. Drag any of its eight edge
+or corner handles to resize the frame, or drag inside it to move the frame.
+The frame previews the crop. Choose Apply crop or press Enter to apply it;
+choose Cancel or press Escape to keep the image unchanged. An applied crop
+creates one Undo step and preserves editable annotations in the retained image.
+Applying the unchanged full-image frame leaves the image and Undo history
+unchanged. Entering Crop keeps the current zoom and image center.
+Eraser removes marks rather than pixels.
 Highlight snaps to recognized words/lines when enabled. Shift-drag forces
 freehand highlighting. Recognition progress and unavailable states are shown.
 Text notes support rich text. Double-click a note in Move/Text mode, or select
@@ -281,7 +290,20 @@ Icon sources and regeneration tool are in assets\ and tools\.
 
 An independent Automation Forge app; not affiliated with Microsoft.
 
-0.5.8 VERIFICATION STATUS
+0.5.9 VERIFICATION STATUS
+The application builds without compiler warnings and has a Valid timestamped
+Automation Forge signature. 593 signed-library checks passed: 392 core checks
+(78 crop-frame, 88 translation, 181 zoom-frame and 45 removal-movement) plus
+201 offscreen crop-layout checks across eight toolbar/dimension/scale cases.
+73 installer source-policy checks passed separately. Two synthetic offscreen
+renders were visually inspected for full and adjusted crop frames and handles.
+The preferences source is identical to 0.5.8; existing saved settings are reused.
+See VALIDATION.txt for exact application bytes, coverage and limits.
+Actual mouse dragging and physical DPI/keyboard behavior, native capture and
+taskbar behavior, installed-upgrade behavior and endpoint-security acceptance
+still require live checks. Earlier release counts do not add to these totals.
+
+HISTORICAL 0.5.8 VERIFICATION STATUS
 The final application has a Valid timestamped Automation Forge signature.
 689 signed-library checks passed: 501 core component checks, 73 synthetic
 menu-placement checks and 115 offscreen update-UI/preferences fixture checks.

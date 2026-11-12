@@ -39,6 +39,13 @@ namespace SnipStudio
             if (textSelectionDragging) { Cursor = Cursors.IBeam; return; }
             if (moving || panning || removalMoving) { Cursor = Cursors.SizeAll; return; }
             if (textActionsMode) { Cursor = Cursors.Default; return; }
+            if (CropModeActive)
+            {
+                if (CropDragging) SetCropPointer(cropHandle);
+                else if (IsHandleCreated) SetCropPointer(CropFrame.HitTest(CropSelection, ToImage(PointToClient(MousePosition), false), CropHitRadius));
+                else Cursor = GetToolPointer(EditorTool.Crop);
+                return;
+            }
             if (tool == EditorTool.Select)
             {
                 if (IsHandleCreated) UpdateSelectPointer(PointToClient(MousePosition));
@@ -46,6 +53,11 @@ namespace SnipStudio
                 return;
             }
 
+            Cursor = GetToolPointer(tool);
+        }
+
+        private Cursor GetToolPointer(EditorTool pointerTool)
+        {
             int dpi = Math.Max(96, DeviceDpi);
             if (toolPointerDpi != dpi)
             {
@@ -55,12 +67,12 @@ namespace SnipStudio
                 toolPointerDpi = dpi;
             }
             ToolCursor pointer;
-            if (!toolPointers.TryGetValue(tool, out pointer))
+            if (!toolPointers.TryGetValue(pointerTool, out pointer))
             {
-                pointer = ToolCursor.Create(tool, dpi);
-                toolPointers.Add(tool, pointer);
+                pointer = ToolCursor.Create(pointerTool, dpi);
+                toolPointers.Add(pointerTool, pointer);
             }
-            Cursor = pointer.Cursor;
+            return pointer.Cursor;
         }
 
         private void UpdateSelectPointer(Point location)

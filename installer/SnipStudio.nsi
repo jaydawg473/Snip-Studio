@@ -14,7 +14,7 @@ Var InstalledCloseScanCount
 Var InstalledProbeExitCode
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.8-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.5.9-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -30,7 +30,7 @@ Var InstalledProbeExitCode
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.5.8-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-0.5.9-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -40,10 +40,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.5.8.0"
+VIProductVersion "0.5.9.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.8.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.5.8.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.5.9.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.5.9.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -473,7 +473,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.8"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.5.9"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"
