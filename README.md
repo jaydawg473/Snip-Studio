@@ -1,10 +1,20 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.2
+# Snip Studio 0.6.3
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
+
+## Attached options and emoji fix in 0.6.3
+
+- Tool options are an attached card inside the editor, with the mockup's tinted surface, clear fields and group heading. Color and emoji choices expand inside the card; the snip view stays in place.
+- Font and stroke size choices have live samples and dropdown previews. Large samples show their fitted preview percentage; Advanced text retains full formatting.
+- Fixed the DPI-sensitive image copy that clipped emoji in both the chooser and placed stickers. All 24 original asset files remain unchanged.
+- Eraser options includes **Erase all annotations**, with one Undo to restore them together.
+- Saved preferences, offline translation and notices are retained.
+
+Build, signed component/rendering and unshown layout checks passed on November 13, 2026. Native mouse/focus, closed-combo composition, physical DPI and installed-upgrade acceptance remain unverified. See VALIDATION.txt for scope.
 
 ## Editing update in 0.6.2
 

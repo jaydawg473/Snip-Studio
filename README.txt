@@ -1,3 +1,53 @@
+SNIP STUDIO 0.6.3 - AUTOMATION FORGE, 2026-11-13
+https://automation-forge.com/
+
+ATTACHED TOOL OPTIONS, EMOJI CLIPPING AND SIZE PREVIEWS
+Tool options are now an attached card inside the editor. The card uses the
+mockup's tinted surface, rounded outline, left accent, group heading and separate
+fields. It follows the toolbar's top/bottom/left/right placement without changing
+the image viewport, zoom or anchor. Colors and emoji expand inside the same card.
+Font and stroke choices show live samples and dropdown samples. Large samples
+are fitted with an explicit preview percentage. Text previews use the selected
+font/style; Advanced text keeps the full formatting editor.
+
+Emoji loading now copies explicit source/destination pixel rectangles. The old
+DrawImageUnscaled copy enlarged the 72-DPI originals into a 96-DPI bitmap and cut
+off the right/bottom artwork. The fix preserves all original alpha samples and
+restores full chooser thumbnails and placed stickers. Original PNGs are unchanged.
+
+Eraser options now includes Erase all annotations. It retains the current image,
+clears annotations in one history operation, and Undo restores them together.
+An invalid or stale inline draft is retained instead of being silently discarded.
+
+VERIFICATION
+C#5/.NET Framework 4.8 built without warnings. The application has a Valid,
+timestamped Automation Forge Authenticode signature. Application SHA256:
+5E620A080D54E7259D693CA76E92471E91ACEFE4FF716D48AB4CC1451F4D59D7
+
+- editor-tool-updates: 124 passed.
+- object-editing: 160 passed.
+- color-dialogs: 97 passed.
+- erase-all: 23 passed.
+- crop-frame: 78 passed.
+- zoom-frames: 181 passed.
+- icon-artwork: 532 passed.
+- emoji-rendering: 338 passed.
+- scrolling-ui: 195 passed.
+- attached-options: 1045 passed.
+
+These are signed component, rendering and unshown layout checks. Native mouse,
+focus, closed-combo composition, physical DPI and an installed upgrade still need
+live acceptance. Actual owner-draw callbacks are checked separately because
+DrawToBitmap can leave an unopened native combo caption blank. Synthetic card
+renders are actual controls, not screenshots of an installed session.
+Exact final installer/ZIP signatures, CRC, privacy/payload and read-only readiness
+evidence are recorded separately against the final downloads.
+
+Save current work, then run SnipStudio-0.6.3-Setup.exe. Existing preferences and
+their schema are unchanged. Offline translation and all notices are retained.
+
+HISTORICAL 0.6.2 RECORD FOLLOWS
+
 SNIP STUDIO 0.6.2 - AUTOMATION FORGE
 https://automation-forge.com/
 

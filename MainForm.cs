@@ -282,6 +282,11 @@ namespace SnipStudio
         private void ChooseColor(Rectangle anchor)
         {
             if (IsSourceRemovalContext) { canvas.ChooseSourceRemovalFillColor(this); return; }
+            if (toolOptionsPopup != null && !toolOptionsPopup.IsDisposed && toolOptionsPopup.Visible)
+            {
+                OpenInlineInkPalette();
+                return;
+            }
             List<Color> recent = new List<Color>();
             if (preferences.RecentInkColors != null) foreach (int argb in preferences.RecentInkColors) recent.Add(Color.FromArgb(argb));
             using (ColorPaletteDialog picker = new ColorPaletteDialog(canvas.InkColor, recent))
@@ -720,6 +725,7 @@ namespace SnipStudio
         {
             if (canvas.InlineTextEditing && canvas.ContainsFocus && IsInlineTextInputCommand(keyData))
                 return base.ProcessCmdKey(ref msg, keyData);
+            if (keyData == Keys.Escape && CloseShapePopups()) return true;
             if (HandleCropCommand(keyData)) return true;
             if (keyData == Keys.F11) { ToggleFullScreenEditor(); return true; }
             if (keyData == Keys.Escape && TryExitFullScreenOnEscape()) return true;

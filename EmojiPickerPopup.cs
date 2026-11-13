@@ -15,7 +15,13 @@ namespace SnipStudio
         private readonly Font textFont;
         private readonly Size fullSize;
         private readonly float scale;
-        private bool selected, resourcesDisposed;
+        private bool selected, finished, resourcesDisposed;
+
+        // A containing tool card may temporarily own this panel. It must detach
+        // the panel before disposing the popup, which still owns its artwork.
+        internal Panel EmbeddedContent { get { return content; } }
+        internal Size PreferredEmbeddedSize { get { return fullSize; } }
+        internal event EventHandler SelectionFinished;
 
         internal EmojiPickerPopup(Action<string> selectedEmoji, float scale)
         {
@@ -50,8 +56,8 @@ namespace SnipStudio
                         AccessibleDescription = "Choose, then click the snip to place it. Drag corner handles to resize and the top handle to rotate."
                     };
                     button.Click += delegate {
-                        if (selected) return;
-                        selected = true; Close(ToolStripDropDownCloseReason.ItemClicked); selectedEmoji(key);
+                        if (selected || finished) return;
+                        selected = true; FinishChoice(ToolStripDropDownCloseReason.ItemClicked); selectedEmoji(key);
                     };
                     tips.SetToolTip(button, definition.DisplayName + ": choose, then click the snip to place it. Drag corner handles to resize; use the top handle to rotate.");
                     content.Controls.Add(button);
@@ -60,7 +66,7 @@ namespace SnipStudio
                     AutoSize = false, ForeColor = StudioTheme.Muted, Bounds = new Rectangle(S(14), S(noteTop), S(270), S(42)) };
                 content.Controls.Add(note);
                 StudioButton cancel = new StudioButton { Text = "Cancel", Bounds = new Rectangle(S(14), S(cancelTop), S(104), S(32)) };
-                cancel.Click += delegate { Close(ToolStripDropDownCloseReason.CloseCalled); };
+                cancel.Click += delegate { FinishChoice(ToolStripDropDownCloseReason.CloseCalled); };
                 content.Controls.Add(cancel);
             }
             catch { Dispose(); throw; }
@@ -72,9 +78,17 @@ namespace SnipStudio
                 Math.Min(fullSize.Height, Math.Max(1, work.Height - S(8))));
         }
         private int S(int value) { return Math.Max(1, (int)Math.Round(value * scale)); }
+        private void FinishChoice(ToolStripDropDownCloseReason reason)
+        {
+            if (finished) return;
+            finished = true;
+            Close(reason);
+            EventHandler handler = SelectionFinished;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
         protected override bool ProcessCmdKey(ref Message message, Keys keyData)
         {
-            if (keyData == Keys.Escape) { Close(ToolStripDropDownCloseReason.Keyboard); return true; }
+            if (keyData == Keys.Escape) { FinishChoice(ToolStripDropDownCloseReason.Keyboard); return true; }
             return base.ProcessCmdKey(ref message, keyData);
         }
         protected override void Dispose(bool disposing)

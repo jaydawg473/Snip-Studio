@@ -117,7 +117,7 @@ namespace SnipStudio
 
         private void AddShapeChoice(string label, EditorTool kind, string glyph)
         {
-            StudioButton button = IconButton(label, glyph, delegate { SelectTool(kind); });
+            StudioButton button = IconButton(label, glyph, delegate { CloseNestedAnnotationPopups(); SelectTool(kind); });
             button.AccessibleName = label + " shape";
             shapeChoiceButtons.Add(kind, button);
             contextToolbar.Controls.Add(button);
@@ -127,6 +127,7 @@ namespace SnipStudio
         private void UpdateAnnotationContextAfterSelection()
         {
             if (IsDisposed || closing || shapeFillButton == null) return;
+            DismissStaleInlineAnnotationPalette();
             bool beforeShape = lastShapeContextVisible, beforeText = lastInlineContextVisible, beforeEmoji = lastEmojiContextVisible, beforeWorkflow = lastInlineWorkflowVisible;
             UpdateAnnotationContextControls();
             RefreshToolOptionsContents();
@@ -236,11 +237,12 @@ namespace SnipStudio
             EditorTool kind = canvas.Tool == EditorTool.Select && canvas.SelectedShapeTool.HasValue ? canvas.SelectedShapeTool.Value : canvas.Tool;
             bool closed = kind == EditorTool.Rectangle || kind == EditorTool.Ellipse;
             if (fill && !closed) return;
-            CloseShapePopups();
+            CloseNestedAnnotationPopups();
             if (shapeStylePopup != null) shapeStylePopup.Dispose();
+            Func<bool> current = InlinePaletteContextGuard();
             shapeStylePopup = new ShapeStylePopup(canvas.CurrentShapeStyle, fill, closed, delegate(ShapeStyle style)
             {
-                if (!CanChangeAnnotationAppearance || !IsShapeContext || IsEmojiContext) return;
+                if (!CanChangeAnnotationAppearance || !IsShapeContext || IsEmojiContext || !current()) return;
                 try
                 {
                     canvas.CurrentShapeStyle = style;
@@ -250,7 +252,10 @@ namespace SnipStudio
                 }
                 catch (Exception error) { ShowFailure("The shape appearance could not be updated", error); }
             }, Ui(1000) / 1000f, this, RecentToolColors());
-            ShowAnnotationPopup(shapeStylePopup, anchor);
+            shapeStylePopup.PrepareEmbeddedLayout();
+            shapeStylePopup.DraftFinished += delegate { ClearInlineAnnotationPalette(); RefreshToolOptionsContents(); };
+            shapeStylePopup.EmbeddedContent.SizeChanged += delegate { RefreshToolOptionsContents(); };
+            SetInlineAnnotationPalette(shapeStylePopup.EmbeddedContent, delegate { return shapeStylePopup.PreferredEmbeddedSize; }, false, current);
         }
 
         private void ShowEmojiPicker()
@@ -262,7 +267,7 @@ namespace SnipStudio
         private void OpenEmojiPicker(Rectangle anchor)
         {
             if (!CanChangeAnnotationAppearance || !canvas.HasImage) return;
-            CloseShapePopups();
+            CloseNestedAnnotationPopups();
             if (emojiPickerPopup != null) emojiPickerPopup.Dispose();
             emojiPickerPopup = new EmojiPickerPopup(delegate(string value)
             {
@@ -272,7 +277,8 @@ namespace SnipStudio
                 SetStatus(canvas.ActiveEmojiName + ": click to place. Drag a corner to resize; use the top handle to rotate. Emoji stays active.");
                 UpdateAnnotationContextControls(); LayoutChrome(); canvas.Focus();
             }, Ui(1000) / 1000f);
-            ShowAnnotationPopup(emojiPickerPopup, anchor);
+            emojiPickerPopup.SelectionFinished += delegate { ClearInlineAnnotationPalette(); RefreshToolOptionsContents(); };
+            SetInlineAnnotationPalette(emojiPickerPopup.EmbeddedContent, delegate { return emojiPickerPopup.PreferredEmbeddedSize; });
         }
 
         private void ShowAnnotationPopup(ToolStripDropDown popup, Control anchor)
@@ -294,6 +300,13 @@ namespace SnipStudio
         internal bool CloseShapePopups()
         {
             bool closed = CloseToolOptions();
+            return CloseNestedAnnotationPopups() || closed;
+        }
+
+        private bool CloseNestedAnnotationPopups()
+        {
+            bool closed = inlineAnnotationPalette != null;
+            ClearInlineAnnotationPalette();
             if (shapeStylePopup != null && !shapeStylePopup.IsDisposed && shapeStylePopup.Visible) { shapeStylePopup.Close(ToolStripDropDownCloseReason.CloseCalled); closed = true; }
             if (emojiPickerPopup != null && !emojiPickerPopup.IsDisposed && emojiPickerPopup.Visible) { emojiPickerPopup.Close(ToolStripDropDownCloseReason.CloseCalled); closed = true; }
             return closed;
@@ -338,9 +351,14 @@ namespace SnipStudio
             {
                 Graphics g = e.Graphics; g.SmoothingMode = SmoothingMode.AntiAlias;
                 float scale = Math.Max(.5f, Height / 34f);
-                Color back = hovered && Enabled ? StudioTheme.Raised : StudioTheme.Surface;
+                bool optionField = ToolOptionsAppearance.IsOptionsSurface(this);
+                g.Clear(Parent == null ? StudioTheme.Surface : Parent.BackColor);
+                Color back = hovered && Enabled ? StudioTheme.Raised : optionField ? ToolOptionsAppearance.Field : StudioTheme.Surface;
                 using (GraphicsPath round = StudioTheme.Round(new RectangleF(1, 1, Math.Max(1, Width - 3), Math.Max(1, Height - 3)), 6 * scale))
-                using (Brush fill = new SolidBrush(back)) g.FillPath(fill, round);
+                {
+                    using (Brush fill = new SolidBrush(back)) g.FillPath(fill, round);
+                    if (optionField) using (Pen border = new Pen(hovered || Focused ? ToolOptionsAppearance.Accent : ToolOptionsAppearance.Line, Math.Max(1f, scale))) g.DrawPath(border, round);
+                }
                 float side = 18 * scale, left = 10 * scale, top = (Height - side) / 2;
                 RectangleF sample = new RectangleF(left, top, side, side);
                 using (Brush white = new SolidBrush(Color.White)) g.FillEllipse(white, sample);

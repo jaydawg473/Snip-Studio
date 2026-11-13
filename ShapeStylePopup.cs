@@ -30,6 +30,19 @@ namespace SnipStudio
         private Color chosenColor;
         private bool applied;
         private float draftWidth;
+        private bool embedded;
+
+        internal Panel EmbeddedContent { get { return content; } }
+        internal Size PreferredEmbeddedSize { get { return fullSize; } }
+        internal event EventHandler DraftFinished;
+        internal void PrepareEmbeddedLayout()
+        {
+            embedded = true;
+            workingArea = Rectangle.Empty;
+            content.AutoScrollMinSize = Size.Empty;
+            content.AutoScroll = false;
+            content.Size = fullSize;
+        }
 
         internal ShapeStylePopup(ShapeStyle current, bool fillChannel, bool allowFill,
             Action<ShapeStyle> accepted, float scale, IWin32Window dialogOwner = null)
@@ -91,13 +104,13 @@ namespace SnipStudio
             preview = new StylePreview(this.scale) { Bounds = new Rectangle(x, y, usable, S(48)) };
             content.Controls.Add(preview); y += S(56);
             cancel = ButtonAt("Cancel", x, y, S(104), S(34), false);
-            cancel.Click += delegate { Close(ToolStripDropDownCloseReason.CloseCalled); };
+            cancel.Click += delegate { FinishDraft(ToolStripDropDownCloseReason.CloseCalled); };
             apply = ButtonAt("Apply", x + usable - S(112), y, S(112), S(34), true);
             apply.Enabled = allowChannelChange;
             apply.Click += delegate {
                 ShapeStyle result;
                 if (!TryAcceptDraft(out result)) return;
-                Close(ToolStripDropDownCloseReason.ItemClicked); this.accepted(result);
+                FinishDraft(ToolStripDropDownCloseReason.ItemClicked); this.accepted(result);
             };
             tips.SetToolTip(apply, "Apply this style once. Undo restores the selected shape's previous style.");
             y += S(46);
@@ -141,10 +154,19 @@ namespace SnipStudio
                 cancel.SetBounds(x, y, S(104), S(34));
                 apply.SetBounds(x + usable - S(112), y, S(112), S(34)); y += S(46);
                 fullSize = new Size(S(320), y);
-                content.AutoScrollMinSize = new Size(S(292), fullSize.Height);
-                if (workingArea.Width > 0 && workingArea.Height > 0) FitToWorkingArea(workingArea);
-                else content.Size = host.Size = Size = fullSize;
-                content.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
+                if (embedded)
+                {
+                    content.AutoScrollMinSize = Size.Empty;
+                    content.AutoScroll = false;
+                    content.Size = fullSize;
+                }
+                else
+                {
+                    content.AutoScrollMinSize = new Size(S(292), fullSize.Height);
+                    if (workingArea.Width > 0 && workingArea.Height > 0) FitToWorkingArea(workingArea);
+                    else content.Size = host.Size = Size = fullSize;
+                    content.AutoScrollPosition = new Point(-scroll.X, -scroll.Y);
+                }
                 if (Visible && workingArea.Width > 0 && workingArea.Height > 0)
                     Location = new Point(Math.Max(workingArea.Left, Math.Min(Left, workingArea.Right - Width)),
                         Math.Max(workingArea.Top, Math.Min(Top, workingArea.Bottom - Height)));
@@ -190,9 +212,15 @@ namespace SnipStudio
         }
         private Font OwnFont(float size, FontStyle style) { Font font = new Font("Segoe UI", size, style); ownedFonts.Add(font); return font; }
         private int S(int value) { return Math.Max(1, (int)Math.Round(value * scale)); }
+        private void FinishDraft(ToolStripDropDownCloseReason reason)
+        {
+            Close(reason);
+            EventHandler handler = DraftFinished;
+            if (handler != null) handler(this, EventArgs.Empty);
+        }
         protected override bool ProcessCmdKey(ref Message message, Keys keyData)
         {
-            if (keyData == Keys.Escape) { Close(ToolStripDropDownCloseReason.Keyboard); return true; }
+            if (keyData == Keys.Escape) { FinishDraft(ToolStripDropDownCloseReason.Keyboard); return true; }
             return base.ProcessCmdKey(ref message, keyData);
         }
         protected override void Dispose(bool disposing)

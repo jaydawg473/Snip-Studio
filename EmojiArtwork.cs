@@ -177,7 +177,11 @@ namespace SnipStudio
                         using (Graphics graphics = Graphics.FromImage(detached))
                         {
                             graphics.CompositingMode = CompositingMode.SourceCopy;
-                            graphics.DrawImageUnscaled(decoded, 0, 0);
+                            // DrawImageUnscaled still honors the PNG's physical DPI on
+                            // some GDI+ paths. Copy pixels explicitly so a 72-DPI PNG
+                            // cannot be enlarged and clipped in this 96-DPI bitmap.
+                            graphics.DrawImage(decoded, new Rectangle(0, 0, decoded.Width, decoded.Height),
+                                0, 0, decoded.Width, decoded.Height, GraphicsUnit.Pixel);
                         }
                     }
                 }

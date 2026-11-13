@@ -346,17 +346,18 @@ namespace SnipStudio
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
             float scale = g.DpiX / 96f;
+            bool optionField = ToolOptionsAppearance.IsOptionsSurface(this);
             Color surface = Parent == null ? StudioTheme.Surface : Parent.BackColor;
             g.Clear(surface);
-            Color fill = Primary ? (hovered ? StudioTheme.AccentHover : StudioTheme.Accent) : selected ? StudioTheme.Selection : hovered ? StudioTheme.Raised : surface;
+            Color fill = Primary ? (hovered ? StudioTheme.AccentHover : StudioTheme.Accent) : selected ? StudioTheme.Selection : hovered ? StudioTheme.Raised : optionField ? ToolOptionsAppearance.Field : surface;
             if (pressed) fill = Primary ? StudioTheme.AccentPressed : StudioTheme.Pressed;
             if (!Enabled) fill = surface;
             RectangleF bounds = new RectangleF(1, 1, Width - 3, Height - 3);
             using (GraphicsPath path = StudioTheme.Round(bounds, 7 * scale))
             {
                 using (Brush brush = new SolidBrush(fill)) g.FillPath(brush, path);
-                if (selected || (hovered && !Primary))
-                    using (Pen outline = new Pen(selected ? StudioTheme.Accent : StudioTheme.Border, scale)) g.DrawPath(outline, path);
+                if (selected || (hovered && !Primary) || (optionField && !Primary))
+                    using (Pen outline = new Pen(selected ? StudioTheme.Accent : optionField ? ToolOptionsAppearance.Line : StudioTheme.Border, scale)) g.DrawPath(outline, path);
             }
             Color ink = !Enabled ? StudioTheme.Disabled : Primary ? StudioTheme.PrimaryText : selected ? StudioTheme.SelectionText : StudioTheme.Text;
             bool iconOnly = IconOnly || Text == "+" || Text == "−";
@@ -416,6 +417,7 @@ namespace SnipStudio
 
     internal sealed class StudioComboBox : ComboBox
     {
+        internal Action<DrawItemEventArgs> ItemPreviewRenderer { get; set; }
         private readonly Dictionary<string, Bitmap> modeImages = new Dictionary<string, Bitmap>(StringComparer.Ordinal);
         private int cachedModeSize;
         private Color cachedModeColor;
@@ -461,8 +463,10 @@ namespace SnipStudio
 
         protected override void OnDrawItem(DrawItemEventArgs e)
         {
+            if (ItemPreviewRenderer != null) { ItemPreviewRenderer(e); return; }
             bool selected = (e.State & DrawItemState.Selected) != 0;
-            using (Brush fill = new SolidBrush(selected ? StudioTheme.Selection : StudioTheme.Raised)) e.Graphics.FillRectangle(fill, e.Bounds);
+            Color itemSurface = ToolOptionsAppearance.IsOptionsSurface(this) ? ToolOptionsAppearance.Field : StudioTheme.Raised;
+            using (Brush fill = new SolidBrush(selected ? StudioTheme.Selection : itemSurface)) e.Graphics.FillRectangle(fill, e.Bounds);
             if (e.Index >= 0)
             {
                 Rectangle bounds = e.Bounds;

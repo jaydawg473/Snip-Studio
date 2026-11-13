@@ -9,6 +9,7 @@ namespace SnipStudio
         public event EventHandler ShapeStyleChanged;
 
         public bool HasSelectedShape { get { return HasImage && !textActionsMode && document.GetShapeAnnotationStyle(selectedIndex) != null; } }
+        internal int SelectedAnnotationIndex { get { return selectedIndex; } }
         public ShapeStyle SelectedShapeStyle { get { return HasSelectedShape ? document.GetShapeAnnotationStyle(selectedIndex) : null; } }
         public EditorTool? SelectedShapeTool { get { return HasSelectedShape ? document.GetShapeAnnotationTool(selectedIndex) : null; } }
 
