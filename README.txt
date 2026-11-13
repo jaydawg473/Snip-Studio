@@ -1,3 +1,42 @@
+SNIP STUDIO 0.6.1 - AUTOMATION FORGE
+https://automation-forge.com/
+
+ICON PADDING AND CLOSE PROMPTS - 2026-11-13
+Outer transparent padding has been removed from the application artwork and
+all 43 toolbar symbols. The app's square icon frames retain transparent rounded
+corners; artwork reaches every image edge. Toolbar images use tight natural
+dimensions and keep their aspect ratios. Button hit areas remain usable.
+Explicit pixel drawing also prevents icons growing a second time at higher DPI.
+SVG, 32/64-pixel toolbar PNGs, app PNGs and all seven ICO frames are regenerated.
+
+The unsaved-snip prompt used when closing now has clear Save, Don't save and
+Cancel buttons. It is positioned within a monitor's working area, requests the
+foreground and has its own taskbar entry. If Windows declines foreground focus,
+the prompt alone temporarily stays above other windows until activated or closed.
+Retrying Close all brings the same decision forward. Other close requests queue
+behind it; the batch advances after actual closure. Cancel or a canceled/failed
+Save stops the remaining batch. No work is automatically discarded.
+
+Save current work, then run SnipStudio-0.6.1-Setup.exe. Setup retains its normal
+close/save/cancel update flow. Existing saved preferences and their schema are
+unchanged. The complete offline translation folder, models and notices remain.
+
+VERIFICATION
+The C#5/.NET Framework 4.8 application built without compiler warnings. Its
+Automation Forge signature and timestamp verified Valid. Exact application SHA256:
+1E057DBD3718BC2D4916A142D041D08A64AD21D515A35544EF33AD18A7C54251
+966 current component and policy checks passed: 532 icon-artwork checks,
+121 editor-tool checks, 195 scrolling-UI checks and 118 close-prompt checks.
+2,442 unshown layout checks also passed. Icon tests include 223 rasters and
+12 actual unshown button paints at 96/144/192 DPI. Generated assets were checked
+for tight raster bounds and reviewed in complete icon/ICO contact sheets.
+These checks do not establish actual Windows taskbar message delivery, native
+foreground permission, physical monitor/DPI behavior or an installed upgrade.
+Final installer signature, integrity, payload/privacy and readiness evidence are
+recorded separately against the exact delivered package files.
+
+HISTORICAL 0.6.0 README FOLLOWS
+
 SNIP STUDIO 0.6.0 - AUTOMATION FORGE
 https://automation-forge.com/
 

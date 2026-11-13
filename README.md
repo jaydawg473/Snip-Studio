@@ -1,10 +1,18 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.0
+# Snip Studio 0.6.1
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
+
+## Icon and close-prompt update in 0.6.1
+
+- Removed outer transparent padding from all 43 toolbar symbols and the application icon frames, preserving natural proportions and transparent rounded corners. Updated SVGs, PNGs and ICO frames are included. Explicit pixel drawing fixes extra enlargement at higher DPI.
+- Closing an edited snip uses a visible, taskbar-accessible **Save / Don't save / Cancel** decision. Retrying closing brings the same decision forward; other grouped close requests queue behind it. Cancel or an unsuccessful Save stops the remaining batch.
+- Existing preferences, capture/recording guards and optional background shortcuts are retained.
+
+On November 13, 2026, the exact signed 0.6.1 app passed 966 component/policy checks and 2,442 unshown layout checks. All 136 generated asset files were reconciled and all 135 image files structurally reviewed; complete icon-size sheets were visually inspected. Actual Windows foreground/taskbar behavior, physical DPI and an installed upgrade still need live acceptance.
 
 ## Editor tool update in 0.6.0
 

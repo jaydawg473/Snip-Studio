@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -13,25 +15,35 @@ namespace SnipStudio
     {
         public static readonly string[] Keys = new string[] {
             "new", "rectangle", "freeform", "window", "fullscreen", "scrolling", "crop",
-            "pen", "highlighter", "arrow", "box", "text", "eraser", "remove-area", "color", "move", "pan",
+            "pen", "highlighter", "shapes", "ellipse", "line", "emoji", "arrow", "box", "text", "eraser", "remove-area", "color", "move", "pan",
             "open", "paste", "copy", "save", "share", "undo", "redo", "zoom-in", "zoom-out", "fit", "help", "text-scan", "print",
             "record", "stop", "microphone", "volume", "settings", "more", "camera", "clock", "video"
         };
 
+        private static readonly Dictionary<string, RectangleF> toolInkBounds = new Dictionary<string, RectangleF>(StringComparer.Ordinal);
+        private static readonly RectangleF appInkBounds = new RectangleF(.725f, .725f, 22.55f, 22.55f);
+
         public static Bitmap CreateToolIcon(string key, int size, Color color)
         {
             if (size < 1 || size > 2048) throw new ArgumentOutOfRangeException("size");
-            int renderSize = size <= 128 ? size * 4 : size;
-            using (Bitmap master = new Bitmap(renderSize, renderSize, PixelFormat.Format32bppArgb))
+            RectangleF bounds = GetToolInkBounds(key);
+            float fit = size / Math.Max(bounds.Width, bounds.Height);
+            int width = Math.Max(1, Math.Min(size, (int)Math.Ceiling(bounds.Width * fit)));
+            int height = Math.Max(1, Math.Min(size, (int)Math.Ceiling(bounds.Height * fit)));
+            int samples = size <= 128 ? 4 : 1;
+            using (Bitmap master = new Bitmap(width * samples, height * samples, PixelFormat.Format32bppArgb))
             {
                 using (Graphics graphics = Graphics.FromImage(master))
                 {
                     Prepare(graphics);
                     graphics.Clear(Color.Transparent);
-                    graphics.ScaleTransform(renderSize / 24f, renderSize / 24f);
+                    float uniform = Math.Min(width / bounds.Width, height / bounds.Height) * samples;
+                    graphics.TranslateTransform((master.Width - bounds.Width * uniform) / 2f, (master.Height - bounds.Height * uniform) / 2f);
+                    graphics.ScaleTransform(uniform, uniform);
+                    graphics.TranslateTransform(-bounds.X, -bounds.Y);
                     using (VectorPainter painter = new VectorPainter(graphics, color)) DrawTool(key, painter);
                 }
-                return Resize(master, size);
+                using (Bitmap raster = Resize(master, width, height)) return TrimTransparent(raster);
             }
         }
 
@@ -40,7 +52,11 @@ namespace SnipStudio
             using (VectorPainter painter = new VectorPainter(null, Color.Black))
             {
                 DrawTool(key, painter);
-                return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"24\" height=\"24\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n" + painter.Svg + "</svg>\n";
+                RectangleF bounds = painter.InkBounds;
+                float fit = 24f / Math.Max(bounds.Width, bounds.Height);
+                return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"" + Number(bounds.Width * fit) + "\" height=\"" + Number(bounds.Height * fit) +
+                    "\" viewBox=\"" + Number(bounds.X) + " " + Number(bounds.Y) + " " + Number(bounds.Width) + " " + Number(bounds.Height) +
+                    "\" preserveAspectRatio=\"xMidYMid meet\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\">\n" + painter.Svg + "</svg>\n";
             }
         }
 
@@ -54,7 +70,8 @@ namespace SnipStudio
                 {
                     Prepare(graphics);
                     graphics.Clear(Color.Transparent);
-                    graphics.ScaleTransform(renderSize / 24f, renderSize / 24f);
+                    graphics.ScaleTransform(renderSize / appInkBounds.Width, renderSize / appInkBounds.Height);
+                    graphics.TranslateTransform(-appInkBounds.X, -appInkBounds.Y);
                     using (GraphicsPath tile = RoundedRectangle(1, 1, 22, 22, 5.2f))
                     using (LinearGradientBrush blue = new LinearGradientBrush(new PointF(3, 1), new PointF(21, 24), Color.FromArgb(40, 145, 255), Color.FromArgb(0, 66, 167)))
                     {
@@ -91,13 +108,13 @@ namespace SnipStudio
                     }
                     using (Pen seam = new Pen(Color.FromArgb(0, 103, 174), .65f)) graphics.DrawLine(seam, 13.25f, 8.55f, 15.45f, 10.75f);
                 }
-                return Resize(master, size);
+                return Resize(master, size, size);
             }
         }
 
         public static string GetAppSvg()
         {
-            return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\"0 0 24 24\" fill=\"none\">\n" +
+            return "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"512\" height=\"512\" viewBox=\".725 .725 22.55 22.55\" preserveAspectRatio=\"xMidYMid meet\" fill=\"none\">\n" +
                 "<defs><linearGradient id=\"blue\" x1=\"3\" y1=\"1\" x2=\"21\" y2=\"24\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#2891FF\"/><stop offset=\"1\" stop-color=\"#0042A7\"/></linearGradient><linearGradient id=\"cyan\" x1=\"10\" y1=\"8\" x2=\"14\" y2=\"16\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#B6FFFF\"/><stop offset=\"1\" stop-color=\"#3FDFE2\"/></linearGradient></defs>\n" +
                 "<rect x=\"1\" y=\"1\" width=\"22\" height=\"22\" rx=\"5.2\" fill=\"url(#blue)\" stroke=\"#9BDDFF\" stroke-opacity=\".35\" stroke-width=\".55\"/>\n" +
                 "<path d=\"M3 6.5C4 2.5 13.5 .8 19.2 3.1C13.2 3.6 6.8 7.7 3 14.5Z\" fill=\"white\" opacity=\".08\"/>\n" +
@@ -116,10 +133,7 @@ namespace SnipStudio
 
         private static void DrawTool(string key, VectorPainter p)
         {
-            string normalized = (key ?? "").ToLowerInvariant();
-            if (normalized == "highlight") normalized = "highlighter";
-            if (normalized == "minus") normalized = "zoom-out";
-            if (normalized == "plus") normalized = "zoom-in";
+            string normalized = NormalizeKey(key);
             switch (normalized)
             {
                 case "more": p.Dot(5, 12, 1.1f); p.Dot(12, 12, 1.1f); p.Dot(19, 12, 1.1f); break;
@@ -287,16 +301,72 @@ namespace SnipStudio
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
         }
 
-        private static Bitmap Resize(Bitmap source, int size)
+        private static string NormalizeKey(string key)
         {
-            Bitmap output = new Bitmap(size, size, PixelFormat.Format32bppArgb);
+            string normalized = (key ?? "").ToLowerInvariant();
+            if (normalized == "highlight") return "highlighter";
+            if (normalized == "minus") return "zoom-out";
+            if (normalized == "plus") return "zoom-in";
+            return normalized;
+        }
+
+        private static RectangleF GetToolInkBounds(string key)
+        {
+            string normalized = NormalizeKey(key);
+            lock (toolInkBounds)
+            {
+                RectangleF bounds;
+                if (!toolInkBounds.TryGetValue(normalized, out bounds))
+                {
+                    using (VectorPainter painter = new VectorPainter(null, Color.Black))
+                    {
+                        DrawTool(normalized, painter);
+                        bounds = painter.InkBounds;
+                    }
+                    toolInkBounds.Add(normalized, bounds);
+                }
+                return bounds;
+            }
+        }
+
+        private static string Number(float value) { return value.ToString("0.######", CultureInfo.InvariantCulture); }
+
+        private static Bitmap Resize(Bitmap source, int width, int height)
+        {
+            Bitmap output = new Bitmap(width, height, PixelFormat.Format32bppArgb);
             using (Graphics g = Graphics.FromImage(output))
             {
                 Prepare(g);
                 g.Clear(Color.Transparent);
-                g.DrawImage(source, new Rectangle(0, 0, size, size), 0, 0, source.Width, source.Height, GraphicsUnit.Pixel);
+                g.DrawImage(source, new Rectangle(0, 0, width, height), 0, 0, source.Width, source.Height, GraphicsUnit.Pixel);
             }
             return output;
+        }
+
+        // One scan per rendered bitmap removes even the last subpixel empty edge.
+        // Callers cache the completed images; bounds geometry is cached separately.
+        private static Bitmap TrimTransparent(Bitmap source)
+        {
+            Rectangle whole = new Rectangle(0, 0, source.Width, source.Height);
+            BitmapData pixels = source.LockBits(whole, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            int left = source.Width, top = source.Height, right = -1, bottom = -1;
+            try
+            {
+                int[] row = new int[source.Width];
+                for (int y = 0; y < source.Height; y++)
+                {
+                    Marshal.Copy(IntPtr.Add(pixels.Scan0, y * pixels.Stride), row, 0, row.Length);
+                    for (int x = 0; x < row.Length; x++)
+                    {
+                        if (((uint)row[x] >> 24) == 0) continue;
+                        left = Math.Min(left, x); right = Math.Max(right, x);
+                        top = Math.Min(top, y); bottom = Math.Max(bottom, y);
+                    }
+                }
+            }
+            finally { source.UnlockBits(pixels); }
+            if (right < left) return new Bitmap(1, 1, PixelFormat.Format32bppArgb);
+            return source.Clone(Rectangle.FromLTRB(left, top, right + 1, bottom + 1), PixelFormat.Format32bppArgb);
         }
 
         private static GraphicsPath RoundedRectangle(float x, float y, float w, float h, float r)
@@ -316,7 +386,10 @@ namespace SnipStudio
             private readonly Pen pen;
             private readonly Brush fill;
             private readonly StringBuilder svg = new StringBuilder();
+            private RectangleF inkBounds;
+            private bool hasInkBounds;
             internal string Svg { get { return svg.ToString(); } }
+            internal RectangleF InkBounds { get { return inkBounds; } }
 
             internal VectorPainter(Graphics graphics, Color color)
             {
@@ -330,26 +403,51 @@ namespace SnipStudio
             internal void Path(string d)
             {
                 svg.Append("  <path d=\"").Append(d).Append("\"/>\n");
-                if (graphics == null) return;
-                using (GraphicsPath path = ParsePath(d)) graphics.DrawPath(pen, path);
+                using (GraphicsPath path = ParsePath(d))
+                {
+                    if (graphics != null) graphics.DrawPath(pen, path);
+                    else IncludePath(path, true);
+                }
             }
 
             internal void RoundRect(float x, float y, float w, float h, float r)
             {
                 svg.Append("  <rect x=\"").Append(N(x)).Append("\" y=\"").Append(N(y)).Append("\" width=\"").Append(N(w)).Append("\" height=\"").Append(N(h)).Append("\" rx=\"").Append(N(r)).Append("\"/>\n");
-                if (graphics != null) using (GraphicsPath path = RoundedRectangle(x, y, w, h, r)) graphics.DrawPath(pen, path);
+                using (GraphicsPath path = RoundedRectangle(x, y, w, h, r))
+                {
+                    if (graphics != null) graphics.DrawPath(pen, path);
+                    else IncludePath(path, true);
+                }
             }
 
             internal void Circle(float x, float y, float radius)
             {
                 svg.Append("  <circle cx=\"").Append(N(x)).Append("\" cy=\"").Append(N(y)).Append("\" r=\"").Append(N(radius)).Append("\"/>\n");
                 if (graphics != null) graphics.DrawEllipse(pen, x - radius, y - radius, radius * 2, radius * 2);
+                else using (GraphicsPath path = new GraphicsPath())
+                { path.AddEllipse(x - radius, y - radius, radius * 2, radius * 2); IncludePath(path, true); }
             }
 
             internal void Dot(float x, float y, float radius)
             {
                 svg.Append("  <circle cx=\"").Append(N(x)).Append("\" cy=\"").Append(N(y)).Append("\" r=\"").Append(N(radius)).Append("\" fill=\"currentColor\" stroke=\"none\"/>\n");
                 if (graphics != null) graphics.FillEllipse(fill, x - radius, y - radius, radius * 2, radius * 2);
+                else IncludeBounds(new RectangleF(x - radius, y - radius, radius * 2, radius * 2));
+            }
+
+            private void IncludePath(GraphicsPath path, bool stroked)
+            {
+                using (GraphicsPath outline = (GraphicsPath)path.Clone())
+                {
+                    if (stroked) outline.Widen(pen, null, .001f);
+                    IncludeBounds(outline.GetBounds());
+                }
+            }
+
+            private void IncludeBounds(RectangleF bounds)
+            {
+                inkBounds = hasInkBounds ? RectangleF.Union(inkBounds, bounds) : bounds;
+                hasInkBounds = true;
             }
 
             private static string N(float value) { return value.ToString("0.###", CultureInfo.InvariantCulture); }

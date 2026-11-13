@@ -151,6 +151,8 @@ namespace SnipStudio
         private ToolStripMenuItem AddMenuItem(string label, string glyph, EventHandler action)
         {
             ToolStripMenuItem item = new ToolStripMenuItem(label, String.IsNullOrEmpty(glyph) ? null : IconArtwork.CreateToolIcon(glyph, 18, StudioTheme.Text), action);
+            item.ImageScaling = ToolStripItemImageScaling.None;
+            item.ImageAlign = ContentAlignment.MiddleCenter;
             if (!String.IsNullOrEmpty(glyph)) item.Tag = "glyph:" + glyph;
             moreMenu.Items.Add(item);
             return item;

@@ -1,3 +1,55 @@
+SNIP STUDIO 0.6.1 - ICON ARTWORK AND CLOSE PROMPTS, 2026-11-13
+
+FINAL APPLICATION COMPONENT VERIFICATION
+Version 0.6.1.0 built without compiler warnings. Timestamped Automation Forge
+Authenticode verified Valid. Exact application SHA256:
+1E057DBD3718BC2D4916A142D041D08A64AD21D515A35544EF33AD18A7C54251
+
+Root-executed current checks:
+- Verify-IconArtwork: 532 passed, 223 rasters and 12 actual unshown button paints.
+  All 43 glyphs tested at five sizes, app frames at 16 through 512, tight alpha
+  bounds, natural aspect, complete SVG catalog, ink proportions and placement
+  at 96/144/192 DPI. Exact raster RGB and an external SVG renderer are outside scope.
+- Verify-EditorToolUpdates: 121 passed.
+- Verify-ScrollingUi: 195 passed, including 32 actual unshown button paints.
+- Verify-UnsavedClose: 118 passed. Pure geometry/message cases, unshown close
+  queue/coordinator/decision fixtures, signed call metadata and source policies.
+  No prompt was shown or activated by this checker.
+- Private Verify-EditorLayout: 2,442 passed in eight editor and nine popup fixtures.
+
+ICON ASSET PROVENANCE AND REVIEW
+A timestamped signed 0.6.1 library was loaded without running its entrypoint to
+export code-generated art. Bootstrap SHA256:
+DBF471D8FD3F7253B01EB548B0756744DEF8DC9F1FDBFE95DE528BCD209BAED2
+The final application was then rebuilt using the regenerated ICO and signed.
+All 136 asset files match the export report: 43 tool SVGs and two PNG sizes each,
+app SVG, two app PNGs, seven-frame ICO, two preview sheets and README.
+All 135 image files passed structural/metadata review, including PNG/ICO frame
+bounds/CRC/trailing data and SVG external/active content checks. The full icon
+and app-size sheets were visually inspected. No screenshot/user image was input.
+No unsigned icon-generator helper was compiled or executed.
+
+CLOSING BEHAVIOR
+An existing 0.5.9 session had a visible native Unsaved snip prompt below other
+windows and all four editors disabled; the user confirmed the pop-under behavior.
+The new closing-only dialog requests foreground focus, provides taskbar access,
+and uses a temporary dialog-only TopMost fallback. Repeated close requests reuse
+one prompt; queued editors advance only after actual closure. Cancel, failed or
+canceled Save, and global exit cancellation clear queued intentions. Existing
+capture/recording finalization and opt-in tray behavior are preserved.
+This implementation has source/component evidence. Real taskbar Close all bursts,
+foreground restrictions, physical DPI/monitor positioning, Save/Don't save/Cancel
+interaction and production installed-update acceptance remain unverified.
+
+PREFERENCES AND PACKAGING
+Preferences.cs remains byte-identical to 0.6.0/0.5.9:
+FE1AC75D37379BBAE87216860043C7315485F4E469FAB31FBDC2F75D84AE886F
+Package signatures, NSIS CRC/protected bytes, payload reconciliation/privacy and
+read-only installer readiness evidence are separate final-artifact records.
+No historical result below is an additional current-version check.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+
 SNIP STUDIO 0.6.0 - EDITOR TOOL UPDATE, 2026-11-13
 
 APPLICATION AND COMPONENT VERIFICATION COMPLETE

@@ -121,7 +121,7 @@ try {
         $icon = $null
         try {
             $icon = $createIcon.Invoke($null, [object[]]@($key, 18, [Drawing.Color]::Black))
-            Confirm-ScrollingUi ($icon.Width -eq 18 -and $icon.Height -eq 18) ('Catalog icon renders: ' + $key)
+            Confirm-ScrollingUi ($icon.Width -ge 1 -and $icon.Height -ge 1 -and $icon.Width -le 18 -and $icon.Height -le 18) ('Catalog icon renders within its 18px slot with natural proportions: ' + $key)
             Confirm-ScrollingUi ([string]$getSvg.Invoke($null, [object[]]@($key)) -match '<svg') ('Catalog SVG renders: ' + $key)
         } finally { if ($null -ne $icon) { $icon.Dispose() } }
     }

@@ -26,6 +26,8 @@ checks/*
 !checks/Verify-CaptureVisibility.ps1
 !checks/Verify-CropFrame.ps1
 !checks/Verify-EditorToolUpdates.ps1
+!checks/Verify-IconArtwork.ps1
+!checks/Verify-UnsavedClose.ps1
 !checks/Verify-ScrollingSession.ps1
 !checks/Verify-ScrollingAnimation.ps1
 !checks/Verify-ScrollingCapture.ps1

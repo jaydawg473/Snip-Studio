@@ -33,6 +33,7 @@ namespace SnipStudio
         private Button externalEditorButton;
         private string currentPath;
         private bool capturePending, hotkeyRegistered, closing;
+        private bool closeDecisionInProgress;
         private bool closeEmptyShortcutCapture;
         private bool captureOpenSnipsRequested;
         private bool highlighterColor;
@@ -399,8 +400,10 @@ namespace SnipStudio
         {
             if (IsCaptureSavePending) { SetStatus("Finishing the current capture before " + action + ". Please wait briefly."); return false; }
             if (!canvas.HasImage || !canvas.IsDirty || !ShouldAskToSaveEdits) return true;
-            DialogResult answer = MessageBox.Show(this, "Save your current snip before " + action + "?", "Unsaved snip",
-                MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+            DialogResult answer = String.Equals(action, "closing", StringComparison.Ordinal)
+                ? EditorClosePrompt.AskToSave(this)
+                : MessageBox.Show(this, "Save your current snip before " + action + "?", "Unsaved snip",
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
             CaptureVisibilityScope.NotifyNativeDialogClosed();
             if (answer == DialogResult.Cancel) return false;
             return answer != DialogResult.Yes || SaveImage(false);
@@ -744,6 +747,11 @@ namespace SnipStudio
 
         protected override void WndProc(ref Message message)
         {
+            if (EditorClosePrompt.ActivatePendingForCloseMessage(this, message.Msg, message.WParam))
+            {
+                message.Result = IntPtr.Zero;
+                return;
+            }
             if (HandleAdditionalHotkey(message)) { base.WndProc(ref message); return; }
             if (message.Msg == 0x0312 && message.WParam.ToInt32() == HotkeyId)
             {
@@ -780,6 +788,8 @@ namespace SnipStudio
 
         private void OnClosing(object sender, FormClosingEventArgs e)
         {
+            if (EditorClosePrompt.DeferCloseIfPending(this)) { e.Cancel = true; return; }
+            if (closeDecisionInProgress) { e.Cancel = true; return; }
             if (TryDelayCloseForScrollingCapture(e)) return;
             if (TryDelayCloseForCaptureSave(e)) return;
             if (recordingSession)
@@ -789,8 +799,14 @@ namespace SnipStudio
                 StopRecording();
                 return;
             }
-            if (TryHideToTray(e)) return;
-            if (!ConfirmReplace("closing")) { e.Cancel = true; forceExit = false; Program.CancelApplicationExit(); return; }
+            if (TryHideToTray(e)) { EditorClosePrompt.CompleteHiddenClose(this); return; }
+            closeDecisionInProgress = true;
+            try
+            {
+                if (!ConfirmReplace("closing")) { e.Cancel = true; forceExit = false; Program.CancelApplicationExit(); return; }
+            }
+            catch { Program.CancelApplicationExit(); throw; }
+            finally { closeDecisionInProgress = false; }
             closing = true;
             preferences.CaptureModeIndex = mode.SelectedIndex;
             if (preferences.RememberCaptureDelay) preferences.DelaySeconds = sessionCaptureDelay ?? new int[] { 0, 3, 5, 10 }[Math.Max(0, delay.SelectedIndex)];

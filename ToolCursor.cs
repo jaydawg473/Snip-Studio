@@ -72,8 +72,10 @@ namespace SnipStudio
                         // halo and dark stroke remain visible on arbitrary snips.
                         for (int dy = -halo; dy <= halo; dy += halo)
                             for (int dx = -halo; dx <= halo; dx += halo)
-                                g.DrawImageUnscaled(light, inset + dx, inset + dy);
-                        g.DrawImageUnscaled(dark, inset, inset);
+                                g.DrawImage(light, new Rectangle(inset + (glyphSize - light.Width) / 2 + dx, inset + (glyphSize - light.Height) / 2 + dy,
+                                    light.Width, light.Height), 0, 0, light.Width, light.Height, GraphicsUnit.Pixel);
+                        g.DrawImage(dark, new Rectangle(inset + (glyphSize - dark.Width) / 2, inset + (glyphSize - dark.Height) / 2,
+                            dark.Width, dark.Height), 0, 0, dark.Width, dark.Height, GraphicsUnit.Pixel);
                         // The small contact dot is the precise image coordinate;
                         // it does not add a generic cross over the tool artwork.
                         float outer = 1.8f * scale, inner = .8f * scale;

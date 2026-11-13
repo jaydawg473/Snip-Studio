@@ -9,8 +9,8 @@ using System.Windows.Forms;
 [assembly: AssemblyDescription("A local screenshot, annotation, and screen recording workspace")]
 [assembly: AssemblyCompany("Automation Forge")]
 [assembly: AssemblyProduct("Snip Studio")]
-[assembly: AssemblyVersion("0.6.0.0")]
-[assembly: AssemblyFileVersion("0.6.0.0")]
+[assembly: AssemblyVersion("0.6.1.0")]
+[assembly: AssemblyFileVersion("0.6.1.0")]
 [assembly: System.Runtime.Versioning.TargetFramework(".NETFramework,Version=v4.8", FrameworkDisplayName = ".NET Framework 4.8")]
 
 namespace SnipStudio
@@ -48,6 +48,7 @@ namespace SnipStudio
 
         internal static void CancelApplicationExit()
         {
+            EditorClosePrompt.CancelQueuedCloses();
             if (applicationContext != null) applicationContext.CancelExit();
         }
 

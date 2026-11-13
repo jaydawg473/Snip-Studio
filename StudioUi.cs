@@ -233,6 +233,8 @@ namespace SnipStudio
                 {
                     Image previous = item.Image;
                     item.Image = IconArtwork.CreateToolIcon(glyph.Substring(6), 20, Text);
+                    item.ImageScaling = ToolStripItemImageScaling.None;
+                    item.ImageAlign = ContentAlignment.MiddleCenter;
                     if (previous != null) previous.Dispose();
                 }
                 ToolStripDropDownItem parent = item as ToolStripDropDownItem;
@@ -346,7 +348,10 @@ namespace SnipStudio
                     cachedSize = iconSize;
                     cachedColor = ink;
                 }
-                g.DrawImageUnscaled(glyphImage, left, top);
+                // Explicit pixel rectangles prevent GDI+ from scaling a 96-DPI
+                // cached bitmap a second time on a high-DPI control graphics.
+                g.DrawImage(glyphImage, new Rectangle(left + (iconSize - glyphImage.Width) / 2, top + (iconSize - glyphImage.Height) / 2,
+                    glyphImage.Width, glyphImage.Height), 0, 0, glyphImage.Width, glyphImage.Height, GraphicsUnit.Pixel);
             }
             if (Swatch)
             {
@@ -378,6 +383,9 @@ namespace SnipStudio
 
     internal sealed class StudioComboBox : ComboBox
     {
+        private readonly Dictionary<string, Bitmap> modeImages = new Dictionary<string, Bitmap>(StringComparer.Ordinal);
+        private int cachedModeSize;
+        private Color cachedModeColor;
         [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr handle, int message, IntPtr wParam, IntPtr lParam);
         internal StudioComboBox()
         {
@@ -434,8 +442,9 @@ namespace SnipStudio
                 if (glyph != null)
                 {
                     int size = Math.Max(12, (int)Math.Round(16 * scale));
-                    using (Bitmap image = IconArtwork.CreateToolIcon(glyph, size, Enabled ? StudioTheme.Text : StudioTheme.Muted))
-                        e.Graphics.DrawImageUnscaled(image, bounds.X, e.Bounds.Y + (e.Bounds.Height - size) / 2);
+                    Bitmap image = GetModeImage(glyph, size, Enabled ? StudioTheme.Text : StudioTheme.Muted);
+                    e.Graphics.DrawImage(image, new Rectangle(bounds.X + (size - image.Width) / 2, e.Bounds.Y + (e.Bounds.Height - image.Height) / 2,
+                        image.Width, image.Height), 0, 0, image.Width, image.Height, GraphicsUnit.Pixel);
                     bounds.X += size + padding;
                     bounds.Width -= size + padding;
                 }
@@ -473,6 +482,33 @@ namespace SnipStudio
             if (String.Equals(label, "Scrolling", StringComparison.OrdinalIgnoreCase)) return "scrolling";
             if (String.Equals(label, "Full screen", StringComparison.OrdinalIgnoreCase) || String.Equals(label, "Fullscreen", StringComparison.OrdinalIgnoreCase) || String.Equals(label, "All monitors", StringComparison.OrdinalIgnoreCase)) return "fullscreen";
             return null;
+        }
+
+        private Bitmap GetModeImage(string glyph, int size, Color color)
+        {
+            if (cachedModeSize != size || cachedModeColor != color)
+            {
+                ClearModeImages(); cachedModeSize = size; cachedModeColor = color;
+            }
+            Bitmap image;
+            if (!modeImages.TryGetValue(glyph, out image))
+            {
+                image = IconArtwork.CreateToolIcon(glyph, size, color);
+                modeImages.Add(glyph, image);
+            }
+            return image;
+        }
+
+        private void ClearModeImages()
+        {
+            foreach (Bitmap image in modeImages.Values) image.Dispose();
+            modeImages.Clear();
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing) ClearModeImages();
+            base.Dispose(disposing);
         }
     }
 }

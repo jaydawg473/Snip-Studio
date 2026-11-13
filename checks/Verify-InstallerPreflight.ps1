@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 # never starts Snip Studio, closes an application, or runs an install/uninstall.
 $preflightInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $preflightVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($preflightInstaller).FileVersion
-if ($preflightVersion -ne '0.6.0.0') { throw 'Only the selected installer with /CHECKREADY (0.6.0.0) may be checked.' }
+if ($preflightVersion -ne '0.6.1.0') { throw 'Only the selected installer with /CHECKREADY (0.6.1.0) may be checked.' }
 $preflightHash = (Get-FileHash -LiteralPath $preflightInstaller -Algorithm SHA256).Hash
 if ($preflightHash -ine $ExpectedInstallerSha256) { throw 'Installer hash does not match the explicitly selected artifact.' }
 $preflightSignature = Get-AuthenticodeSignature -LiteralPath $preflightInstaller

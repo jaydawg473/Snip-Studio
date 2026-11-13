@@ -30,7 +30,7 @@ internal static class BuildIcons
         WriteIcon(Path.Combine(assets, "SnipStudio.ico"));
         WritePreview(Path.Combine(assets, "Icon-set-preview.png"));
         WriteAppSizes(Path.Combine(assets, "App-icon-sizes.png"));
-        File.WriteAllText(Path.Combine(assets, "README.txt"), "SNIP STUDIO ICON SET\r\n\r\n" + IconArtwork.Keys.Length + " original toolbar symbols, designed on a 24-unit grid with rounded 1.8-unit strokes.\r\nSVG files use currentColor so an app or stylesheet can choose the ink color.\r\nPNG files use pale blue-white ink for the dark Snip Studio workspace.\r\nSnipStudio.ico contains 16/24/32/48/64/128/256-pixel PNG-compressed frames.\r\nThe app mark is also supplied as vector SVG and transparent 256/512-pixel PNG.\r\n\r\nAll live toolbar images and exported symbols share IconArtwork.cs geometry.\r\nRun tools\\BuildIcons.exe assets to regenerate these files after compiling\r\ntools\\BuildIcons.cs together with IconArtwork.cs and System.Drawing.\r\n", new UTF8Encoding(false));
+        File.WriteAllText(Path.Combine(assets, "README.txt"), "SNIP STUDIO ICON SET\r\n\r\n" + IconArtwork.Keys.Length + " original toolbar symbols, designed on a 24-unit grid with rounded 1.8-unit strokes.\r\nSVG files use currentColor so an app or stylesheet can choose the ink color.\r\nToolbar SVG viewports and PNGs are tightly cropped to the artwork, preserving its natural aspect ratio.\r\nPNG-32 and PNG-64 identify the maximum image dimension; toolbar images can be non-square.\r\nPNG files use pale blue-white ink for the dark Snip Studio workspace.\r\nSnipStudio.ico contains 16/24/32/48/64/128/256-pixel PNG-compressed frames.\r\nThe app mark is also supplied as vector SVG and transparent 256/512-pixel PNG.\r\n\r\nAll live toolbar images and exported symbols share IconArtwork.cs geometry.\r\nRun tools\\BuildIcons.exe assets to regenerate these files after compiling\r\ntools\\BuildIcons.cs together with IconArtwork.cs and System.Drawing.\r\n", new UTF8Encoding(false));
         Validate(assets);
         Console.WriteLine("Generated and validated " + IconArtwork.Keys.Length + " toolbar icons, app artwork, multi-resolution ICO, and previews in " + assets);
     }
@@ -43,6 +43,7 @@ internal static class BuildIcons
             using (Bitmap bitmap = IconArtwork.CreateAppIconBitmap(size))
             using (MemoryStream png = new MemoryStream())
             {
+                ValidateTightBitmap(bitmap, size, "ICO frame " + size, true);
                 bitmap.Save(png, ImageFormat.Png);
                 frames.Add(png.ToArray());
             }
@@ -83,10 +84,10 @@ internal static class BuildIcons
                 g.DrawString("THE SNIP STUDIO COLLECTION", eyebrow, cyan, 64, 48);
                 g.DrawString("Every detail, considered.", title, pale, 59, 82);
                 g.DrawString(IconArtwork.Keys.Length + " original symbols. One clear visual language.", subtitle, muted, 64, 160);
-                using (Bitmap app = IconArtwork.CreateAppIconBitmap(176)) g.DrawImageUnscaled(app, 1180, 38);
+                using (Bitmap app = IconArtwork.CreateAppIconBitmap(176)) DrawCentered(g, app, new Rectangle(1180, 38, 176, 176));
                 using (Pen rule = new Pen(Color.FromArgb(43, 58, 79))) g.DrawLine(rule, 64, 258, 1376, 258);
                 DrawPanel(g, 64, "CAPTURE", "Start with the right frame.", new string[] { "new", "rectangle", "freeform", "window", "fullscreen", "crop" });
-                DrawPanel(g, 512, "MARKUP", "Make the important part stand out.", new string[] { "pen", "highlighter", "arrow", "box", "text", "eraser", "color", "move", "pan" });
+                DrawPanel(g, 512, "MARKUP", "Make the important part stand out.", new string[] { "pen", "highlighter", "shapes", "box", "ellipse", "line", "arrow", "text", "emoji", "eraser", "color", "move", "pan" });
                 DrawPanel(g, 960, "WORKSPACE", "A smoother path from image to action.", new string[] { "open", "paste", "copy", "save", "undo", "redo", "zoom-in", "zoom-out", "fit", "text-scan", "print", "help" });
                 DrawRecordingPanel(g);
                 g.DrawString("24 × 24 vector grid  /  rounded 1.8-unit stroke  /  scalable SVG + PNG  /  Windows app icon", eyebrow, muted, 64, 1315);
@@ -118,7 +119,7 @@ internal static class BuildIcons
                 int x = 475 + i * 175;
                 using (GraphicsPath tile = Round(new Rectangle(x, 1081, 72, 72), 17))
                 using (Brush fill = new SolidBrush(Color.FromArgb(33, 46, 64))) g.FillPath(fill, tile);
-                using (Bitmap icon = IconArtwork.CreateToolIcon(recordingKeys[i], 36, Ink)) g.DrawImageUnscaled(icon, x + 18, 1099);
+                using (Bitmap icon = IconArtwork.CreateToolIcon(recordingKeys[i], 36, Ink)) DrawCentered(g, icon, new Rectangle(x, 1081, 72, 72));
                 string name = DisplayName(recordingKeys[i]);
                 SizeF measure = g.MeasureString(name, label);
                 g.DrawString(name, label, pale, x + 36 - measure.Width / 2, 1172);
@@ -142,7 +143,7 @@ internal static class BuildIcons
             int[] centers = new int[] { 75, 205, 335, 465, 605, 770 };
             for (int i = 0; i < sizes.Length; i++)
             {
-                using (Bitmap icon = IconArtwork.CreateAppIconBitmap(sizes[i])) g.DrawImageUnscaled(icon, centers[i] - sizes[i] / 2, 150 - sizes[i] / 2);
+                using (Bitmap icon = IconArtwork.CreateAppIconBitmap(sizes[i])) DrawCentered(g, icon, new Rectangle(centers[i] - sizes[i] / 2, 150 - sizes[i] / 2, sizes[i], sizes[i]));
                 string text = sizes[i] + " px";
                 SizeF measurement = g.MeasureString(text, label);
                 g.DrawString(text, label, muted, centers[i] - measurement.Width / 2, 226);
@@ -153,21 +154,51 @@ internal static class BuildIcons
 
     private static void Validate(string assets)
     {
-        using (Icon icon = new Icon(Path.Combine(assets, "SnipStudio.ico"), new Size(32, 32)))
-        using (Bitmap raster = icon.ToBitmap())
-            if (raster.Width != 32 || raster.Height != 32) throw new InvalidOperationException("ICO frame could not be loaded.");
+        foreach (int size in new int[] { 16, 24, 32, 48, 64, 128, 256 })
+            using (Icon icon = new Icon(Path.Combine(assets, "SnipStudio.ico"), new Size(size, size)))
+            using (Bitmap raster = icon.ToBitmap())
+                ValidateTightBitmap(raster, size, "Loaded ICO frame " + size, true);
+        foreach (int size in new int[] { 256, 512 })
+            using (Bitmap app = new Bitmap(Path.Combine(assets, "app-" + size + ".png")))
+                ValidateTightBitmap(app, size, "App PNG " + size, true);
         foreach (string key in IconArtwork.Keys)
         {
             using (Bitmap icon = IconArtwork.CreateToolIcon(key, 24, Color.White))
-            {
-                bool any = false;
-                for (int y = 0; y < icon.Height; y++)
-                    for (int x = 0; x < icon.Width; x++)
-                        if (icon.GetPixel(x, y).A > 100) any = true;
-                if (!any) throw new InvalidOperationException("Icon rendered empty: " + key);
-                if (icon.GetPixel(0, 0).A != 0) throw new InvalidOperationException("Icon background lost transparency: " + key);
-            }
+                ValidateTightBitmap(icon, 24, key + " at 24 px", false);
+            foreach (int size in new int[] { 32, 64 })
+                using (Bitmap icon = new Bitmap(Path.Combine(assets, "png-" + size, key + ".png")))
+                    ValidateTightBitmap(icon, size, key + " PNG at " + size + " px", false);
         }
+    }
+
+    private static void ValidateTightBitmap(Bitmap bitmap, int requestedSize, string name, bool square)
+    {
+        if (bitmap.Width < 1 || bitmap.Height < 1 || bitmap.Width > requestedSize || bitmap.Height > requestedSize ||
+            (square && (bitmap.Width != requestedSize || bitmap.Height != requestedSize)))
+            throw new InvalidOperationException("Unexpected icon dimensions: " + name);
+        bool top = false, bottom = false, left = false, right = false;
+        for (int x = 0; x < bitmap.Width; x++)
+        {
+            top |= bitmap.GetPixel(x, 0).A > 0;
+            bottom |= bitmap.GetPixel(x, bitmap.Height - 1).A > 0;
+        }
+        for (int y = 0; y < bitmap.Height; y++)
+        {
+            left |= bitmap.GetPixel(0, y).A > 0;
+            right |= bitmap.GetPixel(bitmap.Width - 1, y).A > 0;
+        }
+        if (!top || !bottom || !left || !right)
+            throw new InvalidOperationException("Icon contains a fully transparent border: " + name);
+        if (square && requestedSize >= 16 &&
+            (bitmap.GetPixel(0, 0).A == 255 || bitmap.GetPixel(bitmap.Width - 1, 0).A == 255 ||
+             bitmap.GetPixel(0, bitmap.Height - 1).A == 255 || bitmap.GetPixel(bitmap.Width - 1, bitmap.Height - 1).A == 255))
+            throw new InvalidOperationException("App icon lost its transparent rounded corners: " + name);
+    }
+
+    private static void DrawCentered(Graphics graphics, Bitmap image, Rectangle slot)
+    {
+        graphics.DrawImage(image, new Rectangle(slot.Left + (slot.Width - image.Width) / 2, slot.Top + (slot.Height - image.Height) / 2,
+            image.Width, image.Height), 0, 0, image.Width, image.Height, GraphicsUnit.Pixel);
     }
 
     private static void DrawPanel(Graphics g, int x, string title, string subtitle, string[] keys)
@@ -188,16 +219,19 @@ internal static class BuildIcons
         {
             g.DrawString(title, heading, cyan, x + 28, 325);
             g.DrawString(subtitle, sub, muted, x + 28, 354);
+            int columns = keys.Length > 12 ? 4 : 3;
+            int columnWidth = 384 / columns;
             for (int i = 0; i < keys.Length; i++)
             {
-                int cellX = x + 18 + (i % 3) * 128;
-                int cellY = 418 + (i / 3) * 140;
-                using (GraphicsPath tile = Round(new Rectangle(cellX + 27, cellY, 72, 72), 17))
+                int cellX = x + 16 + (i % columns) * columnWidth;
+                int cellY = 418 + (i / columns) * 140;
+                Rectangle tileBounds = new Rectangle(cellX + (columnWidth - 72) / 2, cellY, 72, 72);
+                using (GraphicsPath tile = Round(tileBounds, 17))
                 using (Brush tileFill = new SolidBrush(Color.FromArgb(33, 46, 64))) g.FillPath(tileFill, tile);
-                using (Bitmap icon = IconArtwork.CreateToolIcon(keys[i], 36, Ink)) g.DrawImageUnscaled(icon, cellX + 45, cellY + 18);
+                using (Bitmap icon = IconArtwork.CreateToolIcon(keys[i], 36, Ink)) DrawCentered(g, icon, tileBounds);
                 string name = DisplayName(keys[i]);
                 SizeF measure = g.MeasureString(name, label);
-                g.DrawString(name, label, pale, cellX + 63 - measure.Width / 2, cellY + 85);
+                g.DrawString(name, label, pale, cellX + columnWidth / 2f - measure.Width / 2, cellY + 85);
             }
         }
     }

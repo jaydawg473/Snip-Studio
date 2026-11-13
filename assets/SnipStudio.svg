@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 24 24" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox=".725 .725 22.55 22.55" preserveAspectRatio="xMidYMid meet" fill="none">
 <defs><linearGradient id="blue" x1="3" y1="1" x2="21" y2="24" gradientUnits="userSpaceOnUse"><stop stop-color="#2891FF"/><stop offset="1" stop-color="#0042A7"/></linearGradient><linearGradient id="cyan" x1="10" y1="8" x2="14" y2="16" gradientUnits="userSpaceOnUse"><stop stop-color="#B6FFFF"/><stop offset="1" stop-color="#3FDFE2"/></linearGradient></defs>
 <rect x="1" y="1" width="22" height="22" rx="5.2" fill="url(#blue)" stroke="#9BDDFF" stroke-opacity=".35" stroke-width=".55"/>
 <path d="M3 6.5C4 2.5 13.5 .8 19.2 3.1C13.2 3.6 6.8 7.7 3 14.5Z" fill="white" opacity=".08"/>
