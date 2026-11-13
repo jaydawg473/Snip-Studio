@@ -195,6 +195,21 @@ namespace SnipStudio
                 case "box":
                     p.RoundRect(4, 5.5f, 16, 13, 1.4f);
                     break;
+                case "shapes":
+                    p.RoundRect(3.5f, 3.5f, 11, 11, 1.2f);
+                    p.Circle(15.2f, 15.2f, 5.6f);
+                    break;
+                case "ellipse":
+                    p.Circle(12, 12, 7.8f);
+                    break;
+                case "line":
+                    p.Path("M4.5 19.5 L19.5 4.5");
+                    break;
+                case "emoji":
+                    p.Circle(12, 12, 8.5f);
+                    p.Dot(9, 9.5f, .75f); p.Dot(15, 9.5f, .75f);
+                    p.Path("M7.8 13.2 C8.5 18.1 15.5 18.1 16.2 13.2");
+                    break;
                 case "text":
                     p.Path("M4.5 7 L4.5 4.5 L19.5 4.5 L19.5 7 M12 4.5 L12 20 M8.5 20 L15.5 20");
                     break;

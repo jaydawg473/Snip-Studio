@@ -50,11 +50,11 @@ namespace SnipStudio
             }
             else
             {
-                PointF[] ends = document.GetArrowEndpoints(selectedIndex);
+                PointF[] ends = document.GetShapeEndpoints(selectedIndex);
                 if (ends.Length != 2) { CancelAnnotationHandleDrag(); return false; }
                 handleArrowPoint = hit == AnnotationHandleKind.ArrowTip ? ends[1] : ends[0];
                 handleGrabOffset = new PointF(pointer.X - handleArrowPoint.X, pointer.Y - handleArrowPoint.Y);
-                preview = document.CreateArrowPreview(selectedIndex, hit == AnnotationHandleKind.ArrowTip, handleArrowPoint);
+                preview = document.CreateShapeEndpointPreview(selectedIndex, hit == AnnotationHandleKind.ArrowTip, handleArrowPoint);
                 if (preview == null) { CancelAnnotationHandleDrag(); return false; }
             }
             Capture = true;
@@ -98,7 +98,7 @@ namespace SnipStudio
                 PointF candidate = new PointF(
                     Math.Max(0, Math.Min(ImageSize.Width - 1, pointer.X - handleGrabOffset.X)),
                     Math.Max(0, Math.Min(ImageSize.Height - 1, pointer.Y - handleGrabOffset.Y)));
-                EditorDocument.ArrowAnnotation arrow = document.CreateArrowPreview(handleAnnotationIndex,
+                EditorDocument.Annotation arrow = document.CreateShapeEndpointPreview(handleAnnotationIndex,
                     annotationHandle == AnnotationHandleKind.ArrowTip, candidate);
                 // Crossing the fixed endpoint must not create a zero-length
                 // arrow or commit invalid geometry. Keep the last valid preview.
@@ -127,7 +127,7 @@ namespace SnipStudio
             UpdateCursor();
             bool changed = current && (text != null
                 ? document.UpdateTextAnnotationBounds(index, location, text.FontSize, width)
-                : document.UpdateArrowEndpoint(index, kind == AnnotationHandleKind.ArrowTip, endpoint));
+                : document.UpdateShapeEndpoint(index, kind == AnnotationHandleKind.ArrowTip, endpoint));
             if (changed) RaiseChanged(); else Invalidate();
             return true;
         }
@@ -156,7 +156,7 @@ namespace SnipStudio
             }
             else
             {
-                PointF[] ends = document.GetArrowEndpoints(selectedIndex);
+                PointF[] ends = document.GetShapeEndpoints(selectedIndex);
                 if (ends.Length == 2)
                 {
                     if (NearHandle(location, ends[1], radius)) return AnnotationHandleKind.ArrowTip;
@@ -193,7 +193,7 @@ namespace SnipStudio
                 return true;
             }
 
-            PointF[] ends = document.GetArrowEndpoints(selectedIndex);
+            PointF[] ends = document.GetShapeEndpoints(selectedIndex);
             if (ends.Length != 2) return false;
             if (AnnotationHandleDragging && handleText == null)
                 ends[annotationHandle == AnnotationHandleKind.ArrowTip ? 1 : 0] = handleArrowPoint;

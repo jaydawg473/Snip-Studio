@@ -23,12 +23,17 @@ namespace SnipStudio
         {
             get
             {
+                if (InlineTextEditing) return InlineTextFontSize;
                 TextAnnotationInfo info = HasImage ? document.GetTextAnnotation(selectedIndex) : null;
                 return info == null ? textFontSize : info.FontSize;
             }
             set
             {
                 if (Single.IsNaN(value) || Single.IsInfinity(value) || value < 1 || value > 1024) throw new ArgumentOutOfRangeException("value");
+                if (InlineTextEditing)
+                {
+                    ApplyInlineTextFontSize(value); textFontSize = value; return;
+                }
                 TextAnnotationInfo info = HasImage && !textActionsMode ? document.GetTextAnnotation(selectedIndex) : null;
                 if (info != null)
                 {
@@ -156,28 +161,23 @@ namespace SnipStudio
 
         private void AddTextNote(PointF location)
         {
-            int available = Math.Max(1, ImageSize.Width - (int)Math.Floor(location.X));
-            if (available < 12) return;
-            float width = Math.Min(available, Math.Max(24, defaultTextBoxWidth));
-            using (TextEditorDialog dialog = new TextEditorDialog("Add text", "", textFontSize, width, available,
-                inkColor, Color.White, false))
-            {
-                if (dialog.ShowDialog(FindForm()) != DialogResult.OK || String.IsNullOrWhiteSpace(dialog.EnteredText)) return;
-                document.AddRichText(dialog.EnteredText, dialog.Rtf, location, dialog.TextColor, dialog.TextSize, dialog.BoxWidth);
-                selectedIndex = document.AnnotationCount - 1;
-                textFontSize = dialog.TextSize;
-                defaultTextBoxWidth = dialog.BoxWidth;
-                RaiseChanged();
-            }
+            BeginInlineTextNote(location);
         }
 
         public void EditSelectedText()
         {
+            if (InlineTextEditing) { inlineTextEditor.Focus(); return; }
             if (textActionsMode) EditRecognizedLine();
             else if (HasSelectedTextAnnotation) EditTextAnnotation(selectedIndex);
         }
 
         private void EditTextAnnotation(int index)
+        {
+            if (textActionsMode) EditTextAnnotationAdvanced(index);
+            else BeginInlineTextEdit(index);
+        }
+
+        private void EditTextAnnotationAdvanced(int index)
         {
             TextAnnotationInfo info = document.GetTextAnnotation(index);
             if (info == null) return;

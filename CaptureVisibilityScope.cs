@@ -324,7 +324,7 @@ namespace SnipStudio
 
         internal bool CloseCapturePopups()
         {
-            bool closed = false;
+            bool closed = CloseShapePopups();
             foreach (ContextMenuStrip popup in new ContextMenuStrip[] { moreMenu, delayPopup, trayMenu })
                 if (popup != null && !popup.IsDisposed && popup.Visible)
                 {

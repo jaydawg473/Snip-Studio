@@ -1,3 +1,54 @@
+SNIP STUDIO 0.6.0 - AUTOMATION FORGE
+https://automation-forge.com/
+
+EDITOR TOOL UPDATE - 2026-11-13
+Choose Shapes for Rectangle, Ellipse, Line, Arrow and Emoji. Rectangle and
+Ellipse support Fill; all four shapes support Outline. Each color channel has
+None and its own opacity. Outline also controls Size. Apply accepts the popup
+changes once; Cancel leaves the current appearance unchanged. Use Move to select
+an existing shape and change its style. Undo restores its previous appearance.
+
+Choose Emoji, pick a symbol, then click the snip to place it. Emoji stamps are
+editable text: use Move to reposition them or Text / Advanced text to edit and
+resize them. Their appearance follows the Windows fonts available on the PC.
+Escape or choosing another tool cancels placement before a stamp is added.
+
+Choose Text, click the snip and start typing directly on the image. Enter adds
+a line; Ctrl+Enter or Done finishes the edit; Escape or Cancel discards the draft.
+Click outside the draft to apply it before the next canvas action. Existing notes
+can be edited directly too. Advanced text... opens the full formatting editor,
+including fonts, alignment and exact text-box size. Its Cancel retains the draft.
+Right-click while typing for Cut, Copy, Paste, Select all and Advanced text.
+
+Choosing an annotation tool keeps the ordinary arrow pointer. Actual editing can
+still use move, resize and text-selection cursors where they provide useful feedback.
+Toolbar placement remains available at Top, Right, Bottom or Left in Settings.
+Tool selection preserves the snip's zoom and image anchor.
+
+INSTALL AND SAVED SETTINGS
+Use SnipStudio-0.6.0-Setup.exe, or extract the complete signed portable ZIP.
+Setup retains the cooperative save/close/cancel update flow. Save your work when
+asked; canceling closure cancels replacement. Existing saved settings remain in
+the user's app-data folder; the preferences schema is unchanged in this update.
+The complete translation folder, models, licenses and sources remain included.
+
+VERIFICATION AND LIMITS
+The C#5/.NET Framework 4.8 application built without compiler warnings. Its
+Automation Forge signature and timestamp verified Valid. Exact application SHA256:
+C540441E0C17FEBC4C820B37513BD5775B9C973FE0A059743F6DAE99EF5201C2
+513 signed-library component checks passed, including 121 editor-tool checks,
+78 crop, 181 zoom-frame, 45 removal-selection and 88 translation checks.
+2,442 unshown layout checks covered eight toolbar/window/scale fixtures and nine
+popup fixtures. 73 installer close source-policy checks passed. Layout scaling
+fixtures are not physical DPI testing; inline layout uses a presence fixture,
+while real unshown RichEdit text/commit/render behavior has separate component checks.
+No desktop capture, physical input, production installation, or live popup focus
+acceptance is established by those checks. Final installer signature, CRC,
+payload reconciliation and read-only readiness evidence are recorded separately
+for the exact delivered files. Historical results below apply only to their versions.
+
+HISTORICAL 0.5.9 README FOLLOWS
+
 SNIP STUDIO 0.5.9 — AUTOMATION FORGE
 https://automation-forge.com/
 

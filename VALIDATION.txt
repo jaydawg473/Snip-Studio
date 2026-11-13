@@ -1,3 +1,50 @@
+SNIP STUDIO 0.6.0 - EDITOR TOOL UPDATE, 2026-11-13
+
+APPLICATION AND COMPONENT VERIFICATION COMPLETE
+The application built without compiler warnings. Version: 0.6.0.0.
+Timestamped Automation Forge Authenticode: Valid.
+Exact application SHA256:
+C540441E0C17FEBC4C820B37513BD5775B9C973FE0A059743F6DAE99EF5201C2
+
+Implemented: normal idle annotation pointers; Rectangle/Ellipse/Line/Arrow with
+fill/outline None, separate opacity and outline width; emoji placement as editable
+text; inline click-to-type multiline text with Done/Ctrl+Enter and Cancel/Escape;
+retained Advanced text editor. New tool IDs append to the existing IDs. Selected
+shape style changes use one Undo and retain styles through movement/crop/endpoints.
+Inline editing validates rich text, preserves canceled drafts and rejects stale
+source revisions. Original-image autosave does not commit or mark a pending draft saved.
+
+ROOT-EXECUTED SIGNED-LIBRARY CHECKS
+- Verify-EditorToolUpdates: 121 passed. Idle pointers, contextual crop resize,
+  four shape types/styles/opacity/None/history, inline text/commit/cancel/stale
+  guards, zoom-invariant text exports and emoji placement/cancel/history.
+- Verify-CropFrame: 78 passed.
+- Verify-ZoomFrames: 181 passed.
+- Verify-RemovalSelectionMove: 45 passed.
+- Verify-TranslationReplacement: 88 passed.
+- Private Verify-EditorLayout: 2,442 passed across eight dock/window/scale and
+  nine popup-construction fixtures. Checks include full labels, bounds, overlap,
+  context controls, busy disabling and view preservation. Active inline controls
+  use a typed presence fixture, not actual typing. Popup tests do not show menus.
+- Verify-InstallerClosePolicy: 73 source-policy checks passed.
+
+No application entrypoint, shown editor, desktop capture, physical user input,
+clipboard operation, user preference load/save or native shortcut registration
+was used by those component/layout checks. Unshown WinForms/RichEdit handles and
+GDI rendering can be created; this is not live desktop acceptance. Physical DPI,
+actual popup mouse/keyboard focus and a production installed upgrade need user testing.
+
+SAVED SETTINGS AND RELEASE GATES
+Preferences.cs SHA256 is unchanged from 0.5.9:
+FE1AC75D37379BBAE87216860043C7315485F4E469FAB31FBDC2F75D84AE886F
+Existing preference storage and the cooperative installer close policy are retained.
+Final package evidence is separate: exact installer/portable hashes, timestamped
+signatures, NSIS CRC before/after signing with unchanged protected bytes, payload
+reconciliation, privacy review and read-only installer readiness diagnostics.
+No historical test count below is additional current-version evidence.
+
+HISTORICAL RELEASE RECORDS FOLLOW
+
 SNIP STUDIO 0.5.9 - EDITABLE CROP FRAME, 2026-11-12
 
 SIGNED APPLICATION COMPONENT AND OFFSCREEN CROP VERIFICATION RECORDED.

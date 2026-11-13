@@ -52,6 +52,8 @@ namespace SnipStudio
             set
             {
                 if (textActionsMode == value) return;
+                if (!CommitInlineText()) return;
+                pendingEmoji = null;
                 CancelGesture();
                 textActionsMode = value;
                 ResetCropFrame();
@@ -79,7 +81,7 @@ namespace SnipStudio
         private bool requireCtrlForWheelZoom = true;
         public bool RequireCtrlForWheelZoom { get { return requireCtrlForWheelZoom; } set { requireCtrlForWheelZoom = value; } }
         public bool CanRedo { get { return document.CanRedo; } }
-        public bool IsDirty { get { return document.IsDirty; } }
+        public bool IsDirty { get { return document.IsDirty || HasPendingInlineTextChanges; } }
         public Size ImageSize { get { return document.ImageSize; } }
         public float Zoom { get { return zoom; } }
         public EditorTool Tool
@@ -87,7 +89,9 @@ namespace SnipStudio
             get { return tool; }
             set
             {
-                if (tool == value) return;
+                if (tool == value) { pendingEmoji = null; return; }
+                if (!CommitInlineText()) return;
+                pendingEmoji = null;
                 bool keepRemoval = !textActionsMode && HasSelectedRemovalArea &&
                     ((tool == EditorTool.RemoveArea && value == EditorTool.Select) ||
                      (tool == EditorTool.Select && value == EditorTool.RemoveArea));
@@ -98,6 +102,7 @@ namespace SnipStudio
                 UpdateCursor();
                 RaiseTextStyleChanged();
                 RaiseToolChanged();
+                NotifyShapeSelectionChanged();
                 RefreshRecognitionIfNeeded();
                 Invalidate();
             }
@@ -108,6 +113,7 @@ namespace SnipStudio
             set
             {
                 inkColor = value;
+                if (InlineTextEditing) { ApplyInlineTextColor(value); return; }
                 TextAnnotationInfo selectedText = HasImage && !textActionsMode ? document.GetTextAnnotation(selectedIndex) : null;
                 if (selectedText != null && document.UpdateTextAnnotationColor(selectedIndex, value)) RaiseChanged();
                 else Invalidate();
@@ -141,6 +147,8 @@ namespace SnipStudio
 
         public void SetImage(Bitmap image)
         {
+            CancelInlineText();
+            pendingEmoji = null;
             ChangeViewIntent();
             StopViewAnimations();
             document.SetImage(image);
@@ -155,10 +163,15 @@ namespace SnipStudio
             RaiseChanged();
         }
 
-        public Bitmap RenderImage() { return document.RenderImage(); }
+        public Bitmap RenderImage()
+        {
+            if (!CommitInlineText()) throw new InvalidOperationException("Finish editing the text or cancel it before exporting the snip.");
+            return document.RenderImage();
+        }
         public void MarkSaved() { document.MarkSaved(); RaiseChanged(); }
         public void Undo()
         {
+            if (!CommitInlineText()) return;
             CancelGesture();
             if (!CanUndo) return;
             document.Undo();
@@ -168,6 +181,7 @@ namespace SnipStudio
         }
         public void Redo()
         {
+            if (!CommitInlineText()) return;
             CancelGesture();
             if (!CanRedo) return;
             document.Redo();
@@ -235,6 +249,7 @@ namespace SnipStudio
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            UpdateInlineTextLayout();
             base.OnPaint(e);
             Graphics graphics = e.Graphics;
             graphics.Clear(BackColor);
@@ -263,9 +278,10 @@ namespace SnipStudio
                 bool wholePixelScale = zoom >= 1 && Math.Abs(zoom - (float)Math.Round(zoom)) < 0.001f;
                 graphics.InterpolationMode = ViewAnimationActive || panning ? InterpolationMode.Bilinear : wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
                 graphics.PixelOffsetMode = PixelOffsetMode.Half;
-                document.Draw(graphics, moving ? selectedIndex : -1, moveDelta, AnnotationPreviewIndex);
+                document.Draw(graphics, moving ? selectedIndex : -1, moveDelta,
+                    InlineTextPreviewIndex >= 0 ? InlineTextPreviewIndex : AnnotationPreviewIndex);
                 if (preview != null) preview.Draw(graphics);
-                if (selectedIndex >= 0 && selectedIndex < document.AnnotationCount)
+                if (!InlineTextEditing && selectedIndex >= 0 && selectedIndex < document.AnnotationCount)
                 {
                     GraphicsState selectionState = graphics.Save();
                     graphics.ResetClip();
@@ -348,6 +364,7 @@ namespace SnipStudio
             StopViewAnimations();
             Focus();
             if (!HasImage) return;
+            if (HandleInlineTextMouseDown(e)) return;
             if (CropModeActive && e.Button == MouseButtons.Right) { CancelCrop(); return; }
             if (BeginCropDrag(e)) return;
             if (e.Button == MouseButtons.Right) { HandleAnnotationRightClick(e); return; }
@@ -373,6 +390,7 @@ namespace SnipStudio
             {
                 selectedIndex = IsOnImage(e.Location) ? document.HitTestAnnotation(ToImage(e.Location, false), 5 / zoom) : -1;
                 RaiseTextStyleChanged();
+                NotifyShapeSelectionChanged();
                 if (selectedIndex >= 0)
                 {
                     moving = true; moveStart = ToImage(e.Location, false); moveDelta = PointF.Empty;
@@ -396,9 +414,11 @@ namespace SnipStudio
             }
             if (e.Button != MouseButtons.Left || !IsOnImage(e.Location)) return;
             selectedIndex = -1;
+            NotifyShapeSelectionChanged();
             start = end = ToImage(e.Location, true);
             if (tool == EditorTool.Text)
             {
+                if (TryPlacePendingEmoji(start)) return;
                 int textHit = document.HitTestAnnotation(start, 3 / zoom);
                 if (document.GetTextAnnotation(textHit) != null) { selectedIndex = textHit; EditTextAnnotation(textHit); }
                 else AddTextNote(start);
@@ -463,6 +483,7 @@ namespace SnipStudio
             {
                 if (TrySetAnnotationHandleCursor(e.Location)) return;
                 if (tool == EditorTool.Select) UpdateSelectPointer(e.Location);
+                else UpdateCursor();
                 return;
             }
             end = ToImage(e.Location, true);
@@ -520,8 +541,7 @@ namespace SnipStudio
                     if (bands.Count > 0) document.AddHighlightBands(bands, inkColor);
                     else document.AddStroke(points, inkColor, EffectiveWidth, tool == EditorTool.Highlighter);
                 }
-                else if (tool == EditorTool.Arrow) document.AddArrow(start, end, inkColor, strokeWidth);
-                else if (tool == EditorTool.Rectangle) document.AddRectangle(BoundsBetween(start, end), inkColor, strokeWidth);
+                else if (IsShapeTool(tool)) CommitShape(start, end);
                 RaiseChanged();
             }
             finally { points.Clear(); Invalidate(); }
@@ -536,10 +556,7 @@ namespace SnipStudio
                 preview = new EditorDocument.HighlightBandsAnnotation(bands.ToArray(), Color.FromArgb(80, inkColor.R, inkColor.G, inkColor.B));
             else if (tool == EditorTool.Pen || tool == EditorTool.Highlighter)
                 preview = new EditorDocument.StrokeAnnotation(points.ToArray(), inkColor, EffectiveWidth, tool == EditorTool.Highlighter);
-            else if (tool == EditorTool.Arrow)
-                preview = new EditorDocument.ArrowAnnotation(start, end, inkColor, strokeWidth);
-            else if (tool == EditorTool.Rectangle)
-                preview = new EditorDocument.RectangleAnnotation(BoundsBetween(start, end), inkColor, strokeWidth);
+            else if (IsShapeTool(tool)) preview = CreateShapePreview(start, end);
             else preview = null;
         }
 
@@ -586,6 +603,7 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (EmojiPlacementPending && keyData == Keys.Escape) { pendingEmoji = null; UpdateCursor(); return true; }
             if (HandleCropKey(keyData)) return true;
             if (HandleSourceRemovalKey(keyData)) return true;
             if (keyData == Keys.F2) { EditSelectedText(); return true; }
@@ -706,6 +724,7 @@ namespace SnipStudio
 
         private void RaiseChanged()
         {
+            NotifyShapeSelectionChanged();
             if (CropModeActive) { EnsureCropFrame(); RaiseCropSelectionChanged(); }
             RefreshRecognitionIfNeeded();
             RaiseTextStyleChanged();
@@ -786,6 +805,7 @@ namespace SnipStudio
             if (disposing)
             {
                 disposingCanvas = true;
+                DisposeInlineText();
                 DisposeViewResources();
                 DisposeTextScanFeedback();
                 CancelSourceStyleMatching();

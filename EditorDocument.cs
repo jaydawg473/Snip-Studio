@@ -6,7 +6,7 @@ using System.Drawing.Imaging;
 
 namespace SnipStudio
 {
-    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop, RemoveArea }
+    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop, RemoveArea, Ellipse, Line }
 
     // Detached immutable data for an editor UI; history-owned annotations stay private.
     public sealed class TextAnnotationInfo
@@ -163,6 +163,60 @@ namespace SnipStudio
             return HasImage && index >= 0 && index < AnnotationCount && Current.Annotations[index] is ArrowAnnotation;
         }
 
+        public ShapeStyle GetShapeAnnotationStyle(int index)
+        {
+            ThrowIfDisposed();
+            IStyledShape shape = HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] as IStyledShape : null;
+            return shape == null ? null : shape.Style;
+        }
+
+        public EditorTool? GetShapeAnnotationTool(int index)
+        {
+            ThrowIfDisposed();
+            IStyledShape shape = HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] as IStyledShape : null;
+            return shape == null ? (EditorTool?)null : shape.ShapeTool;
+        }
+
+        public bool UpdateShapeAnnotationStyle(int index, ShapeStyle style)
+        {
+            RequireImage();
+            if (style == null) throw new ArgumentNullException("style");
+            IStyledShape shape = index >= 0 && index < AnnotationCount ? Current.Annotations[index] as IStyledShape : null;
+            return shape != null && !shape.Style.SameAs(style) && ReplaceAnnotation(index, shape.WithStyle(style));
+        }
+
+        public PointF[] GetShapeEndpoints(int index)
+        {
+            ThrowIfDisposed();
+            Annotation annotation = HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] : null;
+            ArrowAnnotation arrow = annotation as ArrowAnnotation;
+            if (arrow != null) return new PointF[] { arrow.Start, arrow.End };
+            LineAnnotation line = annotation as LineAnnotation;
+            return line == null ? new PointF[0] : new PointF[] { line.Start, line.End };
+        }
+
+        internal Annotation CreateShapeEndpointPreview(int index, bool tip, PointF point)
+        {
+            RequireImage(); ValidatePoint(point);
+            PointF[] ends = GetShapeEndpoints(index);
+            if (ends.Length != 2) return null;
+            point = new PointF(Math.Max(0, Math.Min(ImageSize.Width - 1, point.X)), Math.Max(0, Math.Min(ImageSize.Height - 1, point.Y)));
+            PointF first = tip ? ends[0] : point, second = tip ? point : ends[1];
+            if (DistanceSquared(first, second) < 4) return null;
+            ShapeStyle style = GetShapeAnnotationStyle(index);
+            return GetShapeAnnotationTool(index) == EditorTool.Arrow ? (Annotation)new ArrowAnnotation(first, second, style) : new LineAnnotation(first, second, style);
+        }
+
+        public bool UpdateShapeEndpoint(int index, bool tip, PointF point)
+        {
+            Annotation replacement = CreateShapeEndpointPreview(index, tip, point);
+            if (replacement == null) return false;
+            PointF[] old = GetShapeEndpoints(index), current = replacement is ArrowAnnotation ?
+                new PointF[] { ((ArrowAnnotation)replacement).Start, ((ArrowAnnotation)replacement).End } :
+                new PointF[] { ((LineAnnotation)replacement).Start, ((LineAnnotation)replacement).End };
+            return (old[0] != current[0] || old[1] != current[1]) && ReplaceAnnotation(index, replacement);
+        }
+
         public PointF[] GetArrowEndpoints(int index)
         {
             if (!IsArrowAnnotation(index)) return new PointF[0];
@@ -178,7 +232,7 @@ namespace SnipStudio
             point = new PointF(Math.Max(0, Math.Min(ImageSize.Width - 1, point.X)), Math.Max(0, Math.Min(ImageSize.Height - 1, point.Y)));
             PointF start = tip ? arrow.Start : point, end = tip ? point : arrow.End;
             if (DistanceSquared(start, end) < 4) return null;
-            return new ArrowAnnotation(start, end, arrow.Color, arrow.Width);
+            return new ArrowAnnotation(start, end, arrow.Style);
         }
 
         public bool UpdateArrowEndpoint(int index, bool tip, PointF point)
@@ -367,6 +421,33 @@ namespace SnipStudio
             ValidatePoint(new PointF(rectangle.Right, rectangle.Bottom));
             if (rectangle.Width < 1 || rectangle.Height < 1) return;
             Add(new RectangleAnnotation(rectangle, color, width));
+        }
+
+        public bool AddShape(EditorTool shapeTool, PointF first, PointF second, ShapeStyle style)
+        {
+            RequireImage(); ValidatePoint(first); ValidatePoint(second);
+            if (style == null) throw new ArgumentNullException("style");
+            Annotation annotation = CreateShapeAnnotation(shapeTool, first, second, style);
+            if (annotation == null) return false;
+            Add(annotation); return true;
+        }
+
+        internal static Annotation CreateShapeAnnotation(EditorTool shapeTool, PointF first, PointF second, ShapeStyle style)
+        {
+            ValidatePoint(first); ValidatePoint(second);
+            if (style == null) throw new ArgumentNullException("style");
+            if (shapeTool != EditorTool.Rectangle && shapeTool != EditorTool.Ellipse && shapeTool != EditorTool.Line && shapeTool != EditorTool.Arrow)
+                throw new ArgumentOutOfRangeException("shapeTool");
+            if (!style.IsVisibleFor(shapeTool)) return null;
+            if (shapeTool == EditorTool.Arrow || shapeTool == EditorTool.Line)
+            {
+                if (DistanceSquared(first, second) < 1) return null;
+                return shapeTool == EditorTool.Arrow ? (Annotation)new ArrowAnnotation(first, second, style) : new LineAnnotation(first, second, style);
+            }
+            RectangleF bounds = RectangleF.FromLTRB(Math.Min(first.X, second.X), Math.Min(first.Y, second.Y), Math.Max(first.X, second.X), Math.Max(first.Y, second.Y));
+            ValidatePoint(bounds.Location); ValidatePoint(new PointF(bounds.Right, bounds.Bottom));
+            if (bounds.Width < 1 || bounds.Height < 1) return null;
+            return shapeTool == EditorTool.Rectangle ? (Annotation)new RectangleAnnotation(bounds, style) : new EllipseAnnotation(bounds, style);
         }
 
         public void AddText(string text, PointF location, Color color, float fontSize)
@@ -716,6 +797,13 @@ namespace SnipStudio
             public abstract Annotation Translate(PointF delta);
         }
 
+        internal interface IStyledShape
+        {
+            ShapeStyle Style { get; }
+            EditorTool ShapeTool { get; }
+            Annotation WithStyle(ShapeStyle style);
+        }
+
         private sealed class SourceTextMasksAnnotation : Annotation
         {
             private readonly RectangleF[] regions;
@@ -810,22 +898,26 @@ namespace SnipStudio
             }
         }
 
-        internal sealed class ArrowAnnotation : Annotation
+        internal sealed class ArrowAnnotation : Annotation, IStyledShape
         {
             private readonly PointF start, end;
-            private readonly Color color;
-            private readonly float width;
             public ArrowAnnotation(PointF start, PointF end, Color color, float width)
-            { this.start = start; this.end = end; this.color = color; this.width = width; }
+                : this(start, end, new ShapeStyle(System.Drawing.Color.Empty, color, width)) { }
+            internal ArrowAnnotation(PointF start, PointF end, ShapeStyle style)
+            { this.start = start; this.end = end; Style = style; }
+            public ShapeStyle Style { get; private set; }
+            public EditorTool ShapeTool { get { return EditorTool.Arrow; } }
+            public Annotation WithStyle(ShapeStyle style) { return new ArrowAnnotation(start, end, style); }
             internal PointF Start { get { return start; } }
             internal PointF End { get { return end; } }
-            internal Color Color { get { return color; } }
-            internal float Width { get { return width; } }
-            public override RectangleF Bounds { get { RectangleF result = RectangleF.FromLTRB(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y), Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)); result.Inflate(width * 5, width * 5); return result; } }
-            public override Annotation Translate(PointF delta) { return new ArrowAnnotation(new PointF(start.X + delta.X, start.Y + delta.Y), new PointF(end.X + delta.X, end.Y + delta.Y), color, width); }
+            internal Color Color { get { return Style.EffectiveOutlineColor; } }
+            internal float Width { get { return Style.OutlineWidth; } }
+            public override RectangleF Bounds { get { RectangleF result = RectangleF.FromLTRB(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y), Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)); result.Inflate(Width * 5, Width * 5); return result; } }
+            public override Annotation Translate(PointF delta) { return new ArrowAnnotation(new PointF(start.X + delta.X, start.Y + delta.Y), new PointF(end.X + delta.X, end.Y + delta.Y), Style); }
             public override void Draw(Graphics graphics)
             {
-                using (Pen pen = new Pen(color, width))
+                if (!Style.VisibleOutline) return;
+                using (Pen pen = new Pen(Color, Width))
                 using (AdjustableArrowCap cap = new AdjustableArrowCap(4, 5, true))
                 {
                     pen.StartCap = LineCap.Round;
@@ -834,31 +926,89 @@ namespace SnipStudio
                 }
             }
             public override bool HitTest(PointF point, float radius)
-            { return DistanceToSegment(point, start, end) <= radius + Math.Max(width / 2, width * 4); }
+            { return Style.VisibleOutline && DistanceToSegment(point, start, end) <= radius + Math.Max(Width / 2, Width * 4); }
         }
 
-        internal sealed class RectangleAnnotation : Annotation
+        internal sealed class RectangleAnnotation : Annotation, IStyledShape
         {
             private readonly RectangleF bounds;
-            private readonly Color color;
-            private readonly float width;
             public RectangleAnnotation(RectangleF bounds, Color color, float width)
-            { this.bounds = bounds; this.color = color; this.width = width; }
-            public override RectangleF Bounds { get { RectangleF result = bounds; result.Inflate(width / 2, width / 2); return result; } }
-            public override Annotation Translate(PointF delta) { RectangleF result = bounds; result.Offset(delta); return new RectangleAnnotation(result, color, width); }
+                : this(bounds, new ShapeStyle(Color.Empty, color, width)) { }
+            internal RectangleAnnotation(RectangleF bounds, ShapeStyle style)
+            { this.bounds = bounds; Style = style; }
+            public ShapeStyle Style { get; private set; }
+            public EditorTool ShapeTool { get { return EditorTool.Rectangle; } }
+            public Annotation WithStyle(ShapeStyle style) { return new RectangleAnnotation(bounds, style); }
+            public override RectangleF Bounds { get { RectangleF result = bounds; if (Style.VisibleOutline) result.Inflate(Style.OutlineWidth / 2, Style.OutlineWidth / 2); return result; } }
+            public override Annotation Translate(PointF delta) { RectangleF result = bounds; result.Offset(delta); return new RectangleAnnotation(result, Style); }
             public override void Draw(Graphics graphics)
             {
-                using (Pen pen = new Pen(color, width))
-                    graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width, bounds.Height);
+                if (Style.VisibleFill)
+                    using (Brush fill = new SolidBrush(Style.EffectiveFillColor)) graphics.FillRectangle(fill, bounds);
+                if (Style.VisibleOutline)
+                    using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth))
+                        graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width, bounds.Height);
             }
             public override bool HitTest(PointF point, float radius)
             {
-                float tolerance = radius + width / 2;
+                if (Style.VisibleFill && bounds.Contains(point)) return true;
+                if (!Style.VisibleOutline) return false;
+                float tolerance = radius + Style.OutlineWidth / 2;
                 return DistanceToSegment(point, new PointF(bounds.Left, bounds.Top), new PointF(bounds.Right, bounds.Top)) <= tolerance ||
                     DistanceToSegment(point, new PointF(bounds.Right, bounds.Top), new PointF(bounds.Right, bounds.Bottom)) <= tolerance ||
                     DistanceToSegment(point, new PointF(bounds.Right, bounds.Bottom), new PointF(bounds.Left, bounds.Bottom)) <= tolerance ||
                     DistanceToSegment(point, new PointF(bounds.Left, bounds.Bottom), new PointF(bounds.Left, bounds.Top)) <= tolerance;
             }
+        }
+
+        internal sealed class EllipseAnnotation : Annotation, IStyledShape
+        {
+            private readonly RectangleF bounds;
+            internal EllipseAnnotation(RectangleF bounds, ShapeStyle style) { this.bounds = bounds; Style = style; }
+            public ShapeStyle Style { get; private set; }
+            public EditorTool ShapeTool { get { return EditorTool.Ellipse; } }
+            public Annotation WithStyle(ShapeStyle style) { return new EllipseAnnotation(bounds, style); }
+            public override RectangleF Bounds { get { RectangleF result = bounds; if (Style.VisibleOutline) result.Inflate(Style.OutlineWidth / 2, Style.OutlineWidth / 2); return result; } }
+            public override Annotation Translate(PointF delta) { RectangleF result = bounds; result.Offset(delta); return new EllipseAnnotation(result, Style); }
+            public override void Draw(Graphics graphics)
+            {
+                if (Style.VisibleFill)
+                    using (Brush fill = new SolidBrush(Style.EffectiveFillColor)) graphics.FillEllipse(fill, bounds);
+                if (Style.VisibleOutline)
+                    using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth)) graphics.DrawEllipse(pen, bounds);
+            }
+            public override bool HitTest(PointF point, float radius)
+            {
+                if (!Style.VisibleFill && !Style.VisibleOutline) return false;
+                using (GraphicsPath path = new GraphicsPath())
+                {
+                    path.AddEllipse(bounds);
+                    if (Style.VisibleFill && path.IsVisible(point)) return true;
+                    if (!Style.VisibleOutline) return false;
+                    using (Pen hit = new Pen(Color.Black, Style.OutlineWidth + radius * 2)) return path.IsOutlineVisible(point, hit);
+                }
+            }
+        }
+
+        internal sealed class LineAnnotation : Annotation, IStyledShape
+        {
+            private readonly PointF start, end;
+            internal LineAnnotation(PointF start, PointF end, ShapeStyle style) { this.start = start; this.end = end; Style = style; }
+            internal PointF Start { get { return start; } }
+            internal PointF End { get { return end; } }
+            public ShapeStyle Style { get; private set; }
+            public EditorTool ShapeTool { get { return EditorTool.Line; } }
+            public Annotation WithStyle(ShapeStyle style) { return new LineAnnotation(start, end, style); }
+            public override RectangleF Bounds { get { RectangleF result = RectangleF.FromLTRB(Math.Min(start.X, end.X), Math.Min(start.Y, end.Y), Math.Max(start.X, end.X), Math.Max(start.Y, end.Y)); result.Inflate(Style.OutlineWidth / 2, Style.OutlineWidth / 2); return result; } }
+            public override Annotation Translate(PointF delta) { return new LineAnnotation(new PointF(start.X + delta.X, start.Y + delta.Y), new PointF(end.X + delta.X, end.Y + delta.Y), Style); }
+            public override void Draw(Graphics graphics)
+            {
+                if (!Style.VisibleOutline) return;
+                using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth))
+                { pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; graphics.DrawLine(pen, start, end); }
+            }
+            public override bool HitTest(PointF point, float radius)
+            { return Style.VisibleOutline && DistanceToSegment(point, start, end) <= radius + Style.OutlineWidth / 2; }
         }
 
         internal sealed class TextAnnotation : Annotation

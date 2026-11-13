@@ -476,6 +476,7 @@ namespace SnipStudio
 
         private void RaiseViewChanged()
         {
+            UpdateInlineTextLayout();
             EventHandler handler = ViewChanged;
             if (handler != null) handler(this, EventArgs.Empty);
         }

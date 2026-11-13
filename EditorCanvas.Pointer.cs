@@ -8,7 +8,6 @@ namespace SnipStudio
     public sealed partial class EditorCanvas
     {
         private readonly Dictionary<EditorTool, ToolCursor> toolPointers = new Dictionary<EditorTool, ToolCursor>();
-        private int toolPointerDpi;
         private ContextMenuStrip annotationPopup;
         private ContextMenuStrip recognizedTextPopup;
         private ToolStripMenuItem moveAnnotationItem, editAnnotationItem;
@@ -43,7 +42,7 @@ namespace SnipStudio
             {
                 if (CropDragging) SetCropPointer(cropHandle);
                 else if (IsHandleCreated) SetCropPointer(CropFrame.HitTest(CropSelection, ToImage(PointToClient(MousePosition), false), CropHitRadius));
-                else Cursor = GetToolPointer(EditorTool.Crop);
+                else Cursor = Cursors.Default;
                 return;
             }
             if (tool == EditorTool.Select)
@@ -53,26 +52,9 @@ namespace SnipStudio
                 return;
             }
 
-            Cursor = GetToolPointer(tool);
-        }
-
-        private Cursor GetToolPointer(EditorTool pointerTool)
-        {
-            int dpi = Math.Max(96, DeviceDpi);
-            if (toolPointerDpi != dpi)
-            {
-                Cursor = Cursors.Default;
-                foreach (ToolCursor cached in toolPointers.Values) cached.Dispose();
-                toolPointers.Clear();
-                toolPointerDpi = dpi;
-            }
-            ToolCursor pointer;
-            if (!toolPointers.TryGetValue(pointerTool, out pointer))
-            {
-                pointer = ToolCursor.Create(pointerTool, dpi);
-                toolPointers.Add(pointerTool, pointer);
-            }
-            return pointer.Cursor;
+            // A tool choice changes the toolbar selection, not the ordinary
+            // pointer. Only contextual grips and text editing use other cursors.
+            Cursor = Cursors.Default;
         }
 
         private void UpdateSelectPointer(Point location)
@@ -148,6 +130,7 @@ namespace SnipStudio
             Tool = EditorTool.Select;
             selectedIndex = index;
             RaiseTextStyleChanged();
+            NotifyShapeSelectionChanged();
             UpdateCursor();
             Invalidate();
         }
@@ -163,7 +146,7 @@ namespace SnipStudio
                 SelectContextAnnotation(contextAnnotationIndex);
                 Focus();
             };
-            editAnnotationItem = new ToolStripMenuItem("Edit text…");
+            editAnnotationItem = new ToolStripMenuItem("Advanced text…");
             editAnnotationItem.Click += delegate
             {
                 if (!HasImage || document.Revision != contextDocumentRevision || document.GetTextAnnotation(contextAnnotationIndex) == null) return;
@@ -175,7 +158,7 @@ namespace SnipStudio
                 BeginInvoke((Action)delegate
                 {
                     if (!IsDisposed && HasImage && document.Revision == editRevision && document.GetTextAnnotation(editIndex) != null)
-                        EditTextAnnotation(editIndex);
+                        ShowAdvancedTextEditor();
                 });
             };
             annotationPopup.Items.Add(moveAnnotationItem);

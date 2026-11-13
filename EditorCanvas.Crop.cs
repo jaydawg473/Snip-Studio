@@ -135,12 +135,12 @@ namespace SnipStudio
 
         private void SetCropPointer(CropFrameHandle handle)
         {
-            if (handle == CropFrameHandle.Move) Cursor = cropFrame == new Rectangle(Point.Empty, ImageSize) ? GetToolPointer(EditorTool.Crop) : Cursors.SizeAll;
+            if (handle == CropFrameHandle.Move) Cursor = cropFrame == new Rectangle(Point.Empty, ImageSize) ? Cursors.Default : Cursors.SizeAll;
             else if (handle == CropFrameHandle.Left || handle == CropFrameHandle.Right) Cursor = Cursors.SizeWE;
             else if (handle == CropFrameHandle.Top || handle == CropFrameHandle.Bottom) Cursor = Cursors.SizeNS;
             else if (handle == (CropFrameHandle.Left | CropFrameHandle.Top) || handle == (CropFrameHandle.Right | CropFrameHandle.Bottom)) Cursor = Cursors.SizeNWSE;
             else if (handle == (CropFrameHandle.Right | CropFrameHandle.Top) || handle == (CropFrameHandle.Left | CropFrameHandle.Bottom)) Cursor = Cursors.SizeNESW;
-            else Cursor = GetToolPointer(EditorTool.Crop);
+            else Cursor = Cursors.Default;
         }
 
         private bool HandleCropKey(Keys key)

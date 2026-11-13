@@ -57,7 +57,7 @@ namespace SnipStudio
             get { return captureToolbar == null ? Ui(82) : captureToolbar.Height +
                 updateNoticeHeight +
                 (canvas.HasImage && !AnnotationToolbarIsVertical ? annotationToolbar.Height : 0) +
-                (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter || IsCropContext) ? contextToolbar.Height : 0) + footerStrip.Height; }
+                (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter || IsCropContext || IsShapeContext || IsInlineTextContext) ? contextToolbar.Height : 0) + footerStrip.Height; }
         }
 
         private bool AnnotationToolbarIsVertical
@@ -130,9 +130,8 @@ namespace SnipStudio
             AddCompactTool("Move", EditorTool.Select, "move", "Select and move annotations. Middle-drag or use scrollbars to pan the image.");
             AddCompactTool("Pen", EditorTool.Pen, "pen", "Pen");
             AddCompactTool("Highlight", EditorTool.Highlighter, "highlighter", "Highlight text; hold Shift for freehand");
-            AddCompactTool("Arrow", EditorTool.Arrow, "arrow", "Draw an arrow");
-            AddCompactTool("Box", EditorTool.Rectangle, "box", "Draw a box");
-            AddCompactTool("Add text", EditorTool.Text, "text", "Add text, then use Move to reposition it");
+            BuildShapesButton();
+            AddCompactTool("Add text", EditorTool.Text, "text", "Click on the snip and type directly. Advanced text opens full formatting options.");
             AddCompactTool("Eraser", EditorTool.Eraser, "eraser", "Erase annotations");
             AddCompactTool("Crop", EditorTool.Crop, "crop", "Drag an edge or corner to crop. Enter applies; Escape cancels.");
             AddCompactTool("Remove area", EditorTool.RemoveArea, "remove-area", "Remove captured content. Click a flat-color object or drag an area, review the selection, then press Delete. Undo restores it.");
@@ -209,6 +208,7 @@ namespace SnipStudio
             contextToolbar.Controls.Add(deleteRecognizedTextButton);
             contextToolbar.Controls.Add(closeTextActionsButton);
             BuildCropActions();
+            BuildShapeActions();
             tips.SetToolTip(editRecognizedLineButton, "Edit one recognized line. Select words from a single line first.");
             tips.SetToolTip(translateTextButton, "Translate selected words, or all recognized text, using the included offline translator. Choose the original and target languages inside Snip Studio.");
             tips.SetToolTip(deleteRecognizedTextButton, "Remove the selected recognized text. Use Undo to restore it.");
@@ -377,8 +377,9 @@ namespace SnipStudio
                 }
                 externalEditorButton.AccessibleName = externalEditorButton.Text;
                 bool showTextSize = !canvas.TextActionsMode && (canvas.Tool == EditorTool.Text || canvas.HasSelectedTextAnnotation);
-                width.Visible = !showTextSize;
+                width.Visible = !showTextSize && !IsShapeContext;
                 textSize.Visible = showTextSize;
+                colorButton.Visible = !IsShapeContext;
                 int annotationHeight = 0;
                 if (!verticalAnnotation)
                 {
@@ -392,6 +393,7 @@ namespace SnipStudio
                     foreach (Control control in annotationControls)
                     {
                         if ((control == width && showTextSize) || (control == textSize && !showTextSize)) continue;
+                        if (IsShapeContext && (control == width || control == colorButton)) continue;
                         int span = ToolbarWidth(control, control == width ? 94 : control == textSize ? 106 : control == externalEditorButton ? 132 : 34);
                         span = Math.Min(span, Math.Max(Ui(34), w - Ui(24)));
                         PlaceToolbarControl(control, span, ref x, ref rowY, rowHeight, w, Ui(control == colorButton || control == width || control == textSize ? 8 : 2));
@@ -410,10 +412,12 @@ namespace SnipStudio
                 }
                 bool textMode = canvas.HasImage && canvas.TextActionsMode;
                 bool cropMode = IsCropContext;
-                bool context = cropMode || textMode || (canvas.HasImage && canvas.Tool == EditorTool.Highlighter);
+                bool shapeMode = IsShapeContext;
+                bool composeMode = IsInlineTextContext;
+                bool context = cropMode || shapeMode || composeMode || textMode || (canvas.HasImage && canvas.Tool == EditorTool.Highlighter);
                 contextToolbar.Visible = context;
-                snapToText.Visible = context && !textMode && !cropMode;
-                recognitionStatus.Visible = context && !cropMode;
+                snapToText.Visible = context && !textMode && !cropMode && !shapeMode && !composeMode;
+                recognitionStatus.Visible = context && !cropMode && !shapeMode && !composeMode;
                 copyAllTextButton.Visible = copySelectedTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Enabled = textMode && canvas.TextActionCommandsReady && !capturePending && !String.IsNullOrWhiteSpace(canvas.AllRecognizedText);
@@ -423,7 +427,10 @@ namespace SnipStudio
                 deleteRecognizedTextButton.Enabled = textMode && !capturePending && canvas.CanDeleteRecognizedText;
                 int contextHeight = 0;
                 UpdateCropActionControls();
+                UpdateAnnotationContextControls();
                 if (cropMode) contextHeight = LayoutCropActions(w);
+                else if (shapeMode) contextHeight = LayoutShapeActions(w);
+                else if (composeMode) contextHeight = LayoutInlineTextActions(w);
                 else if (context)
                 {
                     x = Ui(12); rowY = Ui(3);
@@ -488,7 +495,7 @@ namespace SnipStudio
                         ? Math.Max(Ui(96), MeasureVerticalAnnotationToolbar(showTextSize, false).Height) : Ui(96);
                     int minimumHeight = Math.Min(work.Height, y + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
                     if (MinimumSize.Height != minimumHeight) MinimumSize = new Size(MinimumSize.Width, minimumHeight);
-                    if (verticalAnnotation || cropMode)
+                    if (verticalAnnotation || cropMode || shapeMode || composeMode)
                     {
                         if (Height > work.Height) Height = work.Height;
                         int top = Math.Max(work.Top, Math.Min(Top, work.Bottom - Height));
@@ -557,6 +564,7 @@ namespace SnipStudio
             foreach (Control control in annotationControls)
             {
                 if ((control == width && showTextSize) || (control == textSize && !showTextSize)) continue;
+                if (IsShapeContext && (control == width || control == colorButton)) continue;
                 if (control == style)
                 {
                     if (column != 0) { rowY += iconSize + gap; column = 0; }
@@ -629,6 +637,8 @@ namespace SnipStudio
         private void UpdateTextStyleControls()
         {
             if (updatingTextSize || textSize.Items.Count == 0) return;
+            int previousIndex = textSize.SelectedIndex;
+            bool addedSize = false;
             updatingTextSize = true;
             try
             {
@@ -645,12 +655,15 @@ namespace SnipStudio
                 {
                     textSize.Items.Insert(insertAt, new TextSizeItem(size));
                     index = insertAt;
+                    addedSize = true;
                 }
                 textSize.SelectedIndex = index;
                 textSize.Enabled = canvas.HasImage && !capturePending;
             }
             finally { updatingTextSize = false; }
-            LayoutChrome();
+            // Caret movement raises TextStyleChanged too. Keep that frequent path
+            // out of the complete chrome layout unless the size choice changed.
+            if (addedSize || previousIndex != textSize.SelectedIndex) LayoutChrome();
         }
 
         private void CopyRecognizedText(bool all)
