@@ -14,7 +14,7 @@ namespace SnipStudio
         private ShapeStyleButton shapeFillButton, shapeOutlineButton;
         private Label shapeSummary, inlineTextGuidance;
         private EditorTool lastShapeTool = EditorTool.Rectangle;
-        private bool lastShapeContextVisible, lastInlineContextVisible;
+        private bool lastShapeContextVisible, lastInlineContextVisible, lastEmojiContextVisible, lastInlineWorkflowVisible;
         private ShapeStylePopup shapeStylePopup;
         private EmojiPickerPopup emojiPickerPopup;
 
@@ -26,7 +26,13 @@ namespace SnipStudio
         private bool IsShapeContext
         {
             get { return canvas.HasImage && !canvas.TextActionsMode &&
-                (IsShapeToolKind(canvas.Tool) || (canvas.Tool == EditorTool.Select && canvas.HasSelectedShape)); }
+                (IsShapeToolKind(canvas.Tool) || IsEmojiContext || (canvas.Tool == EditorTool.Select && canvas.HasSelectedShape)); }
+        }
+
+        private bool IsEmojiContext
+        {
+            get { return canvas.HasImage && !canvas.TextActionsMode &&
+                (canvas.Tool == EditorTool.Emoji || (canvas.Tool == EditorTool.Select && canvas.HasSelectedEmoji)); }
         }
 
         private bool IsInlineTextContext
@@ -42,12 +48,14 @@ namespace SnipStudio
 
         private void BuildShapesButton()
         {
-            shapesButton = IconButton("Shapes", "shapes", delegate { SelectTool(lastShapeTool); });
+            shapesButton = IconButton("Shapes", "shapes", delegate { ActivateAnnotationTool(lastShapeTool, shapesButton, false); });
+            shapesButton.DropDownIndicator = true;
+            shapesButton.DropDownClick += delegate { ActivateAnnotationTool(lastShapeTool, shapesButton, true); };
             shapesButton.AccessibleName = "Shapes";
             annotationToolbar.Controls.Add(shapesButton);
             annotationControls.Add(shapesButton);
             documentControls.Add(shapesButton);
-            tips.SetToolTip(shapesButton, "Shapes: rectangle, ellipse, line, arrow and emoji. Choose Fill and Outline for colors, opacity and outline size.");
+            tips.SetToolTip(shapesButton, "Shapes: rectangle, ellipse, line, arrow and colored emoji stickers. Click again or use the arrow for Shape options (Alt+Down).");
         }
 
         private void BuildShapeActions()
@@ -59,7 +67,7 @@ namespace SnipStudio
             emojiButton = IconButton("Emoji", "emoji", delegate { ShowEmojiPicker(); });
             emojiButton.AccessibleName = "Choose an emoji";
             contextToolbar.Controls.Add(emojiButton);
-            tips.SetToolTip(emojiButton, "Choose an emoji, then click on the snip to place it. Use Move or Text to adjust it afterward.");
+            tips.SetToolTip(emojiButton, "Choose a colored emoji sticker, then click the snip to place it. Drag a corner to resize; drag the top handle to rotate.");
             shapeFillButton = new ShapeStyleButton { Text = "Fill", AccessibleName = "Shape fill color and opacity" };
             shapeOutlineButton = new ShapeStyleButton { Text = "Outline", AccessibleName = "Shape outline color, opacity and size", OutlineSample = true };
             shapeFillButton.Click += delegate { ShowShapeStylePicker(true); };
@@ -72,8 +80,11 @@ namespace SnipStudio
             advancedTextButton = ActionButton("Advanced text…", "text", 154, delegate
             {
                 if (!CanChangeAnnotationAppearance || !canvas.CanShowAdvancedTextEditor) return;
-                canvas.ShowAdvancedTextEditor();
-                UpdateAnnotationContextControls();
+                QueueToolOptionsAction(advancedTextButton, delegate(Rectangle anchor)
+                {
+                    if (canvas.CanShowAdvancedTextEditor) canvas.ShowAdvancedTextEditor();
+                    UpdateAnnotationContextControls();
+                });
             });
             finishInlineTextButton = ActionButton("Done", "", 70, delegate
             {
@@ -101,6 +112,7 @@ namespace SnipStudio
             canvas.InlineTextStateChanged += delegate { UpdateAnnotationContextAfterSelection(); UpdateDocumentTitle(); };
             canvas.TextStyleChanged += delegate { UpdateAnnotationContextAfterSelection(); };
             UpdateAnnotationContextControls();
+            RefreshToolOptionsContents();
         }
 
         private void AddShapeChoice(string label, EditorTool kind, string glyph)
@@ -115,20 +127,22 @@ namespace SnipStudio
         private void UpdateAnnotationContextAfterSelection()
         {
             if (IsDisposed || closing || shapeFillButton == null) return;
-            bool beforeShape = lastShapeContextVisible, beforeText = lastInlineContextVisible;
+            bool beforeShape = lastShapeContextVisible, beforeText = lastInlineContextVisible, beforeEmoji = lastEmojiContextVisible, beforeWorkflow = lastInlineWorkflowVisible;
             UpdateAnnotationContextControls();
-            if (beforeShape != lastShapeContextVisible || beforeText != lastInlineContextVisible) LayoutChrome();
+            RefreshToolOptionsContents();
+            if (beforeShape != lastShapeContextVisible || beforeText != lastInlineContextVisible || beforeEmoji != lastEmojiContextVisible || beforeWorkflow != lastInlineWorkflowVisible) LayoutChrome();
         }
 
         private void UpdateAnnotationContextControls()
         {
             if (shapeFillButton == null || shapeFillButton.IsDisposed) return;
-            bool shape = IsShapeContext, text = IsInlineTextContext;
-            lastShapeContextVisible = shape; lastInlineContextVisible = text;
+            bool shape = IsShapeContext, text = IsInlineTextContext, emoji = IsEmojiContext;
+            lastShapeContextVisible = shape; lastInlineContextVisible = text; lastEmojiContextVisible = emoji;
+            lastInlineWorkflowVisible = HasInlineTextWorkflow;
             bool ready = CanChangeAnnotationAppearance;
-            EditorTool active = canvas.Tool == EditorTool.Select && canvas.SelectedShapeTool.HasValue
+            EditorTool active = emoji ? EditorTool.Emoji : canvas.Tool == EditorTool.Select && canvas.SelectedShapeTool.HasValue
                 ? canvas.SelectedShapeTool.Value : canvas.Tool;
-            if (IsShapeToolKind(canvas.Tool)) lastShapeTool = canvas.Tool;
+            if (IsShapeToolKind(canvas.Tool) || canvas.Tool == EditorTool.Emoji) lastShapeTool = canvas.Tool;
             if (shapesButton != null) shapesButton.Selected = shape;
             foreach (KeyValuePair<EditorTool, StudioButton> pair in shapeChoiceButtons)
             {
@@ -136,8 +150,17 @@ namespace SnipStudio
                 pair.Value.Selected = active == pair.Key;
             }
             emojiButton.Visible = shape; emojiButton.Enabled = shape && ready;
-            shapeFillButton.Visible = shapeOutlineButton.Visible = shapeSummary.Visible = shape;
-            if (shape)
+            emojiButton.Selected = emoji;
+            shapeFillButton.Visible = shapeOutlineButton.Visible = shape && !emoji;
+            shapeSummary.Visible = shape;
+            if (emoji)
+            {
+                shapeFillButton.Enabled = shapeOutlineButton.Enabled = false;
+                shapeSummary.Text = canvas.Tool == EditorTool.Emoji
+                    ? canvas.ActiveEmojiName + ": click to place. Drag corners to resize; the top handle rotates. Emoji stays active."
+                    : "Drag the sticker to move it. Drag a corner to resize; drag the top handle to rotate.";
+            }
+            else if (shape)
             {
                 ShapeStyle style = canvas.CurrentShapeStyle;
                 bool closed = active == EditorTool.Rectangle || active == EditorTool.Ellipse;
@@ -155,13 +178,13 @@ namespace SnipStudio
                     canvas.HasSelectedShape ? "Appearance changes apply to the selected shape. Undo restores its previous style." :
                     "Drag to draw. Use Move to select or reposition a shape.";
             }
-            advancedTextButton.Visible = inlineTextGuidance.Visible = text;
+            advancedTextButton.Visible = text;
+            inlineTextGuidance.Visible = HasInlineTextWorkflow;
             advancedTextButton.Enabled = text && ready && canvas.CanShowAdvancedTextEditor;
             finishInlineTextButton.Visible = cancelInlineTextButton.Visible = text && canvas.InlineTextEditing;
             finishInlineTextButton.Enabled = cancelInlineTextButton.Enabled = text && ready && canvas.InlineTextEditing;
-            if (text) inlineTextGuidance.Text = canvas.EmojiPlacementPending ? "Click the snip to place " + canvas.PendingEmoji + ". Then use Move or Text to adjust it." :
-                canvas.InlineTextEditing ? "Type on the snip. Enter adds a line; Ctrl+Enter finishes; Esc cancels." :
-                "Click the snip and start typing. Advanced text opens the full formatting editor.";
+            if (text) inlineTextGuidance.Text = canvas.InlineTextEditing ? "Type inside the box. Enter adds a line; Ctrl+Enter finishes; Esc cancels." :
+                "Drag a text box, then type. Click for a quick default box. Advanced text opens the full editor.";
         }
 
         private int LayoutShapeActions(int availableWidth)
@@ -171,8 +194,11 @@ namespace SnipStudio
             foreach (EditorTool kind in new EditorTool[] { EditorTool.Rectangle, EditorTool.Ellipse, EditorTool.Line, EditorTool.Arrow })
                 PlaceToolbarControl(shapeChoiceButtons[kind], Math.Min(Ui(34), max), ref x, ref rowY, rowHeight, availableWidth, Ui(3));
             PlaceToolbarControl(emojiButton, Math.Min(Ui(34), max), ref x, ref rowY, rowHeight, availableWidth, Ui(12));
-            PlaceToolbarControl(shapeFillButton, Math.Min(shapeFillButton.PreferredContentWidth(Ui(1000) / 1000f), max), ref x, ref rowY, rowHeight, availableWidth, Ui(6));
-            PlaceToolbarControl(shapeOutlineButton, Math.Min(shapeOutlineButton.PreferredContentWidth(Ui(1000) / 1000f), max), ref x, ref rowY, rowHeight, availableWidth, Ui(8));
+            if (!IsEmojiContext)
+            {
+                PlaceToolbarControl(shapeFillButton, Math.Min(shapeFillButton.PreferredContentWidth(Ui(1000) / 1000f), max), ref x, ref rowY, rowHeight, availableWidth, Ui(6));
+                PlaceToolbarControl(shapeOutlineButton, Math.Min(shapeOutlineButton.PreferredContentWidth(Ui(1000) / 1000f), max), ref x, ref rowY, rowHeight, availableWidth, Ui(8));
+            }
             return LayoutAnnotationSummary(shapeSummary, availableWidth, x, rowY, rowHeight);
         }
 
@@ -180,7 +206,6 @@ namespace SnipStudio
         {
             UpdateAnnotationContextControls();
             int x = Ui(12), rowY = Ui(3), rowHeight = Ui(34), max = Math.Max(1, availableWidth - Ui(24));
-            PlaceToolbarControl(advancedTextButton, Math.Min(ToolbarWidth(advancedTextButton, 154), max), ref x, ref rowY, rowHeight, availableWidth, Ui(6));
             if (canvas.InlineTextEditing)
             {
                 PlaceToolbarControl(finishInlineTextButton, Math.Min(ToolbarWidth(finishInlineTextButton, 70), max), ref x, ref rowY, rowHeight, availableWidth, Ui(6));
@@ -200,7 +225,14 @@ namespace SnipStudio
 
         private void ShowShapeStylePicker(bool fill)
         {
-            if (!IsShapeContext || !CanChangeAnnotationAppearance) return;
+            if (!IsShapeContext || IsEmojiContext || !CanChangeAnnotationAppearance) return;
+            QueueToolOptionsAction(fill ? (Control)shapeFillButton : shapeOutlineButton,
+                delegate(Rectangle anchor) { OpenShapeStylePicker(fill, anchor); });
+        }
+
+        private void OpenShapeStylePicker(bool fill, Rectangle anchor)
+        {
+            if (!IsShapeContext || IsEmojiContext || !CanChangeAnnotationAppearance) return;
             EditorTool kind = canvas.Tool == EditorTool.Select && canvas.SelectedShapeTool.HasValue ? canvas.SelectedShapeTool.Value : canvas.Tool;
             bool closed = kind == EditorTool.Rectangle || kind == EditorTool.Ellipse;
             if (fill && !closed) return;
@@ -208,19 +240,26 @@ namespace SnipStudio
             if (shapeStylePopup != null) shapeStylePopup.Dispose();
             shapeStylePopup = new ShapeStylePopup(canvas.CurrentShapeStyle, fill, closed, delegate(ShapeStyle style)
             {
-                if (!CanChangeAnnotationAppearance || !IsShapeContext) return;
+                if (!CanChangeAnnotationAppearance || !IsShapeContext || IsEmojiContext) return;
                 try
                 {
                     canvas.CurrentShapeStyle = style;
+                    RememberToolColor(fill ? style.FillColor : style.OutlineColor);
                     SetStatus(canvas.HasSelectedShape ? "Shape appearance updated. Undo restores the previous appearance." : "Shape style ready. Drag on the snip to draw.");
                     UpdateAnnotationContextControls(); LayoutChrome();
                 }
                 catch (Exception error) { ShowFailure("The shape appearance could not be updated", error); }
-            }, Ui(1000) / 1000f, this);
-            ShowAnnotationPopup(shapeStylePopup, fill ? (Control)shapeFillButton : shapeOutlineButton);
+            }, Ui(1000) / 1000f, this, RecentToolColors());
+            ShowAnnotationPopup(shapeStylePopup, anchor);
         }
 
         private void ShowEmojiPicker()
+        {
+            if (!CanChangeAnnotationAppearance || !canvas.HasImage) return;
+            QueueToolOptionsAction(emojiButton, delegate(Rectangle anchor) { OpenEmojiPicker(anchor); });
+        }
+
+        private void OpenEmojiPicker(Rectangle anchor)
         {
             if (!CanChangeAnnotationAppearance || !canvas.HasImage) return;
             CloseShapePopups();
@@ -229,27 +268,32 @@ namespace SnipStudio
             {
                 if (!CanChangeAnnotationAppearance || !canvas.HasImage) return;
                 canvas.BeginEmojiPlacement(value);
-                SetStatus("Click the snip to place " + value + ". Use Move or Text to adjust it afterward.");
+                if (canvas.Tool != EditorTool.Emoji) { UpdateAnnotationContextControls(); return; }
+                SetStatus(canvas.ActiveEmojiName + ": click to place. Drag a corner to resize; use the top handle to rotate. Emoji stays active.");
                 UpdateAnnotationContextControls(); LayoutChrome(); canvas.Focus();
             }, Ui(1000) / 1000f);
-            ShowAnnotationPopup(emojiPickerPopup, emojiButton);
+            ShowAnnotationPopup(emojiPickerPopup, anchor);
         }
 
         private void ShowAnnotationPopup(ToolStripDropDown popup, Control anchor)
+        {
+            ShowAnnotationPopup(popup, anchor.RectangleToScreen(anchor.ClientRectangle));
+        }
+
+        private void ShowAnnotationPopup(ToolStripDropDown popup, Rectangle bounds)
         {
             Rectangle work = EditorWorkingArea();
             ShapeStylePopup style = popup as ShapeStylePopup;
             EmojiPickerPopup emoji = popup as EmojiPickerPopup;
             if (style != null) style.FitToWorkingArea(work);
             if (emoji != null) emoji.FitToWorkingArea(work);
-            Rectangle bounds = anchor.RectangleToScreen(anchor.ClientRectangle);
             Point location = MenuPopupPlacement.Calculate(bounds, popup.Size, work);
-            popup.Show(anchor, anchor.PointToClient(location), ToolStripDropDownDirection.BelowRight);
+            popup.Show(this, PointToClient(location), ToolStripDropDownDirection.BelowRight);
         }
 
         internal bool CloseShapePopups()
         {
-            bool closed = false;
+            bool closed = CloseToolOptions();
             if (shapeStylePopup != null && !shapeStylePopup.IsDisposed && shapeStylePopup.Visible) { shapeStylePopup.Close(ToolStripDropDownCloseReason.CloseCalled); closed = true; }
             if (emojiPickerPopup != null && !emojiPickerPopup.IsDisposed && emojiPickerPopup.Visible) { emojiPickerPopup.Close(ToolStripDropDownCloseReason.CloseCalled); closed = true; }
             return closed;
@@ -257,6 +301,7 @@ namespace SnipStudio
 
         private void DisposeShapeActions()
         {
+            DisposeToolOptions();
             if (shapeStylePopup != null) { shapeStylePopup.Dispose(); shapeStylePopup = null; }
             if (emojiPickerPopup != null) { emojiPickerPopup.Dispose(); emojiPickerPopup = null; }
         }

@@ -1,3 +1,42 @@
+SNIP STUDIO 0.6.2 - EDITING AND TOOL OPTIONS, 2026-11-13
+
+CURRENT APPLICATION VERIFICATION
+Version 0.6.2.0 built without compiler warnings. Timestamped Automation Forge
+Authenticode verified Valid. Exact application SHA256:
+153E900AD249124A80FAA1FE9379B554C7BB1C81E0B7B6644B5385E5A63A1A54
+
+Current signed-library checks:
+- EditorToolUpdates: 124 passed.
+- ObjectEditing: 160 passed. Embedded emoji bytes, color thumbnails,
+  natural aspect, pure resize/rotation geometry, immutable history, closed-shape
+  raw geometry/styles and framed inline rich text. No mouse capture requested.
+- ColorDialogs: 97 passed. Unshown shared picker controls, draft
+  synchronization, hex validation and source/callback policies; no dialog shown.
+- CropFrame: 78 passed; geometry and offscreen canvas, no mouse capture.
+- ZoomFrames: 181 passed; deterministic wheel animation, no physical input.
+- ScrollingUi: 195 passed, including 32 actual unshown button paints.
+- IconArtwork: 532 passed, including 223 rasters and 12 unshown button paints.
+- Private ToolOptionsLayout: separate current report covers actual unshown
+  options-card geometry, parenting, context selection and image-view retention.
+
+ASSETS AND LICENSES
+The prior 136 generated icon files are retained unchanged. The 24 new official
+Microsoft Fluent Emoji 3D PNGs match their pinned source manifest byte-for-byte.
+No font or runtime network is required for emoji rendering. The original MIT
+license, attribution and provenance manifest accompany the combined notices.
+Source padding is cropped at render time; original PNG bytes remain unchanged.
+
+PREFERENCES AND SCOPE
+Preferences.cs remains byte-identical:
+FE1AC75D37379BBAE87216860043C7315485F4E469FAB31FBDC2F75D84AE886F
+No app was installed and no user Snip Studio session was closed by these checks.
+Native mouse gestures, caret/focus transitions, displayed popup appearance,
+physical mixed-monitor DPI and installed-upgrade acceptance remain unverified.
+Package signature/CRC, exact payload and privacy/readiness evidence are separate
+final-artifact records. Historical results below are not additional current tests.
+
+HISTORICAL 0.6.1 RELEASE RECORD FOLLOWS
+
 SNIP STUDIO 0.6.1 - ICON ARTWORK AND CLOSE PROMPTS, 2026-11-13
 
 FINAL APPLICATION COMPONENT VERIFICATION

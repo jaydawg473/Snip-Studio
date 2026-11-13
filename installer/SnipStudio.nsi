@@ -14,7 +14,7 @@ Var InstalledCloseScanCount
 Var InstalledProbeExitCode
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.6.1-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.6.2-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -30,7 +30,7 @@ Var InstalledProbeExitCode
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.6.1-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-0.6.2-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -40,10 +40,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.6.1.0"
+VIProductVersion "0.6.2.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.6.1.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.6.1.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "0.6.2.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "0.6.2.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -463,6 +463,12 @@ Section "Snip Studio (required)" MainApplication
   File "${RELEASE_DIR}\VALIDATION.txt"
   File "${RELEASE_DIR}\Signature Verification.json"
   File "${RELEASE_DIR}\SHA256SUMS.txt"
+  SetOutPath "$INSTDIR\licenses"
+  File "${RELEASE_DIR}\licenses\NOTICES.txt"
+  File "${RELEASE_DIR}\licenses\FluentEmoji-LICENSE.txt"
+  File "${RELEASE_DIR}\licenses\FluentEmoji-ATTRIBUTION.txt"
+  File "${RELEASE_DIR}\licenses\FluentEmoji-manifest.json"
+  SetOutPath "$INSTDIR"
   !include "${TRANSLATION_INSTALL_INCLUDE}"
   SetOutPath "$INSTDIR"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
@@ -473,7 +479,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.6.1"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.6.2"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"
@@ -577,6 +583,11 @@ Section "Uninstall"
   Delete "$INSTDIR\VALIDATION.txt"
   Delete "$INSTDIR\Signature Verification.json"
   Delete "$INSTDIR\SHA256SUMS.txt"
+  Delete "$INSTDIR\licenses\NOTICES.txt"
+  Delete "$INSTDIR\licenses\FluentEmoji-LICENSE.txt"
+  Delete "$INSTDIR\licenses\FluentEmoji-ATTRIBUTION.txt"
+  Delete "$INSTDIR\licenses\FluentEmoji-manifest.json"
+  RMDir "$INSTDIR\licenses"
   Delete "$INSTDIR\Uninstall.exe"
   Delete "$DESKTOP\Snip Studio.lnk"
   Delete "$SMPROGRAMS\Automation Forge\Snip Studio\Snip Studio.lnk"

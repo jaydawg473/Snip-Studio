@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
@@ -208,12 +208,14 @@ namespace SnipStudio
             }
             UpdateColorButton();
             UpdateAnnotationContextControls();
+            RefreshToolOptionsContents();
             UpdateContextHelp();
             LayoutChrome();
             if (canvas.HasImage)
             {
                 if (tool == EditorTool.Crop) SetStatus("Crop: drag an edge or corner, then Apply crop or Enter. Escape cancels.");
-                else if (tool == EditorTool.Text) SetStatus("Text: click the snip and type. Enter adds a line; Ctrl+Enter finishes. Advanced text opens full formatting.");
+                else if (tool == EditorTool.Text) SetStatus("Text: drag a box, then type. Click for a quick default box. Ctrl+Enter finishes; Advanced text opens full formatting.");
+                else if (tool == EditorTool.Emoji) SetStatus(canvas.ActiveEmojiName + ": click to place. Drag a corner to resize; the top handle rotates. Emoji stays active.");
                 else if (IsShapeToolKind(tool)) SetStatus("Shapes: drag to draw a " + tool.ToString().ToLowerInvariant() + ". Fill and Outline control its appearance.");
                 else if (tool == EditorTool.Eraser) SetStatus("Eraser: click or drag over an annotation to remove it.");
                 else if (tool == EditorTool.RemoveArea) SetStatus("Remove area: select captured content, drag the selection to adjust it, then press Delete. You can also reposition the selection with Move.");
@@ -254,7 +256,8 @@ namespace SnipStudio
                 case EditorTool.Rectangle: toolGuidance.Text = "Draw a rectangle. Fill and Outline set its appearance; Move repositions it."; break;
                 case EditorTool.Ellipse: toolGuidance.Text = "Draw an ellipse. Fill and Outline set its appearance; Move repositions it."; break;
                 case EditorTool.Line: toolGuidance.Text = "Draw a line. Outline controls its color, opacity and size."; break;
-                case EditorTool.Text: toolGuidance.Text = "Click the snip and type. Enter starts a new line; Ctrl+Enter finishes. Advanced text opens full formatting."; break;
+                case EditorTool.Text: toolGuidance.Text = "Drag a text box, then type. Click for a quick default box. Ctrl+Enter finishes; Advanced text opens full formatting."; break;
+                case EditorTool.Emoji: toolGuidance.Text = "Place a colored emoji sticker. Drag a corner to resize it; drag the top handle to rotate. Emoji stays active after placement."; break;
                 case EditorTool.Eraser: toolGuidance.Text = "Click or drag across an annotation to remove it. Captured pixels stay intact."; break;
                 case EditorTool.Crop: toolGuidance.Text = "Drag the snip's edges or corners, then Apply crop or Enter. Escape cancels; Undo restores an applied crop."; break;
                 case EditorTool.RemoveArea: toolGuidance.Text = "Click a flat-color object or drag any area. Drag the selected box, or switch to Move, to adjust its position before Delete. Right-click or Color changes the fill."; break;
@@ -274,20 +277,24 @@ namespace SnipStudio
             tips.SetToolTip(recognitionStatus, message + "\nText recognition runs on this computer. Review any recognized text before using it.");
         }
 
-        private void ChooseColor()
+        private void ChooseColor() { ChooseColor(Rectangle.Empty); }
+
+        private void ChooseColor(Rectangle anchor)
         {
             if (IsSourceRemovalContext) { canvas.ChooseSourceRemovalFillColor(this); return; }
             List<Color> recent = new List<Color>();
             if (preferences.RecentInkColors != null) foreach (int argb in preferences.RecentInkColors) recent.Add(Color.FromArgb(argb));
             using (ColorPaletteDialog picker = new ColorPaletteDialog(canvas.InkColor, recent))
             {
+                if (!anchor.IsEmpty)
+                {
+                    picker.StartPosition = FormStartPosition.Manual;
+                    picker.Location = MenuPopupPlacement.Calculate(anchor, picker.Size, EditorWorkingArea());
+                }
                 if (picker.ShowDialog(this) != DialogResult.OK) return;
                 canvas.InkColor = picker.SelectedColor;
                 if (!highlighterColor) preferences.InkArgb = picker.SelectedColor.ToArgb();
-                recent.RemoveAll(delegate(Color color) { return color.ToArgb() == picker.SelectedColor.ToArgb(); });
-                recent.Insert(0, picker.SelectedColor);
-                if (recent.Count > 8) recent.RemoveRange(8, recent.Count - 8);
-                preferences.RecentInkColors = recent.ConvertAll<int>(delegate(Color color) { return color.ToArgb(); }).ToArray();
+                RememberToolColor(picker.SelectedColor);
                 UpdateColorButton();
             }
         }
@@ -581,7 +588,7 @@ namespace SnipStudio
         {
             if (IsDisposed) return;
             editorToolShelf.Visible = canvas.HasImage;
-            editorContextBar.Visible = canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter || IsCropContext || IsShapeContext || IsInlineTextContext);
+            editorContextBar.Visible = canvas.HasImage && (canvas.TextActionsMode || IsCropContext || HasInlineTextWorkflow);
             UpdateResponsiveChrome();
             foreach (Control control in documentControls) control.Enabled = canvas.HasImage && !capturePending;
             undoButton.Enabled = canvas.CanUndo && !capturePending;
@@ -595,6 +602,7 @@ namespace SnipStudio
             UpdateTextStyleControls();
             UpdateCropActionControls();
             UpdateAnnotationContextControls();
+            RefreshToolOptionsContents();
             foreach (KeyValuePair<EditorTool, Button> item in toolButtons)
             {
                 StudioButton button = item.Value as StudioButton;
@@ -689,9 +697,10 @@ namespace SnipStudio
             {
                 "CAPTURE\r\nChoose Rectangle, Freeform, Window, Full screen, Scrolling, or All monitors, then New snip. Drag a region across connected monitors when needed. Full screen lets you click the monitor to capture. All monitors captures the complete connected desktop. Use a delay to prepare menus or tooltips. Escape or right-click cancels the selection.\r\n\r\nNew hides only the window starting the capture and Settings. Other open snips stay visible. To include the window you are using, choose More > Capture open snips. This takes one screenshot with all open snips visible, keeps your selected timer and mode, and uses Rectangle for this capture if Scrolling is selected.\r\n\r\nWindow mode captures the visible screen area inside the selected window, including anything covering it. Protected content may appear black.",
                 "TASKBAR RIGHT-CLICK MENU\r\nRight-click Snip Studio on the Windows taskbar for Take a new screenshot or a new screenshot in 3, 5, or 10 seconds. These actions also work when Snip Studio is closed. The selected taskbar delay applies to that capture only; your saved timer choice is kept. Recent saved or opened snips reopen in Snip Studio. Windows manages this list and its privacy setting: Settings > Personalization > Start > Show recently opened items in Start, Jump Lists, and File Explorer. Unsaved snips are not added. Choose More > Refresh taskbar menu, or Refresh taskbar menu from the notification-area icon, to refresh capture tasks and the existing shortcut without unpinning. Windows supplies Pin to taskbar and Close window; use More > Exit Snip Studio to stop the background shortcut listener.",
-                "ANNOTATE AND MOVE\r\nUse Pen, Highlight, Shapes, or Text to make your point. Selecting a tool keeps the normal pointer. Resize handles and Move still indicate the available action. Choose Move, click any annotation, then drag to reposition it, or right-click an annotation to select it and switch to Move. Move selects annotations and removal selection boxes; clicking blank space clears the selection. Arrow keys nudge a selected annotation; Delete removes it. Use the middle mouse button or scrollbars to pan the image.\r\n\r\nShapes includes Rectangle, Ellipse, Line, and Arrow. Fill and Outline offer colors, None, opacity, and outline size. Fill applies to rectangles and ellipses. Select a shape with Move to change its appearance; Undo restores its previous style. Choose Emoji, pick a symbol, then click the snip to place it. Use Move or Text to adjust it afterward.\r\n\r\nClick the Exact color square in the palette for a honeycomb picker with RGB, hex, and brightness controls. Cancel keeps the previous color. Eraser removes annotations without changing the captured pixels. Crop shows handles around the whole snip. Drag an edge or corner to adjust the area to keep; Apply crop or Enter commits it, and Cancel or Escape leaves the snip unchanged. Undo and Redo let you recover applied edits and crops. Save and Copy image export at the image's actual resolution, regardless of zoom.",
-                "SMART HIGHLIGHT\r\nWith Highlight selected, leave Snap to text checked to highlight detected words and lines. Text recognition runs locally. The readiness message shows when recognition is pending, ready, or unavailable. Hold Shift while dragging to draw a freehand highlight, or turn Snap to text off.",
-                "TEXT NOTES AND ARROWS\r\nChoose Text, click the snip, and type directly on the image. Enter adds a new line; Ctrl+Enter or Done finishes; Escape or Cancel discards the current text edit. Double-click an existing note in Move/Text mode, or select it and press F2, to edit it in place. Text has its own size selector. Advanced text retains the full popup editor for font family and size, bold, italic, underline, strikeout, colors, highlighting, alignment, lists, indentation, spacing, and scripts. Formatting applies to selected words or the insertion point. Drag the side handles to make a note narrower; its height grows as words wrap. Keep your note inside the screenshot edges. In Move, select an arrow and drag its tip or tail handle to rotate it and change its length.",
+                "ANNOTATE AND MOVE\r\nUse Pen, Highlight, Shapes, or Text to make your point. Selecting a tool keeps the normal pointer. Resize handles and Move still indicate the available action. Choose Move, click any annotation, then drag to reposition it, or right-click an annotation to select it and switch to Move. Move selects annotations and removal selection boxes; clicking blank space clears the selection. Arrow keys nudge a selected annotation; Delete removes it. Use the middle mouse button or scrollbars to pan the image.\r\n\r\nShapes includes Rectangle, Ellipse, Line, and Arrow. Fill and Outline offer colors, None, opacity, and outline size. Fill applies to rectangles and ellipses. Select a shape with Move to change its appearance; Undo restores its previous style. Drag a shape's resize handles to adjust its dimensions. Choose Emoji, pick a colored sticker, then click the snip to place it. Emoji stays active after placement. Drag the sticker to move it, drag a corner to resize it, and use the top handle to rotate it. Emoji is graphical artwork; Fill, Outline, and text formatting do not apply.\r\n\r\nThe Exact color tile expands the spectrum, RGB, and hex controls inside the same color picker. Cancel keeps the previous color. Eraser removes annotations without changing the captured pixels. Crop shows handles around the whole snip. Drag an edge or corner to adjust the area to keep; Apply crop or Enter commits it, and Cancel or Escape leaves the snip unchanged. Undo and Redo let you recover applied edits and crops. Save and Copy image export at the image's actual resolution, regardless of zoom.",
+                "TOOL OPTIONS\r\nThe main annotation toolbar holds tools and actions. Pen, Highlight, Shapes, and Text have an options arrow. Select a tool, then click it again, use its arrow, or press Alt+Down while its button has focus. The shaded options card is titled for the tool. Text options includes Font size (such as 20 px), Text color, and Advanced text. Shape options includes the shape choices, colored emoji stickers, Fill, and Outline. Pen and Highlight options include Color and Stroke width. Opening or closing formatting options leaves the snip view in place. Crop, recognized-text actions, and text-entry Done/Cancel stay available beside the canvas while that workflow is active.",
+                "SMART HIGHLIGHT\r\nOpen Highlight options and leave Snap to text checked to highlight detected words and lines. Text recognition runs locally. The readiness message in the options card shows when recognition is pending, ready, or unavailable. Hold Shift while dragging to draw a freehand highlight, or turn Snap to text off.",
+                "TEXT NOTES AND ARROWS\r\nChoose Text, drag a text box, then type directly inside it. A click creates a quick default box. Enter adds a new line; Ctrl+Enter or Done finishes; Escape or Cancel discards the current text edit. Double-click an existing note in Move/Text mode, or select it and press F2, to edit it in place. Text has its own size selector. Advanced text retains the full popup editor for font family and size, bold, italic, underline, strikeout, colors, highlighting, alignment, lists, indentation, spacing, and scripts. Formatting applies to selected words or the insertion point. Drag an edge or corner handle to resize the text frame; words wrap to its width. Keep your note inside the screenshot edges. In Move, select an arrow and drag its tip or tail handle to rotate it and change its length.",
                 "COPY TEXT\r\nCopy text recognizes the current snip and adds a selectable text overlay directly on the image. Drag over words to select them, then copy the selection or all recognized text. Right-click selected words for Copy selection; the selection stays in place. Recognition can make mistakes, especially with small text, unusual fonts, or low contrast. Check important values before using them. Screenshots are not uploaded for recognition.",
                 "TRANSLATE TEXT\r\nIn Text actions, choose Translate to translate selected words or all recognized text inside Snip Studio. The complete installer includes a free, open-source offline engine and English, German, Spanish, and French language models. Choose the original language and target language, then Translate. No server, paid account, or internet connection is needed for the included languages. Copy translation keeps the screenshot unchanged. Replace text in snip replaces each original recognized line in its existing position, using estimated source typography and a sampled solid background. Review the result; one Undo restores all original lines. Photos and gradients can show patches. Keep each translated line paired with its original line when editing the result. Other pairs among these languages can translate through English. Check the result before using it. An optional LibreTranslate server remains available for advanced use; only that mode sends text to the server you choose.",
                 "EDIT RECOGNIZED TEXT\r\nSelect words in one recognized line, then Edit line or F2. The words start selected so you can delete or replace them. Source font family, style, and size are estimated from the pixels; review and adjust the formatting. Applying a line edit covers the old screenshot line with the chosen solid background color. Delete selection on screenshot text covers only the selected words, leaving gaps and preserving surrounding text. Editable notes keep their formatting and reflow after deletion. Undo restores the original; ambiguous overlapping text is left unchanged.",

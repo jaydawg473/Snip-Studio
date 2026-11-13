@@ -40,6 +40,7 @@ namespace SnipStudio
         private Point lastPan;
         private readonly List<PointF> points = new List<PointF>();
         private EditorDocument.Annotation preview;
+        private bool cancelingGesture;
         private readonly ToolTip tooltip = new ToolTip();
         private const int CanvasMargin = 32;
 
@@ -53,7 +54,7 @@ namespace SnipStudio
             {
                 if (textActionsMode == value) return;
                 if (!CommitInlineText()) return;
-                pendingEmoji = null;
+                CancelEmojiPlacement();
                 CancelGesture();
                 textActionsMode = value;
                 ResetCropFrame();
@@ -89,9 +90,9 @@ namespace SnipStudio
             get { return tool; }
             set
             {
-                if (tool == value) { pendingEmoji = null; return; }
+                if (tool == value) return;
                 if (!CommitInlineText()) return;
-                pendingEmoji = null;
+                CancelEmojiPlacement();
                 bool keepRemoval = !textActionsMode && HasSelectedRemovalArea &&
                     ((tool == EditorTool.RemoveArea && value == EditorTool.Select) ||
                      (tool == EditorTool.Select && value == EditorTool.RemoveArea));
@@ -148,7 +149,7 @@ namespace SnipStudio
         public void SetImage(Bitmap image)
         {
             CancelInlineText();
-            pendingEmoji = null;
+            CancelEmojiPlacement();
             ChangeViewIntent();
             StopViewAnimations();
             document.SetImage(image);
@@ -279,8 +280,11 @@ namespace SnipStudio
                 graphics.InterpolationMode = ViewAnimationActive || panning ? InterpolationMode.Bilinear : wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
                 graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 document.Draw(graphics, moving ? selectedIndex : -1, moveDelta,
-                    InlineTextPreviewIndex >= 0 ? InlineTextPreviewIndex : AnnotationPreviewIndex);
+                    InlineTextPreviewIndex >= 0 ? InlineTextPreviewIndex :
+                    EmojiPreviewIndex >= 0 ? EmojiPreviewIndex :
+                    ClosedShapePreviewIndex >= 0 ? ClosedShapePreviewIndex : AnnotationPreviewIndex);
                 if (preview != null) preview.Draw(graphics);
+                DrawTextBoxPreview(graphics);
                 if (!InlineTextEditing && selectedIndex >= 0 && selectedIndex < document.AnnotationCount)
                 {
                     GraphicsState selectionState = graphics.Save();
@@ -341,6 +345,8 @@ namespace SnipStudio
 
         private void DrawSelection(Graphics graphics)
         {
+            if (DrawEmojiSelection(graphics)) return;
+            if (DrawClosedShapeSelection(graphics)) return;
             if (DrawSpecialAnnotationSelection(graphics)) return;
             RectangleF bounds = document.GetAnnotationBounds(selectedIndex);
             if (moving) bounds.Offset(moveDelta);
@@ -369,7 +375,10 @@ namespace SnipStudio
             if (BeginCropDrag(e)) return;
             if (e.Button == MouseButtons.Right) { HandleAnnotationRightClick(e); return; }
             if (BeginSourceRemoval(e)) return;
+            if (TryBeginEmojiHandleDrag(e)) return;
+            if (TryBeginClosedShapeResize(e)) return;
             if (TryBeginAnnotationHandleDrag(e)) return;
+            if (HandleEmojiMouseDown(e)) return;
             if (textActionsMode && e.Button == MouseButtons.Left)
             {
                 int hit = IsOnImage(e.Location) ? textSelection.HitTest(ToImage(e.Location, false), Math.Min(8, 3 / zoom)) : -1;
@@ -418,10 +427,9 @@ namespace SnipStudio
             start = end = ToImage(e.Location, true);
             if (tool == EditorTool.Text)
             {
-                if (TryPlacePendingEmoji(start)) return;
                 int textHit = document.HitTestAnnotation(start, 3 / zoom);
                 if (document.GetTextAnnotation(textHit) != null) { selectedIndex = textHit; EditTextAnnotation(textHit); }
-                else AddTextNote(start);
+                else BeginTextBoxDrawing(start);
                 return;
             }
             if (tool == EditorTool.Eraser)
@@ -457,6 +465,9 @@ namespace SnipStudio
                     ? Cursors.IBeam : Cursors.Default;
                 return;
             }
+            if (TextBoxDrawingActive) { UpdateTextBoxDrawing(ToImage(e.Location, true)); return; }
+            if (UpdateEmojiHandleDrag(e)) return;
+            if (UpdateClosedShapeResize(e)) return;
             if (UpdateAnnotationHandleDrag(e)) return;
             if (moving)
             {
@@ -481,6 +492,8 @@ namespace SnipStudio
             }
             if (!drawing)
             {
+                if (UpdateEmojiPointer(e.Location)) return;
+                if (UpdateClosedShapePointer(e.Location)) return;
                 if (TrySetAnnotationHandleCursor(e.Location)) return;
                 if (tool == EditorTool.Select) UpdateSelectPointer(e.Location);
                 else UpdateCursor();
@@ -497,6 +510,7 @@ namespace SnipStudio
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (TextBoxDrawingActive && e.Button == MouseButtons.Left) { CompleteTextBoxDrawing(ToImage(e.Location, true)); return; }
             if (EndCropDrag(e)) return;
             if (CompleteSourceRemoval(e)) return;
             if (textSelectionDragging && e.Button == MouseButtons.Left)
@@ -510,6 +524,8 @@ namespace SnipStudio
                 Invalidate();
                 return;
             }
+            if (CompleteEmojiHandleDrag(e)) return;
+            if (CompleteClosedShapeResize(e)) return;
             if (CompleteAnnotationHandleDrag(e)) return;
             if (moving && e.Button == MouseButtons.Left)
             {
@@ -574,7 +590,8 @@ namespace SnipStudio
         {
             base.OnMouseCaptureChanged(e);
             if (!Capture && textSelectionDragging) { textSelectionDragging = false; UpdateCursor(); }
-            if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging || CropDragging)) CancelGesture();
+            if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging ||
+                TextBoxDrawingActive || EmojiHandleDragging || ClosedShapeHandleDragging || CropDragging)) CancelGesture();
         }
 
         private void CancelGesture()
@@ -584,16 +601,25 @@ namespace SnipStudio
 
         private void CancelGesture(bool preserveRemovalSelection)
         {
-            StopViewAnimations();
-            CancelAnnotationHandleDrag();
-            CancelCropDrag();
-            CancelSourceRemoval(preserveRemovalSelection);
-            drawing = false; panning = false; erasing = false; moving = false; snapping = false; moveDelta = PointF.Empty; preview = null;
-            textSelectionDragging = false;
-            points.Clear();
-            if (Capture) Capture = false;
-            UpdateCursor();
-            Invalidate();
+            if (cancelingGesture) return;
+            cancelingGesture = true;
+            try
+            {
+                StopViewAnimations();
+                CancelAnnotationHandleDrag();
+                CancelClosedShapeResize();
+                CancelEmojiHandleDrag();
+                CancelTextBoxDrawing();
+                CancelCropDrag();
+                CancelSourceRemoval(preserveRemovalSelection);
+                drawing = false; panning = false; erasing = false; moving = false; snapping = false; moveDelta = PointF.Empty; preview = null;
+                textSelectionDragging = false;
+                points.Clear();
+                if (Capture) Capture = false;
+                UpdateCursor();
+                Invalidate();
+            }
+            finally { cancelingGesture = false; }
         }
 
         private void UpdateCursor()
@@ -603,7 +629,8 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
-            if (EmojiPlacementPending && keyData == Keys.Escape) { pendingEmoji = null; UpdateCursor(); return true; }
+            if (keyData == Keys.Escape && (TextBoxDrawingActive || EmojiHandleDragging || ClosedShapeHandleDragging)) { CancelGesture(); return true; }
+            if (EmojiPlacementPending && keyData == Keys.Escape) { CancelEmojiPlacement(); UpdateCursor(); return true; }
             if (HandleCropKey(keyData)) return true;
             if (HandleSourceRemovalKey(keyData)) return true;
             if (keyData == Keys.F2) { EditSelectedText(); return true; }
@@ -625,8 +652,8 @@ namespace SnipStudio
             if (textActionsMode && (keyData & (Keys.Control | Keys.Alt)) == 0 && keyData != Keys.Tab)
                 return base.ProcessCmdKey(ref msg, keyData);
             if (keyData == Keys.Escape && (drawing || panning || erasing || moving || AnnotationHandleDragging)) { CancelGesture(); return true; }
-            if (keyData == Keys.Escape && selectedIndex >= 0) { selectedIndex = -1; RaiseTextStyleChanged(); Invalidate(); return true; }
-            if (tool == EditorTool.Select && selectedIndex >= 0 && (keyData & (Keys.Control | Keys.Alt)) == 0)
+            if (keyData == Keys.Escape && selectedIndex >= 0) { selectedIndex = -1; RaiseTextStyleChanged(); NotifyShapeSelectionChanged(); Invalidate(); return true; }
+            if ((tool == EditorTool.Select || tool == EditorTool.Emoji) && selectedIndex >= 0 && (keyData & (Keys.Control | Keys.Alt)) == 0)
             {
                 Keys code = keyData & Keys.KeyCode;
                 float amount = (keyData & Keys.Shift) != 0 ? 10 : 1;
@@ -635,9 +662,10 @@ namespace SnipStudio
                 else if (code == Keys.Up) delta.Y = -amount; else if (code == Keys.Down) delta.Y = amount;
                 else if (code == Keys.Delete)
                 {
+                    CancelGesture();
                     document.RemoveAnnotation(selectedIndex); selectedIndex = -1; RaiseChanged(); return true;
                 }
-                if (delta != PointF.Empty) { document.MoveAnnotation(selectedIndex, delta); RaiseChanged(); return true; }
+                if (delta != PointF.Empty) { CancelGesture(); document.MoveAnnotation(selectedIndex, delta); RaiseChanged(); return true; }
             }
             return base.ProcessCmdKey(ref msg, keyData);
         }

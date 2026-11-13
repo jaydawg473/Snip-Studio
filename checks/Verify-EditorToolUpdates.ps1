@@ -1,6 +1,6 @@
 # Signed-library behavior checks only. Never runs the application entrypoint,
 # shows a form, sends physical input, captures the desktop, or loads preferences.
-param([string]$ReleaseFolder='release-0.6.0-signed',[string]$ExpectedVersion='0.6.0.0')
+param([string]$ReleaseFolder='release-0.6.2-signed',[string]$ExpectedVersion='0.6.2.0')
 $ErrorActionPreference='Stop'
 if($PSVersionTable.PSEdition -eq 'Core' -or $PSVersionTable.PSVersion.Major -ne 5){throw 'Use Windows PowerShell 5.'}
 if([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA'){throw 'Use powershell.exe -STA -NoProfile -File.'}
@@ -55,7 +55,7 @@ function New-EditorDocument([Drawing.Bitmap]$Image){$result=[Activator]::CreateI
 function Add-EditorShape($Document,[string]$Kind,[Drawing.PointF]$Start,[Drawing.PointF]$End,$Style){return [bool](Invoke-Editor ($documentType.GetMethod('AddShape',$instance)) $Document ([object[]]@((Tool-Editor $Kind),$Start,$End,$Style)))}
 function Get-EditorShapeStyle($Document,[int]$Index){return Invoke-Editor ($documentType.GetMethod('GetShapeAnnotationStyle',$instance)) $Document ([object[]]@($Index))}
 function Update-EditorShapeStyle($Document,[int]$Index,$Style){return [bool](Invoke-Editor ($documentType.GetMethod('UpdateShapeAnnotationStyle',$instance)) $Document ([object[]]@($Index,$Style)))}
-function Begin-EditorNote($Canvas,[Drawing.PointF]$Location){return [bool](Invoke-Editor ($canvasType.GetMethod('BeginInlineTextNote',$instance)) $Canvas ([object[]]@($Location)))}
+function Begin-EditorNote($Canvas,[Drawing.PointF]$Location){return [bool](Invoke-Editor ($canvasType.GetMethod('BeginInlineTextNote',$instance,$null,[type[]]@([Drawing.PointF]),$null)) $Canvas ([object[]]@($Location)))}
 function Begin-EditorTextEdit($Canvas,[int]$Index){return [bool](Invoke-Editor ($canvasType.GetMethod('BeginInlineTextEdit',$instance)) $Canvas ([object[]]@($Index)))}
 function Set-EditorDraft($Canvas,[string]$Text){$editor=Field-Editor $Canvas 'inlineTextEditor';$editor.SelectAll();$editor.SelectedText=$Text}
 
@@ -80,7 +80,7 @@ try{
     }
     $null=Invoke-Editor $setCropPointer $cursorCanvas ([object[]]@([Enum]::ToObject($cropHandleType,0)))
     Confirm-Editor ([Object]::ReferenceEquals($cursorCanvas.Cursor,[Windows.Forms.Cursors]::Default)) 'Leaving a crop edge restores the normal pointer'
-    Confirm-Editor ([int](Tool-Editor 'Ellipse') -eq 9 -and [int](Tool-Editor 'Line') -eq 10 -and [int](Tool-Editor 'RemoveArea') -eq 8) 'New shape choices preserve existing tool values'
+    Confirm-Editor ([int](Tool-Editor 'Ellipse') -eq 9 -and [int](Tool-Editor 'Line') -eq 10 -and [int](Tool-Editor 'RemoveArea') -eq 8 -and [int](Tool-Editor 'Emoji') -eq 11 -and [Enum]::GetNames($toolType).Count -eq 12) 'New shape and emoji choices preserve existing tool values'
     foreach($case in @(@{Width=[single]0;Fill=100;Outline=100},@{Width=[single]::NaN;Fill=100;Outline=100},@{Width=[single]::PositiveInfinity;Fill=100;Outline=100},@{Width=[single]1025;Fill=100;Outline=100},@{Width=[single]4;Fill=-1;Outline=100},@{Width=[single]4;Fill=101;Outline=100},@{Width=[single]4;Fill=100;Outline=-1},@{Width=[single]4;Fill=100;Outline=101})){
         $rejected=$false
         try{$null=Style-Editor ([Drawing.Color]::Blue) ([Drawing.Color]::Red) $case.Width $case.Fill $case.Outline}catch{$rejected=$_.Exception.GetBaseException() -is [ArgumentOutOfRangeException]}
@@ -195,34 +195,37 @@ try{
     $emoji=[Char]::ConvertFromUtf32(0x1F600)
     $revision=$emojiCanvas.DocumentRevision;$emptyEmojiHash=Hash-Editor $emojiDocument
     $emojiCanvas.BeginEmojiPlacement($emoji)
-    Confirm-Editor ($emojiCanvas.EmojiPlacementPending -and $emojiCanvas.PendingEmoji -ceq $emoji -and $emojiCanvas.Tool -eq (Tool-Editor 'Text')) 'Choosing an emoji enters placement mode without opening a popup'
+    Confirm-Editor ($emojiCanvas.EmojiPlacementPending -and $emojiCanvas.PendingEmoji -ceq $emoji -and $emojiCanvas.Tool -eq (Tool-Editor 'Emoji')) 'Choosing an emoji enters the dedicated placement tool without opening a text popup'
     Confirm-Editor ($emojiDocument.AnnotationCount -eq 0 -and $emojiCanvas.DocumentRevision -eq $revision -and (Hash-Editor $emojiDocument) -ceq $emptyEmojiHash) 'An emoji is not added until its location is chosen'
     $escaped=Invoke-Editor ($canvasType.GetMethod('ProcessCmdKey',$instance)) $emojiCanvas ([object[]]@([Windows.Forms.Message]::new(),[Windows.Forms.Keys]::Escape))
     Confirm-Editor ($escaped -and -not $emojiCanvas.EmojiPlacementPending -and $emojiDocument.AnnotationCount -eq 0 -and $emojiCanvas.DocumentRevision -eq $revision) 'Escape cancels a pending emoji without adding an annotation or undo entry'
     $emojiCanvas.BeginEmojiPlacement($emoji);$emojiCanvas.Tool=Tool-Editor 'Pen'
     Confirm-Editor (-not $emojiCanvas.EmojiPlacementPending -and $emojiDocument.AnnotationCount -eq 0 -and $emojiCanvas.DocumentRevision -eq $revision) 'Changing tools cancels a pending emoji without editing the snip'
     $emojiCanvas.BeginEmojiPlacement($emoji)
-    $placed=Invoke-Editor ($canvasType.GetMethod('TryPlacePendingEmoji',$instance)) $emojiCanvas ([object[]]@([Drawing.PointF]::new(500,500)))
-    $emojiInfo=$emojiDocument.GetTextAnnotation(0)
-    Confirm-Editor ($placed -and -not $emojiCanvas.EmojiPlacementPending -and $emojiDocument.AnnotationCount -eq 1 -and $null -ne $emojiInfo -and $emojiInfo.Text -ceq $emoji) 'Placing an emoji creates exactly one editable text annotation with the chosen glyph'
-    Confirm-Editor ($emojiInfo.FontFamily -ceq 'Segoe UI Emoji' -and $emojiInfo.Rtf.Contains('Segoe UI Emoji')) 'The emoji retains its Segoe UI Emoji formatting in rich text'
+    $placed=Invoke-Editor ($canvasType.GetMethod('PlaceActiveEmoji',$instance)) $emojiCanvas ([object[]]@([Drawing.PointF]::new(500,500)))
+    $emojiInfo=$emojiDocument.GetEmojiAnnotation(0)
+    Confirm-Editor ($placed -and -not $emojiCanvas.EmojiPlacementPending -and $emojiDocument.AnnotationCount -eq 1 -and $null -ne $emojiInfo -and $emojiInfo.Glyph -ceq $emoji) 'Placing an emoji creates exactly one graphic object with the chosen catalog glyph'
+    Confirm-Editor ($null -eq $emojiDocument.GetTextAnnotation(0) -and -not $emojiCanvas.InlineTextEditing) 'A graphic emoji remains separate from editable text annotations'
     Confirm-Editor ($emojiInfo.Bounds.Left -ge 0 -and $emojiInfo.Bounds.Top -ge 0 -and $emojiInfo.Bounds.Right -le $image.Width -and $emojiInfo.Bounds.Bottom -le $image.Height) 'Emoji placement clamps its annotation bounds inside the source image'
-    Confirm-Editor ($emojiCanvas.Tool -eq (Tool-Editor 'Select') -and $emojiCanvas.CanShowAdvancedTextEditor) 'A placed emoji is selected for normal move and advanced text actions'
+    Confirm-Editor ($emojiCanvas.Tool -eq (Tool-Editor 'Emoji') -and $emojiCanvas.HasSelectedEmoji -and -not $emojiCanvas.CanShowAdvancedTextEditor) 'A placed emoji stays selected while its dedicated tool remains ready for another stamp'
     $emojiHash=Hash-Editor $emojiDocument
     Confirm-Editor ($emojiHash -cne $emptyEmojiHash) 'A placed emoji appears in exported pixels'
     $emojiCanvas.Undo()
     Confirm-Editor ($emojiDocument.AnnotationCount -eq 0 -and (Hash-Editor $emojiDocument) -ceq $emptyEmojiHash) 'One Undo removes a complete emoji placement'
     $emojiCanvas.Redo()
-    Confirm-Editor ($emojiDocument.AnnotationCount -eq 1 -and $emojiDocument.GetTextAnnotation(0).Text -ceq $emoji -and (Hash-Editor $emojiDocument) -ceq $emojiHash) 'Redo restores the chosen emoji and identical exported pixels'
+    Confirm-Editor ($emojiDocument.AnnotationCount -eq 1 -and $emojiDocument.GetEmojiAnnotation(0).Glyph -ceq $emoji -and (Hash-Editor $emojiDocument) -ceq $emojiHash) 'Redo restores the chosen emoji and identical exported pixels'
     $revision=$emojiCanvas.DocumentRevision
-    Confirm-Editor (Begin-EditorTextEdit $emojiCanvas 0) 'An emoji remains editable through the inline text editor'
-    $emojiCanvas.CancelInlineText()
-    Confirm-Editor ($emojiCanvas.DocumentRevision -eq $revision -and $emojiDocument.AnnotationCount -eq 1 -and (Hash-Editor $emojiDocument) -ceq $emojiHash) 'Canceling an emoji text edit preserves its original glyph and formatting'
+    Confirm-Editor (-not (Begin-EditorTextEdit $emojiCanvas 0)) 'A graphic emoji does not enter the inline text editor'
+    Confirm-Editor ($emojiCanvas.DocumentRevision -eq $revision -and $emojiDocument.AnnotationCount -eq 1 -and (Hash-Editor $emojiDocument) -ceq $emojiHash) 'Refusing text editing preserves the graphic emoji and its pixels'
+    $placedAgain=Invoke-Editor ($canvasType.GetMethod('PlaceActiveEmoji',$instance)) $emojiCanvas ([object[]]@([Drawing.PointF]::new(30,30)))
+    Confirm-Editor ($placedAgain -and $emojiDocument.AnnotationCount -eq 2 -and $emojiDocument.GetEmojiAnnotation(1).Key -ceq $emojiInfo.Key -and $emojiCanvas.Tool -eq (Tool-Editor 'Emoji')) 'The sticky emoji tool stamps its remembered artwork again without reopening the picker'
+    $emojiCanvas.Undo()
+    Confirm-Editor ($emojiDocument.AnnotationCount -eq 1 -and (Hash-Editor $emojiDocument) -ceq $emojiHash) 'Each repeated emoji placement has its own Undo transaction'
     Confirm-Editor ([Windows.Forms.Application]::OpenForms.Count -eq 0) 'Editor checks did not show or register an application form'
 
     $output=Join-Path $PSScriptRoot $ReleaseFolder.Replace('-signed','-data')
     [IO.Directory]::CreateDirectory($output)|Out-Null
-    [ordered]@{Version=$ExpectedVersion;SHA256=(Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash;CheckCount=$checks.Count;Checks=$checks.ToArray();ApplicationEntrypointExecuted=$false;FormShown=$false;PhysicalInputSent=$false;DesktopCaptured=$false;UserPreferencesReadOrWritten=$false;AdvancedPopupShown=$false;Scope='Actual signed-library idle cursor, contextual crop pointer, styled-shape rendering/hit/movement/crop/history, unshown inline RichEdit draft/commit/cancel/stale policies and direct emoji placement/cancellation/editability/history. Offscreen GDI, stock cursor resources and rich-edit HWNDs may be created.';Unverified='Physical typing, caret placement, click-outside/focus transitions, displayed shape or emoji palette, actual popup appearance, mixed-monitor DPI and production installation.'}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $output 'editor-tool-updates.json') -Encoding UTF8
+    [ordered]@{Version=$ExpectedVersion;SHA256=(Get-FileHash -LiteralPath $app -Algorithm SHA256).Hash;CheckCount=$checks.Count;Checks=$checks.ToArray();ApplicationEntrypointExecuted=$false;FormShown=$false;PhysicalInputSent=$false;DesktopCaptured=$false;UserPreferencesReadOrWritten=$false;AdvancedPopupShown=$false;Scope='Actual signed-library idle cursor, contextual crop pointer, styled-shape rendering/hit/movement/crop/history, unshown inline RichEdit draft/commit/cancel/stale policies and graphic emoji placement/cancellation/sticky-tool/history. Offscreen GDI, stock cursor resources and rich-edit HWNDs may be created.';Unverified='Physical typing, caret placement, click-outside/focus transitions, displayed shape or emoji palette, actual popup appearance, mixed-monitor DPI and production installation.'}|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $output 'editor-tool-updates.json') -Encoding UTF8
     Write-Output ('PASS: '+$checks.Count+' signed editor pointer, shape, inline-text and emoji checks.')
 }finally{
     if($null -ne $model){$model.Dispose()};if($null -ne $emojiCanvas){$emojiCanvas.Dispose()};if($null -ne $textCanvas){$textCanvas.Dispose()};if($null -ne $cursorCanvas){$cursorCanvas.Dispose()};$image.Dispose()

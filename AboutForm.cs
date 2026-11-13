@@ -87,17 +87,17 @@ namespace SnipStudio
             links.Margin = Padding.Empty;
             links.Controls.Add(website);
             LinkLabel licenses = new LinkLabel();
-            licenses.Text = "Open-source licenses and translation credits";
+            licenses.Text = "Open-source licenses and credits";
             licenses.AutoSize = true;
             licenses.LinkColor = licenses.ActiveLinkColor = licenses.VisitedLinkColor = StudioTheme.Accent;
             licenses.Margin = new Padding(0, 0, 0, 8);
-            licenses.AccessibleName = "Open source licenses and translation credits";
+            licenses.AccessibleName = "Open source licenses and credits";
             licenses.LinkClicked += delegate
             {
-                string notices = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "translation", "licenses", "NOTICES.txt");
+                string notices = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "licenses", "NOTICES.txt");
                 try
                 {
-                    if (!File.Exists(notices)) throw new FileNotFoundException("The bundled translation notices were not found. Reinstall the complete package.");
+                    if (!File.Exists(notices)) throw new FileNotFoundException("The bundled open-source notices were not found. Reinstall the complete package.");
                     Process.Start(new ProcessStartInfo(notices) { UseShellExecute = true });
                 }
                 catch (Exception error) { MessageBox.Show(this, error.Message, "Open-source licenses", MessageBoxButtons.OK, MessageBoxIcon.Information); }

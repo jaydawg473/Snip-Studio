@@ -263,7 +263,7 @@ namespace SnipStudio
             }
         }
 
-        private sealed class HoneycombGrid : Control
+        internal sealed class HoneycombGrid : Control
         {
             private sealed class Cell
             {
@@ -453,7 +453,7 @@ namespace SnipStudio
             }
         }
 
-        private sealed class BrightnessSlider : Control
+        internal sealed class BrightnessSlider : Control
         {
             private double value = 1;
             private Color fullColor = Color.White;
@@ -534,7 +534,7 @@ namespace SnipStudio
             protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
         }
 
-        private static class ColorMath
+        internal static class ColorMath
         {
             internal static Color FromHsl(double hue, double saturation, double lightness)
             {

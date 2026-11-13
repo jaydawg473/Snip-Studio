@@ -1,3 +1,38 @@
+SNIP STUDIO 0.6.2 - AUTOMATION FORGE
+https://automation-forge.com/
+
+TEXT FRAMES, GRAPHICAL EMOJI AND TOOL OPTIONS - 2026-11-13
+Drag a text box, release, and type directly on the image. Text wraps to the
+frame and can grow for additional lines. Its eight resize grips change the
+frame without changing font size. Advanced text editing remains available.
+Rectangle and ellipse annotations now have eight resize grips. Lines and
+arrows retain their endpoint editing. Graphical emoji stickers have corner
+resize grips and a rotation handle, and the Emoji tool stays active for repeat
+placement. The 24 embedded Microsoft Fluent Emoji images are MIT-licensed;
+their pinned provenance and license are included in licenses/.
+
+Tool formatting is grouped in separate titled options cards. Text font size
+is inside Text options. Shape colors use one picker with palette, recent colors,
+hex input and an expandable exact-color spectrum, alongside opacity and outline
+thickness. More colors expands within that picker rather than opening another
+window. Apply commits the chosen shape style; Cancel retains the original.
+
+Save current work, then run SnipStudio-0.6.2-Setup.exe. Existing preferences and
+their schema are unchanged. The complete offline translation bundle is retained.
+
+VERIFICATION
+The C#5/.NET Framework 4.8 app built without compiler warnings. Its timestamped
+Automation Forge Authenticode signature verified Valid. Application SHA256:
+153E900AD249124A80FAA1FE9379B554C7BB1C81E0B7B6644B5385E5A63A1A54
+Focused signed component checks passed: 124 editor-tool,
+160 object-editing and 97 shared-color checks. Crop, zoom,
+scrolling UI, icon artwork and unshown options layout were also checked.
+These checks do not establish actual mouse-drag, typing/focus, popup appearance,
+mixed-monitor DPI behavior or an installed upgrade. Installer integrity,
+payload/privacy and read-only readiness evidence are recorded separately.
+
+HISTORICAL 0.6.1 README FOLLOWS
+
 SNIP STUDIO 0.6.1 - AUTOMATION FORGE
 https://automation-forge.com/
 

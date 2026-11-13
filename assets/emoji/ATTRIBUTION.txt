@@ -1,0 +1,24 @@
+Microsoft Fluent Emoji 3D artwork
+Copyright (c) Microsoft Corporation.
+License: MIT. The complete upstream notice is retained in LICENSE.txt.
+
+Official repository: https://github.com/microsoft/fluentui-emoji
+Pinned source revision: 1ffb34c752ecf5d402f04cfb4b392c77f57c54bc
+Revision date (UTC): 2026-08-24T23:51:12Z
+Source and license verified: 2026-11-13
+Upstream license: https://github.com/microsoft/fluentui-emoji/blob/1ffb34c752ecf5d402f04cfb4b392c77f57c54bc/LICENSE
+
+The 24 PNG files are exact upstream 3D assets, renamed to stable Snip Studio
+catalog keys. The default yellow variants are used for the five hand/arm
+stickers. No PNG pixels were changed. Rendering uses each PNG's nontransparent
+source bounds, preserving aspect ratio without altering the bundled files.
+
+manifest.json records every original source path and URL, Git blob SHA-1,
+SHA-256, file size, dimensions, and nontransparent bounds. The revision is a
+pinned Git commit, not a claimed upstream release number. No fonts, paid API,
+or runtime network download are used by the emoji artwork renderer.
+
+The MIT permission and copyright notice in LICENSE.txt must accompany copies
+or substantial portions of the upstream work. Keeping this attribution and
+manifest.json is recommended to preserve source provenance; that recommendation
+does not add a condition to the upstream MIT license.

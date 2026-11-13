@@ -10,11 +10,11 @@ namespace SnipStudio
         private InlineDraftBox inlineTextEditor;
         private int inlineTextIndex = -1;
         private PointF inlineTextLocation;
-        private float inlineTextWidth;
+        private float inlineTextWidth, inlineTextMinimumHeight;
         private object inlineTextImage;
         private long inlineTextRevision;
         private string inlineInitialRtf, inlineInitialText, inlineTextStatus = "";
-        private float inlineInitialWidth;
+        private float inlineInitialWidth, inlineInitialMinimumHeight;
         private bool inlineLayoutChanging, inlineClosing, inlineLastDirty;
         private int inlineContentHeight;
 
@@ -28,7 +28,7 @@ namespace SnipStudio
             {
                 if (!InlineTextEditing) return false;
                 if (inlineTextIndex < 0) return !String.IsNullOrWhiteSpace(inlineTextEditor.Text);
-                return inlineTextWidth != inlineInitialWidth ||
+                return inlineTextWidth != inlineInitialWidth || inlineTextMinimumHeight != inlineInitialMinimumHeight ||
                     !String.Equals(inlineTextEditor.Text, inlineInitialText, StringComparison.Ordinal) ||
                     !String.Equals(inlineTextEditor.Rtf, inlineInitialRtf, StringComparison.Ordinal);
             }
@@ -50,7 +50,19 @@ namespace SnipStudio
             location = new PointF(Math.Max(0, Math.Min(ImageSize.Width - minimum, location.X)),
                 Math.Max(0, Math.Min(ImageSize.Height - 1, location.Y)));
             float width = Math.Min(ImageSize.Width - location.X, Math.Max(minimum, defaultTextBoxWidth));
-            return BeginInlineText(-1, location, width,
+            return BeginInlineText(-1, location, width, 0,
+                RichTextLayout.CreatePlainRtf("", "Segoe UI", textFontSize, FontStyle.Regular, inkColor), false);
+        }
+
+        internal bool BeginInlineTextNote(RectangleF frame)
+        {
+            if (!HasImage || disposingCanvas || !FiniteTextBoxPoint(frame.Location) ||
+                !FiniteTextBoxPoint(new PointF(frame.Width, frame.Height)) || frame.Width <= 0 || frame.Height <= 0 || !CommitInlineText()) return false;
+            frame = RectangleF.Intersect(new RectangleF(PointF.Empty, ImageSize), frame);
+            if (frame.Width < 1 || frame.Height < 1) return false;
+            float width = Math.Max(1, Math.Min(32768, (float)Math.Round(frame.Width)));
+            float minimumHeight = Math.Max(1, Math.Min(32768, (float)Math.Round(frame.Height)));
+            return BeginInlineText(-1, frame.Location, width, minimumHeight,
                 RichTextLayout.CreatePlainRtf("", "Segoe UI", textFontSize, FontStyle.Regular, inkColor), false);
         }
 
@@ -64,10 +76,10 @@ namespace SnipStudio
             if (info == null) return false;
             float available = Math.Max(1, ImageSize.Width - info.Location.X);
             float width = info.LayoutWidth > 0 ? info.LayoutWidth : Math.Min(available, Math.Max(24, info.Bounds.Width));
-            return BeginInlineText(index, info.Location, width, info.Rtf, true);
+            return BeginInlineText(index, info.Location, width, info.MinimumHeight, info.Rtf, true);
         }
 
-        private bool BeginInlineText(int index, PointF location, float width, string rtf, bool existing)
+        private bool BeginInlineText(int index, PointF location, float width, float minimumHeight, string rtf, bool existing)
         {
             CancelGesture();
             RichTextLayout.ValidateRtf(rtf);
@@ -97,12 +109,14 @@ namespace SnipStudio
                 inlineTextLocation = location;
                 inlineTextWidth = width;
                 inlineInitialWidth = width;
+                inlineTextMinimumHeight = minimumHeight;
+                inlineInitialMinimumHeight = minimumHeight;
                 inlineTextImage = ImageIdentity;
                 inlineTextRevision = DocumentRevision;
                 inlineInitialRtf = draft.Rtf; // Compare RichEdit's canonical form, not incoming serialization.
                 inlineInitialText = draft.Text;
                 inlineLastDirty = false;
-                inlineTextStatus = "Type on the snip. Enter adds a line; Ctrl+Enter applies; Escape cancels.";
+                inlineTextStatus = "Type in the text box. Enter adds a line; Ctrl+Enter applies; Escape cancels.";
                 inlineContentHeight = 0;
                 selectedIndex = index;
                 Controls.Add(draft);
@@ -158,13 +172,14 @@ namespace SnipStudio
                 int width = Math.Max(8, (int)Math.Ceiling(inlineTextWidth * zoom) + 4);
                 float fontPixels = Math.Max(1, InlineTextFontSize);
                 int minimumHeight = Math.Max(24, (int)Math.Ceiling(fontPixels * zoom * 1.55f) + 8);
-                int wantedHeight = Math.Max(minimumHeight, inlineContentHeight + 8);
+                int frameHeight = Math.Max(minimumHeight, (int)Math.Ceiling(inlineTextMinimumHeight * zoom) + 4);
+                int wantedHeight = Math.Max(frameHeight, inlineContentHeight + 8);
                 int remaining = Math.Max(minimumHeight, ClientSize.Height - Math.Max(0, top) - 8);
                 int height = Math.Min(wantedHeight, remaining);
                 inlineTextEditor.SetBounds(left, top, width, height);
                 // Width changes can synchronously reflow RichEdit. Use the new
                 // measured height once without recursively laying out the canvas.
-                int reflowHeight = Math.Min(Math.Max(minimumHeight, inlineContentHeight + 8), remaining);
+                int reflowHeight = Math.Min(Math.Max(frameHeight, inlineContentHeight + 8), remaining);
                 if (inlineTextEditor.Height != reflowHeight) inlineTextEditor.Height = reflowHeight;
             }
             finally { inlineLayoutChanging = false; }
@@ -202,12 +217,12 @@ namespace SnipStudio
                 inlineTextEditor = null;
                 if (index >= 0)
                 {
-                    changed = changed && document.UpdateRichTextAnnotation(index, plain, rtf, color, size, inlineTextWidth);
+                    changed = changed && document.UpdateRichTextAnnotation(index, plain, rtf, color, size, inlineTextWidth, inlineTextMinimumHeight);
                     selectedIndex = String.IsNullOrWhiteSpace(plain) ? -1 : index;
                 }
                 else if (!String.IsNullOrWhiteSpace(plain))
                 {
-                    document.AddRichText(plain, rtf, inlineTextLocation, color, size, inlineTextWidth);
+                    document.AddRichText(plain, rtf, inlineTextLocation, color, size, inlineTextWidth, inlineTextMinimumHeight);
                     selectedIndex = document.AnnotationCount - 1;
                     changed = true;
                 }

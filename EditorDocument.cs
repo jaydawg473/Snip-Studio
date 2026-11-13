@@ -6,7 +6,7 @@ using System.Drawing.Imaging;
 
 namespace SnipStudio
 {
-    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop, RemoveArea, Ellipse, Line }
+    public enum EditorTool { Select, Pen, Highlighter, Arrow, Rectangle, Text, Eraser, Crop, RemoveArea, Ellipse, Line, Emoji }
 
     // Detached immutable data for an editor UI; history-owned annotations stay private.
     public sealed class TextAnnotationInfo
@@ -19,14 +19,17 @@ namespace SnipStudio
         public Color Color { get; private set; }
         public float FontSize { get; private set; }
         public float LayoutWidth { get; private set; }
+        public float MinimumHeight { get; private set; }
         public RectangleF Bounds { get; private set; }
         public RectangleF InkBounds { get; private set; }
         internal TextAnnotationInfo(string text, string rtf, string fontFamily, FontStyle fontStyle, PointF location, Color color, float fontSize, float layoutWidth, RectangleF bounds, RectangleF inkBounds)
-        { Text = text; Rtf = rtf; FontFamily = fontFamily; FontStyle = fontStyle; Location = location; Color = color; FontSize = fontSize; LayoutWidth = layoutWidth; Bounds = bounds; InkBounds = inkBounds; }
+            : this(text, rtf, fontFamily, fontStyle, location, color, fontSize, layoutWidth, 0, bounds, inkBounds) { }
+        internal TextAnnotationInfo(string text, string rtf, string fontFamily, FontStyle fontStyle, PointF location, Color color, float fontSize, float layoutWidth, float minimumHeight, RectangleF bounds, RectangleF inkBounds)
+        { Text = text; Rtf = rtf; FontFamily = fontFamily; FontStyle = fontStyle; Location = location; Color = color; FontSize = fontSize; LayoutWidth = layoutWidth; MinimumHeight = minimumHeight; Bounds = bounds; InkBounds = inkBounds; }
     }
 
     // Immutable annotations make undo inexpensive: ordinary edits share the captured bitmap.
-    public sealed class EditorDocument : IDisposable
+    public sealed partial class EditorDocument : IDisposable
     {
         private const int MaximumStates = 26;
         private const long MaximumHistoryBytes = 256L * 1024L * 1024L;
@@ -154,7 +157,7 @@ namespace SnipStudio
         {
             ThrowIfDisposed();
             TextAnnotation text = HasImage && index >= 0 && index < AnnotationCount ? Current.Annotations[index] as TextAnnotation : null;
-            return text == null ? null : new TextAnnotationInfo(text.Text, text.Rtf, text.FontFamily, text.FontStyle, text.Location, text.Color, text.FontSize, text.LayoutWidth, text.Bounds, text.InkBounds);
+            return text == null ? null : new TextAnnotationInfo(text.Text, text.Rtf, text.FontFamily, text.FontStyle, text.Location, text.Color, text.FontSize, text.LayoutWidth, text.MinimumHeight, text.Bounds, text.InkBounds);
         }
 
         public bool IsArrowAnnotation(int index)
@@ -258,14 +261,28 @@ namespace SnipStudio
             return original == null ? null : original.WithGeometry(location, fontSize, layoutWidth);
         }
 
+        internal TextAnnotation CreateTextAnnotationPreview(int index, PointF location, float fontSize, float layoutWidth, float minimumHeight)
+        {
+            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            return original == null ? null : original.WithGeometry(location, fontSize, layoutWidth, minimumHeight);
+        }
+
         public bool UpdateTextAnnotationBounds(int index, PointF location, float fontSize, float layoutWidth)
         {
             RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
-            layoutWidth = NormalizeTextWidth(layoutWidth);
+            TextAnnotation original = GetTextAnnotationObject(index);
+            return original != null && UpdateTextAnnotationBounds(index, location, fontSize, layoutWidth, original.MinimumHeight);
+        }
+
+        public bool UpdateTextAnnotationBounds(int index, PointF location, float fontSize, float layoutWidth, float minimumHeight)
+        {
+            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
+            layoutWidth = NormalizeTextWidth(layoutWidth); minimumHeight = NormalizeTextWidth(minimumHeight);
             TextAnnotation original = GetTextAnnotationObject(index);
             if (original == null) return false;
-            if (location == original.Location && fontSize == original.FontSize && layoutWidth == original.LayoutWidth) return false;
-            return ReplaceAnnotation(index, original.WithGeometry(location, fontSize, layoutWidth));
+            if (location == original.Location && fontSize == original.FontSize && layoutWidth == original.LayoutWidth && minimumHeight == original.MinimumHeight) return false;
+            return ReplaceAnnotation(index, original.WithGeometry(location, fontSize, layoutWidth, minimumHeight));
         }
 
         public bool UpdateTextAnnotation(int index, string text, float fontSize, float layoutWidth)
@@ -290,11 +307,18 @@ namespace SnipStudio
         {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
             TextAnnotation original = GetTextAnnotationObject(index);
+            return original != null && UpdateRichTextAnnotation(index, plain, rtf, color, fontSize, layoutWidth, original.MinimumHeight);
+        }
+
+        public bool UpdateRichTextAnnotation(int index, string plain, string rtf, Color color, float fontSize, float layoutWidth, float minimumHeight)
+        {
+            RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
+            TextAnnotation original = GetTextAnnotationObject(index);
             if (original == null) return false;
             if (String.IsNullOrEmpty(plain)) return RemoveAnnotation(index);
-            layoutWidth = NormalizeTextWidth(layoutWidth);
-            TextAnnotation replacement = new TextAnnotation(plain, rtf, original.Location, color, fontSize, layoutWidth, original.FontFamily, original.FontStyle);
-            if (replacement.Text == original.Text && replacement.Rtf == original.Rtf && replacement.LayoutWidth == original.LayoutWidth) return false;
+            layoutWidth = NormalizeTextWidth(layoutWidth); minimumHeight = NormalizeTextWidth(minimumHeight);
+            TextAnnotation replacement = new TextAnnotation(plain, rtf, original.Location, color, fontSize, layoutWidth, minimumHeight, original.FontFamily, original.FontStyle);
+            if (replacement.Text == original.Text && replacement.Rtf == original.Rtf && replacement.LayoutWidth == original.LayoutWidth && replacement.MinimumHeight == original.MinimumHeight) return false;
             return ReplaceAnnotation(index, replacement);
         }
 
@@ -457,16 +481,26 @@ namespace SnipStudio
 
         public void AddText(string text, PointF location, Color color, float fontSize, float layoutWidth)
         {
-            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            AddText(text, location, color, fontSize, layoutWidth, 0);
+        }
+
+        public void AddText(string text, PointF location, Color color, float fontSize, float layoutWidth, float minimumHeight)
+        {
+            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
             if (String.IsNullOrWhiteSpace(text)) return;
-            Add(new TextAnnotation(text, location, color, fontSize, layoutWidth));
+            Add(new TextAnnotation(text, null, location, color, fontSize, layoutWidth, minimumHeight, "Segoe UI", FontStyle.Regular));
         }
 
         public void AddRichText(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth)
         {
-            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            AddRichText(plain, rtf, location, color, fontSize, layoutWidth, 0);
+        }
+
+        public void AddRichText(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth, float minimumHeight)
+        {
+            RequireImage(); ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
             if (String.IsNullOrWhiteSpace(plain)) return;
-            Add(new TextAnnotation(plain, rtf, location, color, fontSize, layoutWidth, "Segoe UI", FontStyle.Regular));
+            Add(new TextAnnotation(plain, rtf, location, color, fontSize, layoutWidth, minimumHeight, "Segoe UI", FontStyle.Regular));
         }
 
         public int ReplaceImageText(Rectangle eraseBounds, string text, Color foreground, Color background, float fontSize, float layoutWidth)
@@ -714,6 +748,12 @@ namespace SnipStudio
                 throw new ArgumentOutOfRangeException("layoutWidth");
         }
 
+        private static void ValidateTextHeight(float value)
+        {
+            if (Single.IsNaN(value) || Single.IsInfinity(value) || value < 0 || value > 32768)
+                throw new ArgumentOutOfRangeException("minimumHeight");
+        }
+
         private static float NormalizeTextWidth(float value)
         {
             return value > 0 ? Math.Max(1, (float)Math.Round(value)) : 0;
@@ -932,6 +972,7 @@ namespace SnipStudio
         internal sealed class RectangleAnnotation : Annotation, IStyledShape
         {
             private readonly RectangleF bounds;
+            internal RectangleF GeometryBounds { get { return bounds; } }
             public RectangleAnnotation(RectangleF bounds, Color color, float width)
                 : this(bounds, new ShapeStyle(Color.Empty, color, width)) { }
             internal RectangleAnnotation(RectangleF bounds, ShapeStyle style)
@@ -964,6 +1005,7 @@ namespace SnipStudio
         internal sealed class EllipseAnnotation : Annotation, IStyledShape
         {
             private readonly RectangleF bounds;
+            internal RectangleF GeometryBounds { get { return bounds; } }
             internal EllipseAnnotation(RectangleF bounds, ShapeStyle style) { this.bounds = bounds; Style = style; }
             public ShapeStyle Style { get; private set; }
             public EditorTool ShapeTool { get { return EditorTool.Ellipse; } }
@@ -1044,6 +1086,7 @@ namespace SnipStudio
 
             private readonly TextContent content;
             private readonly PointF location;
+            private readonly float minimumHeight;
             private readonly RectangleF bounds;
             private readonly RectangleF inkBounds;
             public TextAnnotation(string text, PointF location, Color color, float fontSize)
@@ -1052,21 +1095,26 @@ namespace SnipStudio
                 : this(text, null, location, color, fontSize, layoutWidth, "Segoe UI", System.Drawing.FontStyle.Regular) { }
 
             internal TextAnnotation(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth, string family, FontStyle style)
+                : this(plain, rtf, location, color, fontSize, layoutWidth, 0, family, style) { }
+
+            internal TextAnnotation(string plain, string rtf, PointF location, Color color, float fontSize, float layoutWidth, float minimumHeight, string family, FontStyle style)
             {
-                ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+                ValidatePoint(location); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth); ValidateTextHeight(minimumHeight);
                 content = new TextContent(plain, rtf, color, fontSize, layoutWidth, family, style);
                 this.location = location;
-                bounds = new RectangleF(location, content.Size);
+                this.minimumHeight = NormalizeTextWidth(minimumHeight);
+                bounds = new RectangleF(location, new SizeF(content.Size.Width, Math.Max(content.Size.Height, this.minimumHeight)));
                 inkBounds = content.InkBounds;
                 inkBounds.Offset(location);
             }
 
-            private TextAnnotation(TextContent content, PointF location)
+            private TextAnnotation(TextContent content, PointF location, float minimumHeight)
             {
-                ValidatePoint(location);
+                ValidatePoint(location); ValidateTextHeight(minimumHeight);
                 this.content = content;
                 this.location = location;
-                bounds = new RectangleF(location, content.Size);
+                this.minimumHeight = NormalizeTextWidth(minimumHeight);
+                bounds = new RectangleF(location, new SizeF(content.Size.Width, Math.Max(content.Size.Height, this.minimumHeight)));
                 inkBounds = content.InkBounds;
                 inkBounds.Offset(location);
             }
@@ -1079,14 +1127,21 @@ namespace SnipStudio
             internal Color Color { get { return content.Color; } }
             internal float FontSize { get { return content.FontSize; } }
             internal float LayoutWidth { get { return content.LayoutWidth; } }
+            internal float MinimumHeight { get { return minimumHeight; } }
             internal RectangleF InkBounds { get { return inkBounds; } }
 
             internal TextAnnotation WithGeometry(PointF newLocation, float newFontSize, float newWidth)
             {
+                return WithGeometry(newLocation, newFontSize, newWidth, MinimumHeight);
+            }
+
+            internal TextAnnotation WithGeometry(PointF newLocation, float newFontSize, float newWidth, float newHeight)
+            {
                 newWidth = NormalizeTextWidth(newWidth);
-                if (newFontSize == FontSize && newWidth == LayoutWidth) return new TextAnnotation(content, newLocation);
+                ValidateTextHeight(newHeight);
+                if (newFontSize == FontSize && newWidth == LayoutWidth) return new TextAnnotation(content, newLocation, newHeight);
                 string rtf = newFontSize == FontSize ? Rtf : RichTextLayout.SetFontSize(Rtf, newFontSize);
-                return new TextAnnotation(Text, rtf, newLocation, Color, newFontSize, newWidth, FontFamily, FontStyle);
+                return new TextAnnotation(Text, rtf, newLocation, Color, newFontSize, newWidth, newHeight, FontFamily, FontStyle);
             }
 
             internal TextAnnotation WithTextAndFormatting(string text, Color color, float fontSize, float layoutWidth)
@@ -1099,8 +1154,8 @@ namespace SnipStudio
                     if (color.ToArgb() != Color.ToArgb()) rtf = RichTextLayout.SetColor(rtf, color);
                 }
                 else rtf = RichTextLayout.CreatePlainRtf(text, FontFamily, fontSize, FontStyle, color);
-                if (rtf == Rtf && NormalizeTextWidth(layoutWidth) == LayoutWidth && text == Text) return new TextAnnotation(content, location);
-                return new TextAnnotation(text, rtf, location, color, fontSize, layoutWidth, FontFamily, FontStyle);
+                if (rtf == Rtf && NormalizeTextWidth(layoutWidth) == LayoutWidth && text == Text) return new TextAnnotation(content, location, MinimumHeight);
+                return new TextAnnotation(text, rtf, location, color, fontSize, layoutWidth, MinimumHeight, FontFamily, FontStyle);
             }
 
             public override void Draw(Graphics graphics)
@@ -1114,7 +1169,7 @@ namespace SnipStudio
                 return expanded.Contains(point);
             }
             public override RectangleF Bounds { get { return bounds; } }
-            public override Annotation Translate(PointF delta) { return new TextAnnotation(content, new PointF(location.X + delta.X, location.Y + delta.Y)); }
+            public override Annotation Translate(PointF delta) { return new TextAnnotation(content, new PointF(location.X + delta.X, location.Y + delta.Y), MinimumHeight); }
         }
 
         internal sealed class HighlightBandsAnnotation : Annotation

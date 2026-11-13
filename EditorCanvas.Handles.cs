@@ -7,15 +7,17 @@ namespace SnipStudio
 {
     public sealed partial class EditorCanvas
     {
-        private enum AnnotationHandleKind { None, TextLeft, TextRight, ArrowTail, ArrowTip }
+        private enum AnnotationHandleKind { None, TextLeft, TextRight, ArrowTail, ArrowTip,
+            TextTop, TextBottom, TextTopLeft, TextTopRight, TextBottomLeft, TextBottomRight }
 
         private AnnotationHandleKind annotationHandle;
         private int handleAnnotationIndex = -1;
         private long handleDocumentRevision;
+        private object handleImageIdentity;
         private PointF handleGrabOffset;
         private TextAnnotationInfo handleText;
         private PointF handleTextLocation;
-        private float handleTextWidth;
+        private float handleTextWidth, handleTextMinimumHeight;
         private PointF handleArrowPoint;
 
         private bool AnnotationHandleDragging { get { return annotationHandle != AnnotationHandleKind.None; } }
@@ -37,16 +39,19 @@ namespace SnipStudio
             annotationHandle = hit;
             handleAnnotationIndex = selectedIndex;
             handleDocumentRevision = document.Revision;
+            handleImageIdentity = ImageIdentity;
             handleText = document.GetTextAnnotation(selectedIndex);
             if (handleText != null)
             {
                 handleTextLocation = handleText.Location;
-                handleTextWidth = handleText.LayoutWidth > 0 ? handleText.LayoutWidth : handleText.Bounds.Width;
-                float edge = hit == AnnotationHandleKind.TextLeft ? handleText.Bounds.Left : handleText.Bounds.Right;
+                handleTextWidth = handleText.LayoutWidth;
+                handleTextMinimumHeight = handleText.MinimumHeight;
+                float edgeX = TextHandleLeft(hit) ? handleText.Bounds.Left : handleText.Bounds.Right;
+                float edgeY = TextHandleTop(hit) ? handleText.Bounds.Top : handleText.Bounds.Bottom;
                 // Selection handles sit outside the text box. Retain the grab
                 // offset so a click/release does not change its layout width.
-                handleGrabOffset = new PointF(pointer.X - edge, 0);
-                preview = document.CreateTextAnnotationPreview(selectedIndex, handleTextLocation, handleText.FontSize, handleTextWidth);
+                handleGrabOffset = new PointF(pointer.X - edgeX, pointer.Y - edgeY);
+                preview = document.CreateTextAnnotationPreview(selectedIndex, handleTextLocation, handleText.FontSize, handleTextWidth, handleTextMinimumHeight);
             }
             else
             {
@@ -58,7 +63,7 @@ namespace SnipStudio
                 if (preview == null) { CancelAnnotationHandleDrag(); return false; }
             }
             Capture = true;
-            Cursor = handleText != null ? Cursors.SizeWE : Cursors.Cross;
+            Cursor = handleText != null ? TextHandleCursor(hit) : Cursors.Cross;
             Invalidate();
             return true;
         }
@@ -66,7 +71,7 @@ namespace SnipStudio
         private bool UpdateAnnotationHandleDrag(MouseEventArgs e)
         {
             if (!AnnotationHandleDragging) return false;
-            if (!HasImage || document.Revision != handleDocumentRevision || selectedIndex != handleAnnotationIndex)
+            if (!HasImage || !Object.ReferenceEquals(handleImageIdentity, ImageIdentity) || document.Revision != handleDocumentRevision || selectedIndex != handleAnnotationIndex)
             {
                 CancelGesture();
                 return true;
@@ -74,24 +79,48 @@ namespace SnipStudio
             PointF pointer = ToImage(e.Location, false);
             if (handleText != null)
             {
-                float imageWidth = ImageSize.Width;
-                float minimum = Math.Min(imageWidth, Math.Max(24, handleText.FontSize * 1.5f));
-                float edge = pointer.X - handleGrabOffset.X;
-                float left, right;
-                if (annotationHandle == AnnotationHandleKind.TextLeft)
+                RectangleF original = handleText.Bounds;
+                float left = original.Left, top = original.Top, right = original.Right, bottom = original.Bottom;
+                float edgeX = pointer.X - handleGrabOffset.X, edgeY = pointer.Y - handleGrabOffset.Y;
+                bool horizontal = (TextHandleLeft(annotationHandle) || TextHandleRight(annotationHandle)) &&
+                    Math.Abs(edgeX - (TextHandleLeft(annotationHandle) ? original.Left : original.Right)) > .0001f;
+                bool vertical = (TextHandleTop(annotationHandle) || TextHandleBottom(annotationHandle)) &&
+                    Math.Abs(edgeY - (TextHandleTop(annotationHandle) ? original.Top : original.Bottom)) > .0001f;
+                if (horizontal)
                 {
-                    right = Math.Max(minimum, Math.Min(imageWidth, handleText.Bounds.Right));
-                    left = Math.Max(0, Math.Min(right - minimum, edge));
+                    float minimum = Math.Min(12, ImageSize.Width);
+                    if (TextHandleLeft(annotationHandle))
+                    {
+                        right = Math.Max(minimum, Math.Min(ImageSize.Width, right));
+                        left = Math.Max(0, Math.Min(right - minimum, edgeX));
+                    }
+                    else
+                    {
+                        left = Math.Max(0, Math.Min(ImageSize.Width - minimum, left));
+                        right = Math.Max(left + minimum, Math.Min(ImageSize.Width, edgeX));
+                    }
                 }
-                else
+                if (vertical)
                 {
-                    left = Math.Max(0, Math.Min(imageWidth - minimum, handleText.Bounds.Left));
-                    right = Math.Max(left + minimum, Math.Min(imageWidth, edge));
+                    float minimum = Math.Min(12, ImageSize.Height);
+                    if (TextHandleTop(annotationHandle))
+                    {
+                        bottom = Math.Max(minimum, Math.Min(ImageSize.Height, bottom));
+                        top = Math.Max(0, Math.Min(bottom - minimum, edgeY));
+                    }
+                    else
+                    {
+                        top = Math.Max(0, Math.Min(ImageSize.Height - minimum, top));
+                        bottom = Math.Max(top + minimum, Math.Min(ImageSize.Height, edgeY));
+                    }
                 }
-                handleTextLocation = new PointF(left, handleText.Location.Y);
-                handleTextWidth = Math.Max(1, right - left);
-                preview = document.CreateTextAnnotationPreview(handleAnnotationIndex, handleTextLocation, handleText.FontSize, handleTextWidth);
-                Cursor = Cursors.SizeWE;
+                handleTextLocation = new PointF(left, top);
+                // Only the requested frame dimension changes. In particular, a
+                // no-op gesture retains legacy auto-height/width values of zero.
+                handleTextWidth = horizontal ? Math.Min(32768, Math.Max(1, (float)Math.Round(right - left))) : handleText.LayoutWidth;
+                handleTextMinimumHeight = vertical ? Math.Min(32768, Math.Max(1, (float)Math.Round(bottom - top))) : handleText.MinimumHeight;
+                preview = document.CreateTextAnnotationPreview(handleAnnotationIndex, handleTextLocation, handleText.FontSize, handleTextWidth, handleTextMinimumHeight);
+                Cursor = TextHandleCursor(annotationHandle);
             }
             else
             {
@@ -120,13 +149,14 @@ namespace SnipStudio
             TextAnnotationInfo text = handleText;
             PointF location = handleTextLocation;
             float width = handleTextWidth;
+            float minimumHeight = handleTextMinimumHeight;
             PointF endpoint = handleArrowPoint;
-            bool current = HasImage && document.Revision == handleDocumentRevision && selectedIndex == index;
+            bool current = HasImage && Object.ReferenceEquals(handleImageIdentity, ImageIdentity) && document.Revision == handleDocumentRevision && selectedIndex == index;
             CancelAnnotationHandleDrag();
             Capture = false;
             UpdateCursor();
             bool changed = current && (text != null
-                ? document.UpdateTextAnnotationBounds(index, location, text.FontSize, width)
+                ? document.UpdateTextAnnotationBounds(index, location, text.FontSize, width, minimumHeight)
                 : document.UpdateShapeEndpoint(index, kind == AnnotationHandleKind.ArrowTip, endpoint));
             if (changed) RaiseChanged(); else Invalidate();
             return true;
@@ -138,6 +168,7 @@ namespace SnipStudio
             annotationHandle = AnnotationHandleKind.None;
             handleAnnotationIndex = -1;
             handleText = null;
+            handleImageIdentity = null;
             handleGrabOffset = PointF.Empty;
         }
 
@@ -150,9 +181,15 @@ namespace SnipStudio
             if (text != null)
             {
                 RectangleF frame = TextSelectionFrame(text.Bounds);
-                float middle = frame.Top + frame.Height / 2;
-                if (NearHandle(location, new PointF(frame.Left, middle), radius)) return AnnotationHandleKind.TextLeft;
-                if (NearHandle(location, new PointF(frame.Right, middle), radius)) return AnnotationHandleKind.TextRight;
+                float middleX = frame.Left + frame.Width / 2, middleY = frame.Top + frame.Height / 2;
+                if (NearHandle(location, new PointF(frame.Left, frame.Top), radius)) return AnnotationHandleKind.TextTopLeft;
+                if (NearHandle(location, new PointF(frame.Right, frame.Top), radius)) return AnnotationHandleKind.TextTopRight;
+                if (NearHandle(location, new PointF(frame.Right, frame.Bottom), radius)) return AnnotationHandleKind.TextBottomRight;
+                if (NearHandle(location, new PointF(frame.Left, frame.Bottom), radius)) return AnnotationHandleKind.TextBottomLeft;
+                if (NearHandle(location, new PointF(frame.Left, middleY), radius)) return AnnotationHandleKind.TextLeft;
+                if (NearHandle(location, new PointF(frame.Right, middleY), radius)) return AnnotationHandleKind.TextRight;
+                if (NearHandle(location, new PointF(middleX, frame.Top), radius)) return AnnotationHandleKind.TextTop;
+                if (NearHandle(location, new PointF(middleX, frame.Bottom), radius)) return AnnotationHandleKind.TextBottom;
             }
             else
             {
@@ -170,7 +207,7 @@ namespace SnipStudio
         {
             AnnotationHandleKind hit = HitAnnotationHandle(point);
             if (hit == AnnotationHandleKind.None) return false;
-            Cursor = hit == AnnotationHandleKind.TextLeft || hit == AnnotationHandleKind.TextRight ? Cursors.SizeWE : Cursors.Cross;
+            Cursor = TextHandleLeft(hit) || TextHandleRight(hit) || TextHandleTop(hit) || TextHandleBottom(hit) ? TextHandleCursor(hit) : Cursors.Cross;
             return true;
         }
 
@@ -187,9 +224,15 @@ namespace SnipStudio
                     outline.DashStyle = DashStyle.Dash;
                     graphics.DrawRectangle(outline, frame.X, frame.Y, frame.Width, frame.Height);
                 }
-                float middle = frame.Top + frame.Height / 2;
-                DrawAnnotationHandle(graphics, new PointF(frame.Left, middle), false);
-                DrawAnnotationHandle(graphics, new PointF(frame.Right, middle), false);
+                float middleX = frame.Left + frame.Width / 2, middleY = frame.Top + frame.Height / 2;
+                DrawAnnotationHandle(graphics, new PointF(frame.Left, frame.Top), false);
+                DrawAnnotationHandle(graphics, new PointF(frame.Right, frame.Top), false);
+                DrawAnnotationHandle(graphics, new PointF(frame.Right, frame.Bottom), false);
+                DrawAnnotationHandle(graphics, new PointF(frame.Left, frame.Bottom), false);
+                DrawAnnotationHandle(graphics, new PointF(frame.Left, middleY), false);
+                DrawAnnotationHandle(graphics, new PointF(frame.Right, middleY), false);
+                DrawAnnotationHandle(graphics, new PointF(middleX, frame.Top), false);
+                DrawAnnotationHandle(graphics, new PointF(middleX, frame.Bottom), false);
                 return true;
             }
 
@@ -201,6 +244,21 @@ namespace SnipStudio
             DrawAnnotationHandle(graphics, ends[0], true);
             DrawAnnotationHandle(graphics, ends[1], true);
             return true;
+        }
+
+        private static bool TextHandleLeft(AnnotationHandleKind kind)
+        { return kind == AnnotationHandleKind.TextLeft || kind == AnnotationHandleKind.TextTopLeft || kind == AnnotationHandleKind.TextBottomLeft; }
+        private static bool TextHandleRight(AnnotationHandleKind kind)
+        { return kind == AnnotationHandleKind.TextRight || kind == AnnotationHandleKind.TextTopRight || kind == AnnotationHandleKind.TextBottomRight; }
+        private static bool TextHandleTop(AnnotationHandleKind kind)
+        { return kind == AnnotationHandleKind.TextTop || kind == AnnotationHandleKind.TextTopLeft || kind == AnnotationHandleKind.TextTopRight; }
+        private static bool TextHandleBottom(AnnotationHandleKind kind)
+        { return kind == AnnotationHandleKind.TextBottom || kind == AnnotationHandleKind.TextBottomLeft || kind == AnnotationHandleKind.TextBottomRight; }
+        private static Cursor TextHandleCursor(AnnotationHandleKind kind)
+        {
+            if (kind == AnnotationHandleKind.TextTopLeft || kind == AnnotationHandleKind.TextBottomRight) return Cursors.SizeNWSE;
+            if (kind == AnnotationHandleKind.TextTopRight || kind == AnnotationHandleKind.TextBottomLeft) return Cursors.SizeNESW;
+            return TextHandleLeft(kind) || TextHandleRight(kind) ? Cursors.SizeWE : Cursors.SizeNS;
         }
 
         private RectangleF TextSelectionFrame(RectangleF bounds)

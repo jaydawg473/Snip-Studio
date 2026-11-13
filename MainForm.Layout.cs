@@ -57,7 +57,7 @@ namespace SnipStudio
             get { return captureToolbar == null ? Ui(82) : captureToolbar.Height +
                 updateNoticeHeight +
                 (canvas.HasImage && !AnnotationToolbarIsVertical ? annotationToolbar.Height : 0) +
-                (canvas.HasImage && (canvas.TextActionsMode || canvas.Tool == EditorTool.Highlighter || IsCropContext || IsShapeContext || IsInlineTextContext) ? contextToolbar.Height : 0) + footerStrip.Height; }
+                (canvas.HasImage && (canvas.TextActionsMode || IsCropContext || HasInlineTextWorkflow) ? contextToolbar.Height : 0) + footerStrip.Height; }
         }
 
         private bool AnnotationToolbarIsVertical
@@ -131,11 +131,11 @@ namespace SnipStudio
             AddCompactTool("Pen", EditorTool.Pen, "pen", "Pen");
             AddCompactTool("Highlight", EditorTool.Highlighter, "highlighter", "Highlight text; hold Shift for freehand");
             BuildShapesButton();
-            AddCompactTool("Add text", EditorTool.Text, "text", "Click on the snip and type directly. Advanced text opens full formatting options.");
+            AddCompactTool("Add text", EditorTool.Text, "text", "Drag a text box, then type inside it. Click for a quick default box. Advanced text opens full formatting options.");
             AddCompactTool("Eraser", EditorTool.Eraser, "eraser", "Erase annotations");
             AddCompactTool("Crop", EditorTool.Crop, "crop", "Drag an edge or corner to crop. Enter applies; Escape cancels.");
             AddCompactTool("Remove area", EditorTool.RemoveArea, "remove-area", "Remove captured content. Click a flat-color object or drag an area, review the selection, then press Delete. Undo restores it.");
-            StudioButton color = IconButton("Ink color", "", delegate { ChooseColor(); });
+            StudioButton color = IconButton("Ink color", "", delegate { QueueToolOptionsAction(colorButton, delegate(Rectangle anchor) { ChooseColor(anchor); }); });
             color.Swatch = true;
             colorButton = color;
             annotationToolbar.Controls.Add(color);
@@ -209,6 +209,7 @@ namespace SnipStudio
             contextToolbar.Controls.Add(closeTextActionsButton);
             BuildCropActions();
             BuildShapeActions();
+            InitializeToolOptionsIntegration();
             tips.SetToolTip(editRecognizedLineButton, "Edit one recognized line. Select words from a single line first.");
             tips.SetToolTip(translateTextButton, "Translate selected words, or all recognized text, using the included offline translator. Choose the original and target languages inside Snip Studio.");
             tips.SetToolTip(deleteRecognizedTextButton, "Remove the selected recognized text. Use Undo to restore it.");
@@ -251,7 +252,7 @@ namespace SnipStudio
             canvas.TextStyleChanged += delegate { UpdateTextStyleControls(); };
             status.TextChanged += delegate { LayoutChrome(); };
             dimensions.TextChanged += delegate { LayoutChrome(); };
-            recognitionStatus.TextChanged += delegate { LayoutChrome(); };
+            recognitionStatus.TextChanged += delegate { LayoutChrome(); RefreshToolOptionsContents(); };
             externalEditorButton.TextChanged += delegate { LayoutChrome(); };
             chromeRoot.Layout += delegate { LayoutChrome(); };
             UpdateTextStyleControls();
@@ -278,12 +279,14 @@ namespace SnipStudio
 
         private void AddCompactTool(string label, EditorTool tool, string glyph, string description)
         {
-            StudioButton button = IconButton(label, glyph, delegate { SelectTool(tool); });
+            StudioButton button = null;
+            button = IconButton(label, glyph, delegate { ActivateAnnotationTool(tool, button, false); });
+            ConfigureToolOptionsButton(button, tool);
             toolButtons[tool] = button;
             annotationToolbar.Controls.Add(button);
             annotationControls.Add(button);
             documentControls.Add(button);
-            tips.SetToolTip(button, description);
+            tips.SetToolTip(button, description + (ToolHasOptions(tool) ? " Select the tool, then click again or use its arrow for options (Alt+Down)." : ""));
         }
 
         private Button AddEditorAction(string label, string glyph, EventHandler action)
@@ -376,10 +379,7 @@ namespace SnipStudio
                     if (pair.Key.IconOnly != iconOnly) { pair.Key.IconOnly = iconOnly; pair.Key.Invalidate(); }
                 }
                 externalEditorButton.AccessibleName = externalEditorButton.Text;
-                bool showTextSize = !canvas.TextActionsMode && (canvas.Tool == EditorTool.Text || canvas.HasSelectedTextAnnotation);
-                width.Visible = !showTextSize && !IsShapeContext;
-                textSize.Visible = showTextSize;
-                colorButton.Visible = !IsShapeContext;
+                bool showTextSize = !canvas.TextActionsMode && !IsEmojiContext && (canvas.Tool == EditorTool.Text || canvas.HasSelectedTextAnnotation);
                 int annotationHeight = 0;
                 if (!verticalAnnotation)
                 {
@@ -413,11 +413,11 @@ namespace SnipStudio
                 bool textMode = canvas.HasImage && canvas.TextActionsMode;
                 bool cropMode = IsCropContext;
                 bool shapeMode = IsShapeContext;
-                bool composeMode = IsInlineTextContext;
-                bool context = cropMode || shapeMode || composeMode || textMode || (canvas.HasImage && canvas.Tool == EditorTool.Highlighter);
+                bool composeMode = HasInlineTextWorkflow;
+                bool context = cropMode || composeMode || textMode;
                 contextToolbar.Visible = context;
-                snapToText.Visible = context && !textMode && !cropMode && !shapeMode && !composeMode;
-                recognitionStatus.Visible = context && !cropMode && !shapeMode && !composeMode;
+                if (!IsHostedInToolOptions(snapToText)) snapToText.Visible = false;
+                recognitionStatus.Visible = textMode || (IsHostedInToolOptions(recognitionStatus) && canvas.Tool == EditorTool.Highlighter);
                 copyAllTextButton.Visible = copySelectedTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Visible = textMode && canvas.TextActionCommandsReady;
                 translateTextButton.Enabled = textMode && canvas.TextActionCommandsReady && !capturePending && !String.IsNullOrWhiteSpace(canvas.AllRecognizedText);
@@ -429,7 +429,6 @@ namespace SnipStudio
                 UpdateCropActionControls();
                 UpdateAnnotationContextControls();
                 if (cropMode) contextHeight = LayoutCropActions(w);
-                else if (shapeMode) contextHeight = LayoutShapeActions(w);
                 else if (composeMode) contextHeight = LayoutInlineTextActions(w);
                 else if (context)
                 {
@@ -558,27 +557,18 @@ namespace SnipStudio
         private Size MeasureVerticalAnnotationToolbar(bool showTextSize, bool arrange)
         {
             int padding = Ui(8), iconSize = Ui(38), gap = Ui(4);
-            Control style = showTextSize ? (Control)textSize : width;
-            int contentWidth = Math.Max(Ui(94), ToolbarWidth(style, 94));
+            // Formatting lives in options cards, so a side toolbar keeps the
+            // same width when the selected tool or its font-size choice changes.
+            int contentWidth = Ui(94);
             int rowY = padding, column = 0;
             foreach (Control control in annotationControls)
             {
                 if ((control == width && showTextSize) || (control == textSize && !showTextSize)) continue;
                 if (IsShapeContext && (control == width || control == colorButton)) continue;
-                if (control == style)
-                {
-                    if (column != 0) { rowY += iconSize + gap; column = 0; }
-                    int styleHeight = Math.Max(Ui(30), control.PreferredSize.Height);
-                    if (arrange) control.SetBounds(padding, rowY, contentWidth, styleHeight);
-                    rowY += styleHeight + gap;
-                }
-                else
-                {
-                    int gridLeft = padding + Math.Max(0, (contentWidth - iconSize * 2 - gap) / 2);
-                    if (arrange) control.SetBounds(gridLeft + column * (iconSize + gap), rowY, iconSize, iconSize);
-                    column++;
-                    if (column == 2) { rowY += iconSize + gap; column = 0; }
-                }
+                int gridLeft = padding + Math.Max(0, (contentWidth - iconSize * 2 - gap) / 2);
+                if (arrange) control.SetBounds(gridLeft + column * (iconSize + gap), rowY, iconSize, iconSize);
+                column++;
+                if (column == 2) { rowY += iconSize + gap; column = 0; }
             }
             if (column != 0) rowY += iconSize + gap;
             return new Size(contentWidth, rowY + padding - gap);

@@ -23,18 +23,18 @@ namespace SnipStudio
             HandleCreated += delegate { UpdateCursor(); };
             DpiChangedAfterParent += delegate
             {
-                if (!AnnotationHandleDragging && !moving && !panning && !textSelectionDragging) UpdateCursor();
+                if (!AnnotationHandleDragging && !EmojiHandleDragging && !ClosedShapeHandleDragging && !moving && !panning && !textSelectionDragging) UpdateCursor();
             };
             MouseEnter += delegate
             {
-                if (!AnnotationHandleDragging && !moving && !panning && !textSelectionDragging) UpdateCursor();
+                if (!AnnotationHandleDragging && !EmojiHandleDragging && !ClosedShapeHandleDragging && !moving && !panning && !textSelectionDragging) UpdateCursor();
             };
         }
 
         private void UpdateToolPointer()
         {
             if (disposingCanvas) return;
-            if (AnnotationHandleDragging) return;
+            if (AnnotationHandleDragging || EmojiHandleDragging || ClosedShapeHandleDragging) return;
             if (textSelectionDragging) { Cursor = Cursors.IBeam; return; }
             if (moving || panning || removalMoving) { Cursor = Cursors.SizeAll; return; }
             if (textActionsMode) { Cursor = Cursors.Default; return; }
@@ -59,6 +59,7 @@ namespace SnipStudio
 
         private void UpdateSelectPointer(Point location)
         {
+            if (UpdateEmojiPointer(location) || UpdateClosedShapePointer(location) || TrySetAnnotationHandleCursor(location)) return;
             Cursor = IsOnSourceRemovalSelection(location) || (HasImage && IsOnImage(location) && document.HitTestAnnotation(ToImage(location, false), 5 / zoom) >= 0)
                 ? Cursors.SizeAll : Cursors.Default;
         }

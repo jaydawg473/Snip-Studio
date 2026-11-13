@@ -275,7 +275,7 @@ namespace SnipStudio
 
     internal sealed class StudioButton : Button
     {
-        private bool hovered, pressed, selected;
+        private bool hovered, pressed, selected, dropDownPressed;
         private string glyph = "";
         private Bitmap glyphImage;
         private int cachedSize;
@@ -284,6 +284,8 @@ namespace SnipStudio
         internal bool ToolLayout;
         internal bool IconOnly;
         internal bool Swatch;
+        internal bool DropDownIndicator;
+        internal event EventHandler DropDownClick;
         internal Color SwatchColor = Color.Red;
 
         internal string Glyph { get { return glyph; } set { glyph = value; ResetIcon(); Invalidate(); } }
@@ -291,10 +293,10 @@ namespace SnipStudio
 
         internal int PreferredContentWidth(float scale)
         {
-            if (IconOnly) return (int)Math.Ceiling(34 * scale);
+            if (IconOnly) return (int)Math.Ceiling((DropDownIndicator ? 44 : 34) * scale);
             int text = TextRenderer.MeasureText(Text ?? "", Font, Size.Empty,
                 TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;
-            return text + (int)Math.Ceiling((String.IsNullOrEmpty(glyph) ? 16 : 48) * scale);
+            return text + (int)Math.Ceiling(((String.IsNullOrEmpty(glyph) ? 16 : 48) + (DropDownIndicator ? 12 : 0)) * scale);
         }
 
         internal StudioButton()
@@ -308,12 +310,36 @@ namespace SnipStudio
         }
 
         protected override void OnMouseEnter(EventArgs e) { hovered = true; Invalidate(); base.OnMouseEnter(e); }
-        protected override void OnMouseLeave(EventArgs e) { hovered = false; pressed = false; Invalidate(); base.OnMouseLeave(e); }
-        protected override void OnMouseDown(MouseEventArgs e) { pressed = true; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseLeave(EventArgs e) { hovered = false; pressed = false; dropDownPressed = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e)
+        {
+            pressed = true;
+            float scale = Math.Max(.75f, Math.Min(4f, Height / 34f));
+            dropDownPressed = DropDownIndicator && e.Button == MouseButtons.Left && e.X >= Width - (int)Math.Ceiling(14 * scale);
+            Invalidate(); base.OnMouseDown(e);
+        }
         protected override void OnMouseUp(MouseEventArgs e) { pressed = false; Invalidate(); base.OnMouseUp(e); }
         protected override void OnGotFocus(EventArgs e) { Invalidate(); base.OnGotFocus(e); }
         protected override void OnLostFocus(EventArgs e) { Invalidate(); base.OnLostFocus(e); }
         protected override void OnEnabledChanged(EventArgs e) { ResetIcon(); Invalidate(); base.OnEnabledChanged(e); }
+        protected override void OnClick(EventArgs e)
+        {
+            if (dropDownPressed)
+            {
+                dropDownPressed = false;
+                EventHandler handler = DropDownClick; if (handler != null) handler(this, e);
+            }
+            else base.OnClick(e);
+        }
+        protected override bool ProcessCmdKey(ref Message message, Keys keyData)
+        {
+            if (Enabled && DropDownIndicator && keyData == (Keys.Alt | Keys.Down))
+            {
+                EventHandler handler = DropDownClick; if (handler != null) handler(this, EventArgs.Empty);
+                return true;
+            }
+            return base.ProcessCmdKey(ref message, keyData);
+        }
 
         protected override void OnPaint(PaintEventArgs e)
         {
@@ -335,10 +361,11 @@ namespace SnipStudio
             Color ink = !Enabled ? StudioTheme.Disabled : Primary ? StudioTheme.PrimaryText : selected ? StudioTheme.SelectionText : StudioTheme.Text;
             bool iconOnly = IconOnly || Text == "+" || Text == "−";
             int iconSize = (int)((ToolLayout ? 22 : 18) * scale);
+            int indicatorWidth = DropDownIndicator ? (int)Math.Round(12 * scale) : 0;
             int left = (int)(12 * scale);
             int top = (Height - iconSize) / 2;
-            if (ToolLayout) { left = (Width - iconSize) / 2; top = (int)(10 * scale); }
-            if (iconOnly) left = (Width - iconSize) / 2;
+            if (ToolLayout) { left = (Width - indicatorWidth - iconSize) / 2; top = (int)(10 * scale); }
+            if (iconOnly) left = (Width - indicatorWidth - iconSize) / 2;
             if (!String.IsNullOrEmpty(glyph))
             {
                 if (glyphImage == null || cachedSize != iconSize || cachedColor != ink)
@@ -365,9 +392,15 @@ namespace SnipStudio
             {
                 Rectangle textBox = ToolLayout ? new Rectangle(2, (int)(37 * scale), Width - 4, Height - (int)(38 * scale))
                     : new Rectangle(String.IsNullOrEmpty(glyph) ? 4 : left + iconSize + (int)(8 * scale), 0,
-                        Width - (String.IsNullOrEmpty(glyph) ? 8 : left + iconSize + (int)(14 * scale)), Height);
+                        Math.Max(1, Width - indicatorWidth - (String.IsNullOrEmpty(glyph) ? 8 : left + iconSize + (int)(14 * scale))), Height);
                 TextRenderer.DrawText(g, Text, Font, textBox, ink,
                     TextFormatFlags.VerticalCenter | (ToolLayout || String.IsNullOrEmpty(glyph) ? TextFormatFlags.HorizontalCenter : TextFormatFlags.Left) | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            }
+            if (DropDownIndicator)
+            {
+                float x = Width - 7 * scale, y = Height / 2f;
+                using (Pen arrow = new Pen(ink, Math.Max(1, 1.2f * scale)))
+                    g.DrawLines(arrow, new PointF[] { new PointF(x - 2.5f * scale, y - 1.3f * scale), new PointF(x, y + 1.3f * scale), new PointF(x + 2.5f * scale, y - 1.3f * scale) });
             }
             if (Focused && ShowFocusCues)
             {
