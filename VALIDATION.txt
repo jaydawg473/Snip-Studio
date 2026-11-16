@@ -1,55 +1,52 @@
-SNIP STUDIO 0.6.5 - AUTOMATION FORGE, 2026-11-16
+SNIP STUDIO 0.6.6 - AUTOMATION FORGE, 2026-11-16
 https://automation-forge.com/
 
-CHANGES
-The normal editor window grows to the measured width needed by the capture
-toolbar and horizontal annotation toolbar. Measurement uses the current scale
-and control labels. The width is bounded by the current monitor's working area.
-If the full toolbar cannot fit, one horizontal scrollbar keeps all controls
-reachable in the same row with their complete widths. Left and right annotation
-toolbars retain their vertical layout. Maximized/full-screen bounds are retained.
-Changing tools and closing options do not automatically shrink an existing window.
+FINAL APPLICATION
+C#5/.NET Framework 4.8 compiled without warnings. Automation Forge Authenticode
+signature verified Valid with a Microsoft timestamp. Exact application SHA256:
+9AAEC6E419D451335199B0C71DBF03CDB7E78F3AEDE28DD53F7F74DAB0F6B900
+All 102 application source hashes match the recorded pre-build freeze.
 
-The external-editor selector manages its own height and docks at the top of
-a shrinkable settings row. Percentage-column preferred-size measurement had
-left the closed picker much taller than its visible header. The prior signed
-build reproduced 244 pixels of unused picker height at a normal font size;
-the corrected picker has zero unused body height and its row returns to
-45 pixels after closing. Expanded choices still push following settings down.
+FOCUSED SIGNED-LIBRARY CHECKS
+- Eyedropper pixels, coordinates, cancellation, ownership and palette: 400.
+- Eyedropper preview text metrics and rendering: 953, across 66 states and
+  18 generated-pixel PNGs at 100/150/200 percent scale and constrained widths.
+- Print Screen policy and unshown integration: 68.
+- Actual Settings Shortcuts-card geometry/rendering: 109, with four PNGs.
+- Shared color dialogs and draft behavior: 97.
+- Full-screen geometry: 81.
+- Capture-window policy and call graph: 25.
+Total focused checks passed: 1733. Final toolbar/options regression results,
+installer integrity, signatures and payload reconciliation are recorded in the
+separate release receipt after packaging.
 
-FINAL SIGNED-LIBRARY VERIFICATION
-C#5/.NET Framework 4.8 build passed without warnings. Automation Forge
-Authenticode signature verified Valid with a Microsoft timestamp.
-The following checks passed on the completed 0.6.5 application SHA256:
-C455FB61DF815E8B84FD9D62D0C5B4A889F75DF7CE0E97021A15C41C344CB9BA
+SCOPE AND LIMITATIONS
+Tests use generated images, pure typed values, fake providers, metadata/call
+inspection and unshown controls. They do not run the app entrypoint, capture
+the user's desktop, inject input, read or change Windows settings, register
+native hotkeys, or load/save personal preferences. Rendering can create hidden
+child-control handles; the form itself is not shown. Actual screen sampling,
+physical/mixed-DPI transitions, keyboard priority, displayed native focus and
+installed upgrades remain unverified.
 
-- Single-row width: 5168 checks across 391 layout states.
-- Compact options: 9255 checks and 650 geometry samples, 36 actual-control
-  editor PNGs and 4 owner-draw callback PNGs.
-- Full-screen layout: 81 checks.
-- Crop frame: 78 checks.
-- View layout: 10 checks.
-- Zoom frames: 181 checks.
-- Editor selector spacing: 76 checks across 12 expand/collapse samples using
-  the actual production settings card at two widths and two font sizes.
+The temporary screen sampler is owned/modal, undimmed and pixel-based. Its
+snapshot stays in memory, bypasses capture policies/auto-save/OCR/clipboard,
+and is disposed on completion or cancellation. Gaps between monitors reject
+sampling. Shape opacity and the document remain unchanged until Apply.
 
-Total: 14849 checks. Final installer signature, CRC and extracted-payload
-verification are recorded separately in the release receipt at handoff.
+PRINT SCREEN
+Microsoft documents that overriding Windows' default Print Screen assignment
+can depend on the application being in the foreground. Registration alone is
+therefore not treated as a guarantee of background capture. The program reads
+Windows' assignment state only after showing/refreshing the UI, handles absent
+and unreadable values honestly, opens the supported Windows Settings page,
+and retries registration after return or Retry. It does not write Windows
+preferences or install a low-level keyboard hook. The Windows capture option
+must be turned off by the user for the intended background shortcut setup.
+https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey
 
-These are component, rendering and unshown layout checks using synthetic
-images, scales and working areas. They cover toolbar positions, narrow-monitor
-overflow, minimum width, retained image-view state and control geometry. They
-do not prove physical mixed-monitor DPI transitions, displayed mouse/focus
-behavior, native ComboBox composition or an installed upgrade. Unshown child
-handles may be created by WinForms rendering. The application entrypoint is
-not run by these fixtures.
-
-The legacy production-card fixture reproduced the unused picker-body gap.
-Final checks assert shipped AutoSize/Dock properties, compact absolute height,
-zero unused picker height and restored geometry after repeated expansion and
-collapse. Live displayed Settings remains unverified.
-
-SAVED SETTINGS AND DELIVERY
-The existing preference schema and storage are retained. Save current work
-before updating, then use Setup's normal Save/Cancel/close flow. Component
-checks are not evidence of endpoint-security acceptance or an installed update.
+DELIVERY
+The existing preference schema, capture/recording behavior, 163 artwork files,
+and complete 114-file translation runtime/models remain unchanged. App and
+installer signatures and static package checks are verified before handoff;
+this is not an installed-upgrade or endpoint-security acceptance test.

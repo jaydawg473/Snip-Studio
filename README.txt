@@ -1,33 +1,30 @@
-SNIP STUDIO 0.6.5 - AUTOMATION FORGE, 2026-11-16
+SNIP STUDIO 0.6.6 - AUTOMATION FORGE, 2026-11-16
 https://automation-forge.com/
 
-AUTOMATIC TOOLBAR WIDTH
-The window automatically widens to keep the capture toolbar and horizontal
-annotation toolbar on one row. Width is measured using the current Windows
-scale and control labels. The window stays within this monitor's working area.
-If the complete row cannot fit, scroll the toolbar horizontally to reach its
-remaining controls. Controls keep their readable widths instead of wrapping.
+EYEDROPPER
+Open a color palette and choose Eyedropper. Click a visible color anywhere on
+the connected desktop, including your snip. The preview shows the exact RGB
+and hex color. Escape or right-click cancels. Use color or Apply accepts the
+palette's draft; sampling by itself does not change the snip or shape opacity.
 
-Changing a tool or closing its options does not shrink an existing window.
-Moving to a smaller monitor caps the window to that monitor. Maximized and
-full-screen editor views keep their screen-sized bounds. Left and right
-annotation toolbars retain their vertical layout.
+The desktop is briefly frozen while choosing a color. That temporary image
+stays in memory and is disposed afterward; it is not saved, copied, or added
+to your snip history. Normal capture/taskbar policies are not invoked.
 
-TOOL OPTIONS AND RECENT SNIPS
-Tool options stay in a compact band above the image. Expanded color and emoji
-choices use a reserved side area. More > Recent snips shows previews before
-opening an image. Opening uses the existing unsaved-work safeguard.
+PRINT SCREEN SETUP
+If Windows Snipping Tool opens first, use Set up Print Screen in Settings.
+In Windows Settings > Accessibility > Keyboard, turn off the option that uses
+Print Screen to open screen capture. Return to Snip Studio and choose Retry
+Print Screen. Snip Studio shows On, Off, Windows default, or Unavailable instead
+of assuming that registration guarantees priority over Windows.
 
-EXTERNAL EDITOR SETTINGS
-The detected-editor selector expands its Settings section only while open.
-Closing the selector returns that space to the settings below it instead of
-leaving a large blank gap.
+Use Print Screen must also be enabled in Snip Studio, with an editor or its
+shortcut listener running. Exit Snip Studio stops the listener. Start with
+Windows remains optional. The program does not silently change Windows settings
+or install a low-level keyboard hook.
 
-INSTALL OR RUN
-Use SnipStudio-0.6.5-Setup.exe to update the installed app. Save open work
-and approve Setup's normal close prompt when requested. Saved app settings
-are retained. The signed portable ZIP is also available for manual use.
-
-Existing capture modes, recording, text recognition, offline translation,
-emoji artwork and third-party notices are included. See VALIDATION.txt for
-the verification scope and limitations for this build.
+INSTALL
+Use the signed SnipStudio-0.6.6-Setup.exe. Save current work and approve Setup's
+normal close prompt when requested. Existing app settings are retained.
+The signed portable ZIP includes the same complete offline translation bundle,
+models and third-party notices. See VALIDATION.txt for the verification scope.

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Globalization;
+using System.Threading.Tasks;
 using System.Windows.Forms;
 
 namespace SnipStudio
@@ -21,11 +22,12 @@ namespace SnipStudio
         private readonly ExactColorButton exactPreview;
         private readonly TextBox hexInput;
         private readonly StudioButton spectrumToggle;
+        private readonly StudioButton eyedropper;
         private readonly HoneycombColorDialog.HoneycombGrid honeycomb;
         private readonly HoneycombColorDialog.BrightnessSlider brightness;
         private readonly NumericUpDown red, green, blue;
         private float scale;
-        private bool initialized, layingOut, scaling, updating, valid = true, spectrumExpanded;
+        private bool initialized, layingOut, scaling, updating, valid = true, spectrumExpanded, samplingScreen;
         private int contentHeight, columns = 6;
         private Color selectedColor, lastColor = Color.Black;
         private double hue, saturation;
@@ -58,6 +60,11 @@ namespace SnipStudio
             AccessibleName = "Color palette and exact color";
 
             paletteLabel = AddLabel("Palette", true);
+            eyedropper = new StudioButton { Text = "Eyedropper", AccessibleName = "Eyedropper",
+                AccessibleDescription = "Sample an exact color anywhere on the screen. Click a pixel to choose it; Escape or right-click cancels." };
+            eyedropper.Click += delegate { PickScreenColor(); };
+            Controls.Add(eyedropper);
+            tips.SetToolTip(eyedropper, "Sample a color from your screen, including this snip. Click to choose; Escape or right-click cancels. Use color or Apply confirms the change.");
             string[] names = { "White", "Pale red", "Pale orange", "Pale yellow", "Pale green", "Pale cyan", "Pale blue", "Pale purple",
                 "Light gray", "Light red", "Light orange", "Light yellow", "Light green", "Light cyan", "Light blue", "Light purple",
                 "Slate", "Red", "Orange", "Yellow", "Green", "Cyan", "Blue", "Violet",
@@ -146,6 +153,43 @@ namespace SnipStudio
         {
             hexInput.Focus();
             hexInput.SelectAll();
+        }
+
+        private async void PickScreenColor()
+        {
+            if (samplingScreen || IsDisposed || Disposing || !Enabled) return;
+            samplingScreen = true;
+            eyedropper.Selected = true;
+            eyedropper.Enabled = false;
+            // Let the native tooltip disappear before freezing the desktop.
+            // This is a short, responsive composition settle, not a capture delay.
+            tips.Hide(eyedropper);
+            tips.Active = false;
+            try
+            {
+                await Task.Delay(70);
+                if (IsDisposed || Disposing || !Visible || !Enabled) return;
+                Color? chosen = ScreenColorPicker.Pick(this);
+                if (chosen.HasValue && !IsDisposed && !Disposing) SelectedColor = chosen.Value;
+            }
+            catch (Exception error)
+            {
+                if (!IsDisposed && !Disposing)
+                {
+                    validation.Text = error is ScreenColorPickerUnavailableException ? error.Message : "The screen could not be read. Try Eyedropper again.";
+                    validation.ForeColor = StudioTheme.Muted;
+                }
+            }
+            finally
+            {
+                samplingScreen = false;
+                if (!IsDisposed && !Disposing)
+                {
+                    eyedropper.Selected = false;
+                    eyedropper.Enabled = true;
+                    tips.Active = TooltipService.Enabled;
+                }
+            }
         }
 
         private Label AddLabel(string text, bool bold)
@@ -275,7 +319,17 @@ namespace SnipStudio
                 int width = Math.Max(1, ClientSize.Width), y = 0;
                 columns = width >= S(340) ? 8 : width >= S(235) ? 6 : 4;
                 columns = Math.Min(columns, Math.Max(1, width / Math.Max(1, S(20))));
-                paletteLabel.SetBounds(0, y, width, S(22)); y += S(26);
+                if (width >= S(220))
+                {
+                    int sampleWidth = Math.Min(S(116), width / 2);
+                    paletteLabel.SetBounds(0, y, Math.Max(1, width - sampleWidth - S(8)), S(30));
+                    eyedropper.SetBounds(width - sampleWidth, y, sampleWidth, S(30)); y += S(34);
+                }
+                else
+                {
+                    paletteLabel.SetBounds(0, y, width, S(22)); y += S(25);
+                    eyedropper.SetBounds(0, y, width, S(30)); y += S(34);
+                }
                 y = LayoutSwatches(swatches, y, width); y += S(8);
                 if (recentSwatches.Count != 0)
                 {

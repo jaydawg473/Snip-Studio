@@ -14,6 +14,9 @@ namespace SnipStudio
         private static MainForm trayOwner;
         private bool printScreenRegistered, forceExit, hotkeysTrayDisposed;
         private bool printScreenWarningQueued, trayHintShown;
+        private bool printScreenAssignmentEventsAttached;
+        private int printScreenRefreshQueued, printScreenRegistrationError;
+        private WindowsPrintScreenAssignmentState printScreenAssignmentState = WindowsPrintScreenAssignmentState.WindowsDefault;
         private string printScreenShortcutStatus = "Print Screen has not been registered.";
         private NotifyIcon trayIcon;
         private Icon trayIconImage;
@@ -37,14 +40,45 @@ namespace SnipStudio
 
         private void InitializeHotkeysAndTray()
         {
-            if (IsDisposed || hotkeysTrayDisposed) return;
+            if (layoutTestMode || IsDisposed || hotkeysTrayDisposed) return;
+            if (!printScreenAssignmentEventsAttached)
+            {
+                printScreenAssignmentEventsAttached = true;
+                WindowsPrintScreenAssignment.RefreshRequested += OnPrintScreenAssignmentRefresh;
+                WindowsPrintScreenAssignment.StartWatching();
+                Activated += OnPrintScreenWindowActivated;
+            }
             ConfigureTrayIcon();
             ConfigurePrintScreenShortcut();
         }
 
+        private void OnPrintScreenWindowActivated(object sender, EventArgs e)
+        {
+            if (!layoutTestMode && IsHandleCreated && !closing) WindowsPrintScreenAssignment.RequestRefresh();
+        }
+
+        private void OnPrintScreenAssignmentRefresh(object sender, EventArgs e)
+        {
+            if (layoutTestMode || IsDisposed || Disposing || closing || hotkeysTrayDisposed || !IsHandleCreated) return;
+            if (System.Threading.Interlocked.Exchange(ref printScreenRefreshQueued, 1) != 0) return;
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    System.Threading.Interlocked.Exchange(ref printScreenRefreshQueued, 0);
+                    if (IsDisposed || Disposing || closing || hotkeysTrayDisposed || !IsHandleCreated) return;
+                    // Retry the native registration after returning from Windows
+                    // settings, including when the old registration succeeded.
+                    ReleaseAdditionalHotkeys();
+                    ConfigurePrintScreenShortcut();
+                });
+            }
+            catch (InvalidOperationException) { System.Threading.Interlocked.Exchange(ref printScreenRefreshQueued, 0); }
+        }
+
         private void ConfigurePrintScreenShortcut()
         {
-            if (IsDisposed || Disposing || hotkeysTrayDisposed) return;
+            if (layoutTestMode || IsDisposed || Disposing || hotkeysTrayDisposed) return;
             if (!preferences.UsePrintScreen)
             {
                 if (printScreenOwner != null) printScreenOwner.ReleaseAdditionalHotkeys();
@@ -54,25 +88,32 @@ namespace SnipStudio
                 return;
             }
             if (!IsHandleCreated) return;
+            printScreenAssignmentState = WindowsPrintScreenAssignment.Read();
             if (printScreenOwner != null && !ReferenceEquals(printScreenOwner, this) &&
                 !printScreenOwner.IsDisposed && printScreenOwner.printScreenRegistered)
             {
-                printScreenShortcutStatus = "Print Screen is handled by another Snip Studio window.";
+                printScreenShortcutStatus = WindowsPrintScreenAssignment.DescribeShortcut(true, true, 0, printScreenAssignmentState) + " Another Snip Studio window owns the shortcut.";
                 RefreshTrayShortcutState();
                 return;
             }
-            if (printScreenRegistered) return;
+            if (printScreenRegistered)
+            {
+                printScreenShortcutStatus = WindowsPrintScreenAssignment.DescribeShortcut(true, true, 0, printScreenAssignmentState);
+                RefreshTrayShortcutState();
+                return;
+            }
             printScreenRegistered = RegisterHotKey(Handle, PrintScreenHotkeyId, 0x4000, 0x2C);
+            printScreenRegistrationError = printScreenRegistered ? 0 : Marshal.GetLastWin32Error();
             if (printScreenRegistered)
             {
                 printScreenOwner = this;
-                printScreenWarningQueued = false;
-                printScreenShortcutStatus = "Print Screen is registered. If Windows opens Snipping Tool, review Windows keyboard settings.";
+                if (printScreenAssignmentState == WindowsPrintScreenAssignmentState.ExplicitOff) printScreenWarningQueued = false;
+                printScreenShortcutStatus = WindowsPrintScreenAssignment.DescribeShortcut(true, true, 0, printScreenAssignmentState);
+                if (printScreenAssignmentState != WindowsPrintScreenAssignmentState.ExplicitOff) QueuePrintScreenWarning();
             }
             else
             {
-                int error = Marshal.GetLastWin32Error();
-                printScreenShortcutStatus = "Print Screen could not be registered (Windows error " + error + "). Use New snip or Ctrl+Alt+S, or review Windows keyboard settings.";
+                printScreenShortcutStatus = WindowsPrintScreenAssignment.DescribeShortcut(true, false, printScreenRegistrationError, printScreenAssignmentState);
                 QueuePrintScreenWarning();
             }
             RefreshTrayShortcutState();
@@ -150,6 +191,7 @@ namespace SnipStudio
             trayShortcutState.Enabled = false;
             trayMenu.Items.Add(trayShortcutState);
             trayMenu.Items.Add("Windows keyboard settings…", null, delegate { OpenWindowsKeyboardSettings(); });
+            trayMenu.Items.Add("Retry Print Screen", null, delegate { WindowsPrintScreenAssignment.RequestRefresh(); });
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit Snip Studio", null, delegate { ExitFromTray(); });
             trayIcon = new NotifyIcon();
@@ -278,11 +320,12 @@ namespace SnipStudio
             {
                 BeginInvoke((MethodInvoker)delegate
                 {
-                    if (IsDisposed || printScreenRegistered || !preferences.UsePrintScreen) return;
+                    if (IsDisposed || !preferences.UsePrintScreen ||
+                        (printScreenRegistered && printScreenAssignmentState == WindowsPrintScreenAssignmentState.ExplicitOff)) return;
                     SetStatus(printScreenShortcutStatus);
                     if (!Visible && trayIcon != null)
-                        trayIcon.ShowBalloonTip(6000, "Print Screen is unavailable",
-                            "Use Ctrl+Alt+S or open Windows keyboard settings from the tray menu.", ToolTipIcon.Warning);
+                        trayIcon.ShowBalloonTip(6000, "Review Print Screen setup",
+                            "Windows may open Snipping Tool first. Open Windows keyboard settings from the tray menu, turn off its Print Screen capture option, then Retry Print Screen.", ToolTipIcon.Warning);
                 });
             }
             catch (InvalidOperationException) { }
@@ -293,12 +336,15 @@ namespace SnipStudio
             if (trayShortcutState != null)
             {
                 trayShortcutState.Text = !preferences.UsePrintScreen ? "Print Screen: off" :
+                    printScreenAssignmentState != WindowsPrintScreenAssignmentState.ExplicitOff ? "Print Screen: review Windows setup" :
                     printScreenRegistered || (printScreenOwner != null && printScreenOwner.printScreenRegistered) ?
                     "Print Screen: registered" : "Print Screen: unavailable";
                 trayShortcutState.ToolTipText = printScreenShortcutStatus;
             }
             if (trayIcon != null)
-                trayIcon.Text = preferences.UsePrintScreen && !printScreenRegistered && printScreenOwner == null ?
+                trayIcon.Text = preferences.UsePrintScreen && printScreenAssignmentState != WindowsPrintScreenAssignmentState.ExplicitOff ?
+                    "Snip Studio — review Print Screen setup" :
+                    preferences.UsePrintScreen && !printScreenRegistered && printScreenOwner == null ?
                     "Snip Studio — Print Screen unavailable" : "Snip Studio";
         }
 
@@ -312,7 +358,11 @@ namespace SnipStudio
 
         private void OpenWindowsKeyboardSettings()
         {
-            try { Process.Start(new ProcessStartInfo("ms-settings:easeofaccess-keyboard") { UseShellExecute = true }); }
+            try
+            {
+                SetStatus(WindowsPrintScreenAssignment.SetupInstructions);
+                Process.Start(new ProcessStartInfo(WindowsPrintScreenAssignment.SettingsUri) { UseShellExecute = true });
+            }
             catch (Exception ex) { ShowFailure("Windows keyboard settings could not be opened", ex); }
         }
 
@@ -328,6 +378,13 @@ namespace SnipStudio
         {
             if (hotkeysTrayDisposed) return;
             hotkeysTrayDisposed = true;
+            if (printScreenAssignmentEventsAttached)
+            {
+                printScreenAssignmentEventsAttached = false;
+                Activated -= OnPrintScreenWindowActivated;
+                WindowsPrintScreenAssignment.RefreshRequested -= OnPrintScreenAssignmentRefresh;
+                WindowsPrintScreenAssignment.StopWatching();
+            }
             ReleaseAdditionalHotkeys();
             // Release the existing capture shortcut before giving a surviving window
             // a chance to own it. The base destroy hook then sees it already released.

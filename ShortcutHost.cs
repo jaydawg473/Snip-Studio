@@ -81,7 +81,7 @@ namespace SnipStudio
     // All instance members must be used on the creating UI thread.
     internal sealed class ShortcutHost : IDisposable
     {
-        private const int WmCopyData = 0x004A, WmHotkey = 0x0312, WmDispatch = 0x8000 + 0x53;
+        private const int WmCopyData = 0x004A, WmHotkey = 0x0312, WmDispatch = 0x8000 + 0x53, WmRefreshPrintScreen = 0x8000 + 0x54;
         private const int PrintScreenId = 0x5351, CaptureId = 0x5352;
         private const int CopyDataMagic = 0x53534831, Acknowledged = 0x5353;
         private const int MaxRequestBytes = 65536, MaxQueuedRequests = 16;
@@ -97,6 +97,9 @@ namespace SnipStudio
         private Mutex instanceMutex;
         private bool ownsMutex, disposed, idleEnabled, dispatchPosted, idleDispatchPending, printScreenRegistered, captureRegistered;
         private bool installerExitPending, installerExitDispatching;
+        private bool idleUsePrintScreen, printScreenAssignmentEventsAttached;
+        private int printScreenRefreshPosted;
+        private WindowsPrintScreenAssignmentState printScreenAssignmentState = WindowsPrintScreenAssignmentState.WindowsDefault;
         private uint installerExitMessage;
         private BrokerWindow window;
         private NotifyIcon trayIcon;
@@ -130,9 +133,19 @@ namespace SnipStudio
                     window = new BrokerWindow(this);
                     window.CreateBroker(BrokerCaption);
                     processPrimary = this;
+                    WindowsPrintScreenAssignment.RefreshRequested += OnPrintScreenAssignmentRefresh;
+                    printScreenAssignmentEventsAttached = true;
+                    WindowsPrintScreenAssignment.StartWatching();
                 }
                 catch
                 {
+                    if (printScreenAssignmentEventsAttached)
+                    {
+                        WindowsPrintScreenAssignment.RefreshRequested -= OnPrintScreenAssignmentRefresh;
+                        WindowsPrintScreenAssignment.StopWatching();
+                        printScreenAssignmentEventsAttached = false;
+                    }
+                    if (ReferenceEquals(processPrimary, this)) processPrimary = null;
                     if (window != null) { window.DestroyBroker(); window = null; }
                     ReleaseMutex();
                     throw;
@@ -251,27 +264,41 @@ namespace SnipStudio
             if (!IsPrimary) return;
             ReleaseHotkeys();
             idleEnabled = enabled;
+            idleUsePrintScreen = usePrintScreen;
             printScreenStatus = "Print Screen: off";
             captureStatus = "Ctrl+Alt+S: off";
             if (!enabled) { RemoveTray(); return; }
             captureRegistered = RegisterHotKey(window.Handle, CaptureId, 0x4000 | 0x0001 | 0x0002, (uint)Keys.S);
             int captureError = captureRegistered ? 0 : Marshal.GetLastWin32Error();
             captureStatus = captureRegistered ? "Ctrl+Alt+S: registered" : "Ctrl+Alt+S: unavailable (Windows error " + captureError + ")";
+            int printError = 0;
             if (usePrintScreen)
             {
+                printScreenAssignmentState = WindowsPrintScreenAssignment.Read();
                 printScreenRegistered = RegisterHotKey(window.Handle, PrintScreenId, 0x4000, 0x2C);
-                int printError = printScreenRegistered ? 0 : Marshal.GetLastWin32Error();
-                printScreenStatus = printScreenRegistered ? "Print Screen: registered" : "Print Screen: unavailable (Windows error " + printError + ")";
+                printError = printScreenRegistered ? 0 : Marshal.GetLastWin32Error();
+                printScreenStatus = !printScreenRegistered ? "Print Screen: unavailable (Windows error " + printError + ")" :
+                    printScreenAssignmentState == WindowsPrintScreenAssignmentState.ExplicitOff ? "Print Screen: registered" : "Print Screen: review Windows setup";
             }
             EnsureTray();
             printScreenState.Text = printScreenStatus;
-            printScreenState.ToolTipText = printScreenRegistered ?
-                "Windows can still assign Print Screen to Snipping Tool. Review Windows keyboard settings if needed." :
-                "Use New snip, Ctrl+Alt+S, or review Windows keyboard settings. Snip Studio does not change Windows key assignments.";
+            printScreenState.ToolTipText = WindowsPrintScreenAssignment.DescribeShortcut(usePrintScreen, printScreenRegistered, printError, printScreenAssignmentState);
             captureState.Text = captureStatus;
-            trayIcon.Text = usePrintScreen && !printScreenRegistered ? "Snip Studio - Print Screen unavailable" :
+            trayIcon.Text = usePrintScreen && printScreenAssignmentState != WindowsPrintScreenAssignmentState.ExplicitOff ? "Snip Studio - review Print Screen setup" :
+                usePrintScreen && !printScreenRegistered ? "Snip Studio - Print Screen unavailable" :
                 !captureRegistered ? "Snip Studio - Ctrl+Alt+S unavailable" : "Snip Studio - shortcuts ready";
             trayIcon.Visible = true;
+        }
+
+        private void OnPrintScreenAssignmentRefresh(object sender, EventArgs e)
+        {
+            BrokerWindow target = window;
+            if (disposed || !idleEnabled || target == null) return;
+            IntPtr targetHandle = target.Handle;
+            if (targetHandle == IntPtr.Zero) return;
+            if (Interlocked.Exchange(ref printScreenRefreshPosted, 1) != 0) return;
+            if (!PostMessage(targetHandle, WmRefreshPrintScreen, IntPtr.Zero, IntPtr.Zero))
+                Interlocked.Exchange(ref printScreenRefreshPosted, 0);
         }
 
         private void EnsureTray()
@@ -334,6 +361,7 @@ namespace SnipStudio
             trayMenu.Items.Add(printScreenState);
             trayMenu.Items.Add(captureState);
             trayMenu.Items.Add("Windows keyboard settings...", null, delegate { OpenKeyboardSettings(); });
+            trayMenu.Items.Add("Retry Print Screen", null, delegate { WindowsPrintScreenAssignment.RequestRefresh(); });
             trayMenu.Items.Add(new ToolStripSeparator());
             trayMenu.Items.Add("Exit Snip Studio", null, delegate { if (ExitRequested != null) ExitRequested(); });
             trayImage = LoadTrayIcon();
@@ -368,7 +396,12 @@ namespace SnipStudio
 
         private static void OpenKeyboardSettings()
         {
-            try { Process.Start(new ProcessStartInfo("ms-settings:easeofaccess-keyboard") { UseShellExecute = true }); }
+            try
+            {
+                if (processPrimary != null && processPrimary.trayIcon != null)
+                    processPrimary.trayIcon.ShowBalloonTip(7000, "Set up Print Screen", WindowsPrintScreenAssignment.SetupInstructions, ToolTipIcon.Info);
+                Process.Start(new ProcessStartInfo(WindowsPrintScreenAssignment.SettingsUri) { UseShellExecute = true });
+            }
             catch (Exception ex)
             {
                 MessageBox.Show("Windows keyboard settings could not be opened.\n\n" + ex.Message,
@@ -526,6 +559,12 @@ namespace SnipStudio
             if (disposed) return;
             disposed = true;
             idleEnabled = false;
+            if (printScreenAssignmentEventsAttached)
+            {
+                printScreenAssignmentEventsAttached = false;
+                WindowsPrintScreenAssignment.RefreshRequested -= OnPrintScreenAssignmentRefresh;
+                WindowsPrintScreenAssignment.StopWatching();
+            }
             if (idleDispatchPending) { Application.Idle -= DispatchWhenIdle; idleDispatchPending = false; }
             ReleaseHotkeys();
             RemoveTray();
@@ -562,6 +601,12 @@ namespace SnipStudio
                     return;
                 }
                 if (message.Msg == WmDispatch) { owner.DispatchOne(); return; }
+                if (message.Msg == WmRefreshPrintScreen)
+                {
+                    Interlocked.Exchange(ref owner.printScreenRefreshPosted, 0);
+                    if (!owner.disposed && owner.idleEnabled) owner.SetIdleShortcuts(true, owner.idleUsePrintScreen);
+                    return;
+                }
                 if (message.Msg == WmHotkey)
                 {
                     int id = message.WParam.ToInt32();

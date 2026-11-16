@@ -1,10 +1,21 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.5
+# Snip Studio 0.6.6
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
+
+## Eyedropper and Print Screen setup in 0.6.6
+
+- **Eyedropper** is available in the shared color palette. Click a visible color anywhere on the connected desktop, including the snip, then choose **Use color** or **Apply** to commit the palette draft. Sampling preserves shape opacity; Escape or right-click cancels.
+- The temporary desktop image stays in memory. A magnifier and measured RGB/hex preview support sampling without saving another screenshot or changing capture/taskbar policies.
+- Settings shows Windows' Print Screen assignment as **Off**, **On**, **Windows default**, or **Unavailable**. **Set up Print Screen** opens Windows keyboard settings with instructions, while **Retry Print Screen** and returning to the app refresh registration.
+- Windows' own **Use Print Screen to open screen capture** option must be turned **Off** for the intended background shortcut setup. An editor or Snip Studio's shortcut listener must be running. Registration alone does not guarantee priority over Windows; no Windows preference is silently changed and no low-level keyboard hook is installed.
+
+The final signed application passed 1,733 focused component/layout/rendering checks and 14,423 additional toolbar/options regression checks, for 16,156 total, on November 16, 2026. Live desktop sampling, physical mixed-DPI monitor transitions, native keyboard routing/focus and installed upgrades remain unverified. See [VALIDATION.txt](VALIDATION.txt) for the exact signed application hash and scope.
+
+Download the signed [0.6.6 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.6/SnipStudio-0.6.6-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.6/SnipStudio-0.6.6-signed-portable.zip).
 
 ## Toolbar and settings layout in 0.6.5
 
@@ -14,7 +25,7 @@ Capture across monitors, annotate images, edit recognized text, and export the r
 
 The final signed application passed 14,849 component, rendering and unshown layout checks on November 16, 2026. Physical mixed-monitor DPI transitions, displayed native UI/input and installed upgrades remain unverified. See [VALIDATION.txt](VALIDATION.txt) for the exact application hash and scope.
 
-Download the signed [0.6.5 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.5/SnipStudio-0.6.5-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.5/SnipStudio-0.6.5-signed-portable.zip).
+The preceding 0.6.5 results describe that historical release.
 
 ## Compact options in 0.6.4
 

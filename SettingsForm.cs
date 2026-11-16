@@ -64,6 +64,10 @@ namespace SnipStudio
         private SettingsToggle compactStart, resizeToSnip, showTooltips, requireCtrlWheel;
         private SettingsToggle autoCheckForUpdates;
         private SettingsToggle usePrintScreen, keepShortcutsAfterClose, keepRunningInTray, startupWithWindows;
+        private Label printScreenSetupStatus;
+        private WindowsPrintScreenAssignmentState observedPrintScreenAssignment;
+        private bool printScreenAssignmentObserved, waitingForWindowsKeyboardSettings;
+        private int printScreenSetupRefreshQueued;
 
         internal bool CaptureRestoreWithoutActivation { get; set; }
 
@@ -108,6 +112,8 @@ namespace SnipStudio
             foreach (InlineChoiceBox choices in new InlineChoiceBox[] { theme, annotationToolbarPosition, detectedEditors, microphoneDevices, systemAudioDevices })
                 choices.ExpansionChanged += delegate { Reflow(true); };
             StudioTheme.ThemeChanged += OnThemeChanged;
+            WindowsPrintScreenAssignment.RefreshRequested += OnPrintScreenSetupRefresh;
+            Activated += OnPrintScreenSetupActivated;
             scroll.Paint += OnSettingsFirstPaint;
             Shown += delegate
             {
@@ -236,15 +242,29 @@ namespace SnipStudio
             shortcut.Font = new Font(Font, FontStyle.Bold);
             shortcut.ForeColor = StudioTheme.Text;
             AddBody(shortcuts, "Start a capture from another app while Snip Studio or its shortcut listener is running. If another app uses this shortcut, use New or Ctrl + N in Snip Studio.", true);
-            usePrintScreen = AddToggle(shortcuts, "Use Print Screen to capture", "Capture with Print Screen while Snip Studio is running. If Windows or another app reserves that key, try Ctrl + Alt + S or New.");
+            usePrintScreen = AddToggle(shortcuts, "Use Print Screen to capture", "Capture while Snip Studio or its shortcut listener is running. Turn off Windows' Print Screen screen-capture assignment below so Windows Snipping Tool does not take the key first.");
             keepShortcutsAfterClose = AddToggle(shortcuts, "Keep capture shortcuts ready after closing", "Close the editor and release its snip; a small notification-area listener keeps Print Screen and Ctrl + Alt + S available. Print Screen must be enabled above and available in Windows. Exit Snip Studio stops the listener.");
             keepRunningInTray = AddToggle(shortcuts, "Keep the editor in the notification area", "Optional: Close hides the editor and keeps its current snip in memory. Turn this off to close the editor and release its snip. The separate shortcut-listener option above can keep capture shortcuts ready. Use Exit Snip Studio to quit.");
             startupWithWindows = AddToggle(shortcuts, "Start with Windows", "Start when you sign in. Starts quietly with the hidden editor when notification-area editor mode is on, or with only the shortcut listener when Keep capture shortcuts ready after closing is on. Otherwise opens the main window. Off until you choose it.");
-            AddBody(shortcuts, "Print Screen behavior is controlled by Windows. Review its assignment in Windows keyboard settings; Snip Studio does not change that assignment.", true);
-            StudioButton keyboard = Button("Windows keyboard settings", "settings", 252);
-            keyboard.Margin = new Padding(0, 8, 0, 0);
+            printScreenSetupStatus = AddBody(shortcuts, "Windows Print Screen assignment will be checked when Settings opens.", true);
+            printScreenSetupStatus.AccessibleName = "Windows Print Screen assignment status";
+            AddBody(shortcuts, WindowsPrintScreenAssignment.SetupInstructions, true);
+            AddBody(shortcuts, "Setup opens Windows keyboard settings; Snip Studio does not change Windows settings for you. " + WindowsPrintScreenAssignment.LifetimeInstructions, true);
+            TableLayoutPanel printScreenActions = new TableLayoutPanel { AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                Dock = DockStyle.Top, ColumnCount = 2, RowCount = 1, Margin = new Padding(0, 8, 0, 0) };
+            printScreenActions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            printScreenActions.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+            printScreenActions.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            StudioButton keyboard = Button("Set up Print Screen", "settings", 216);
+            keyboard.Margin = new Padding(0, 0, 10, 0);
+            keyboard.AccessibleDescription = "Opens Windows keyboard settings. Turn off Windows' Print Screen screen-capture option, then return here and retry.";
             keyboard.Click += delegate { OpenKeyboardSettings(); };
-            AddRow(shortcuts, keyboard);
+            StudioButton retryPrintScreen = Button("Retry Print Screen", "redo", 200);
+            retryPrintScreen.Margin = Padding.Empty;
+            retryPrintScreen.Click += delegate { RefreshPrintScreenSetup(true); };
+            printScreenActions.Controls.Add(keyboard, 0, 0);
+            printScreenActions.Controls.Add(retryPrintScreen, 1, 0);
+            AddRow(shortcuts, printScreenActions);
 
             TableLayoutPanel privacy = Card("Your files", "Preferences are stored on this PC.");
             AddBody(privacy, "Screenshots and recordings are saved to the folders shown above. Those folders’ existing backup or sync settings still apply.", true);
@@ -1154,6 +1174,8 @@ namespace SnipStudio
                 if (firstPaintFallback != null) { firstPaintFallback.Stop(); firstPaintFallback.Dispose(); firstPaintFallback = null; }
                 if (editorIconCancellation != null) editorIconCancellation.Cancel();
                 StudioTheme.ThemeChanged -= OnThemeChanged;
+                WindowsPrintScreenAssignment.RefreshRequested -= OnPrintScreenSetupRefresh;
+                Activated -= OnPrintScreenSetupActivated;
                 if (detectedEditorIcon.Image != null) { detectedEditorIcon.Image.Dispose(); detectedEditorIcon.Image = null; }
                 if (borderWidth.Parent == null) borderWidth.Dispose();
             }
@@ -1253,8 +1275,62 @@ namespace SnipStudio
 
         private void OpenKeyboardSettings()
         {
-            try { Process.Start(new ProcessStartInfo { FileName = "ms-settings:easeofaccess-keyboard", UseShellExecute = true }); }
-            catch (Exception error) { ShowProblem("Windows keyboard settings could not be opened. " + error.Message); }
+            waitingForWindowsKeyboardSettings = true;
+            try { Process.Start(new ProcessStartInfo { FileName = WindowsPrintScreenAssignment.SettingsUri, UseShellExecute = true }); }
+            catch (Exception error)
+            {
+                waitingForWindowsKeyboardSettings = false;
+                ShowProblem("Windows keyboard settings could not be opened. " + error.Message);
+            }
+        }
+
+        private void OnPrintScreenSetupActivated(object sender, EventArgs e)
+        {
+            if (!IsHandleCreated || !Visible || IsDisposed || Disposing || buildingSettings) return;
+            bool previouslyObserved = printScreenAssignmentObserved;
+            WindowsPrintScreenAssignmentState previous = observedPrintScreenAssignment;
+            RefreshPrintScreenSetup(false);
+            if (!previouslyObserved || waitingForWindowsKeyboardSettings || previous != observedPrintScreenAssignment)
+            {
+                waitingForWindowsKeyboardSettings = false;
+                WindowsPrintScreenAssignment.RequestRefresh();
+            }
+        }
+
+        private void OnPrintScreenSetupRefresh(object sender, EventArgs e)
+        {
+            if (!IsHandleCreated || !Visible || IsDisposed || Disposing || buildingSettings) return;
+            if (Interlocked.Exchange(ref printScreenSetupRefreshQueued, 1) != 0) return;
+            try
+            {
+                BeginInvoke((MethodInvoker)delegate
+                {
+                    Interlocked.Exchange(ref printScreenSetupRefreshQueued, 0);
+                    RefreshPrintScreenSetup(false);
+                });
+            }
+            catch (InvalidOperationException) { Interlocked.Exchange(ref printScreenSetupRefreshQueued, 0); }
+        }
+
+        private void ApplyPrintScreenSetupState(WindowsPrintScreenAssignmentState state)
+        {
+            observedPrintScreenAssignment = state;
+            printScreenAssignmentObserved = true;
+            if (printScreenSetupStatus != null) printScreenSetupStatus.Text = WindowsPrintScreenAssignment.Describe(state);
+        }
+
+        private void RefreshPrintScreenSetup(bool retryShortcuts)
+        {
+            // Keep Windows probing out of Settings construction and unshown
+            // layout fixtures. There is no registry polling timer.
+            if (!IsHandleCreated || !Visible || IsDisposed || Disposing || buildingSettings) return;
+            ApplyPrintScreenSetupState(WindowsPrintScreenAssignment.Read());
+            Reflow(true);
+            if (retryShortcuts)
+            {
+                status.Text = "Print Screen retry requested using your saved shortcut settings.";
+                WindowsPrintScreenAssignment.RequestRefresh();
+            }
         }
 
         private static string ValidateFolder(string value)
