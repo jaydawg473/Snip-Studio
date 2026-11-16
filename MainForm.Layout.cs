@@ -57,7 +57,8 @@ namespace SnipStudio
             get { return captureToolbar == null ? Ui(82) : captureToolbar.Height +
                 updateNoticeHeight +
                 (canvas.HasImage && !AnnotationToolbarIsVertical ? annotationToolbar.Height : 0) +
-                (canvas.HasImage && (canvas.TextActionsMode || IsCropContext || HasInlineTextWorkflow) ? contextToolbar.Height : 0) + footerStrip.Height; }
+                (canvas.HasImage && (canvas.TextActionsMode || IsCropContext || HasInlineTextWorkflow) ? contextToolbar.Height : 0) +
+                (IsToolOptionsOpen ? toolOptionsDockBounds.Height : 0) + footerStrip.Height; }
         }
 
         private bool AnnotationToolbarIsVertical
@@ -456,6 +457,10 @@ namespace SnipStudio
                 }
                 contextToolbar.SetBounds(0, y, w, contextHeight);
                 y += contextHeight;
+                // Options are a compact band in the chrome, outside the image.
+                // Keep the same location for Top/Bottom/Left/Right toolbars.
+                int toolOptionsHeight = LayoutDockedToolOptions(w, y);
+                y += toolOptionsHeight;
                 int footer = Ui(28), zoomRowY = 0;
                 // Reserve the full percentage slot so animated decimals neither
                 // clip nor resize the workspace while the wheel is moving.
@@ -492,7 +497,10 @@ namespace SnipStudio
                     int nonClientHeight = Math.Max(0, Height - ClientSize.Height);
                     int requiredViewport = canvas.HasImage && verticalAnnotation
                         ? Math.Max(Ui(96), MeasureVerticalAnnotationToolbar(showTextSize, false).Height) : Ui(96);
-                    int minimumHeight = Math.Min(work.Height, y + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
+                    // Opening options trades a small amount of viewport for
+                    // chrome, without growing the window or changing its saved
+                    // minimum. Closing therefore restores the same viewport.
+                    int minimumHeight = Math.Min(work.Height, y - toolOptionsHeight + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
                     if (MinimumSize.Height != minimumHeight) MinimumSize = new Size(MinimumSize.Width, minimumHeight);
                     if (verticalAnnotation || cropMode || shapeMode || composeMode)
                     {
@@ -510,8 +518,14 @@ namespace SnipStudio
                 bool leftAnnotation = String.Equals(preferences.AnnotationToolbarPosition, "Left", StringComparison.OrdinalIgnoreCase);
                 if (canvas.HasImage && verticalAnnotation)
                     annotationWidth = LayoutVerticalAnnotationToolbar(leftAnnotation, y, viewportHeight, w, showTextSize);
+                int viewportLeft = leftAnnotation ? annotationWidth : 0;
+                int availableViewportWidth = Math.Max(1, w - annotationWidth);
+                int paletteWidth = InlineAnnotationPaletteDockWidth(availableViewportWidth);
                 using (IDisposable preservedView = preserveView ? canvas.PreserveViewForLayout() : null)
-                    workspace.SetBounds(leftAnnotation ? annotationWidth : 0, y, Math.Max(1, w - annotationWidth), viewportHeight);
+                {
+                    workspace.SetBounds(viewportLeft, y, Math.Max(1, availableViewportWidth - paletteWidth), viewportHeight);
+                    LayoutInlineAnnotationPaletteDock(new Rectangle(viewportLeft + availableViewportWidth - paletteWidth, y, paletteWidth, viewportHeight));
+                }
                 lastViewLayoutClientSize = ClientSize;
                 lastViewLayoutImageIdentity = canvas.ImageIdentity;
                 int zoomRight = w - Ui(8);

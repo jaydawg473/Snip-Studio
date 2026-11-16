@@ -29,6 +29,8 @@ checks/*
 !checks/Verify-ColorDialogs.ps1
 !checks/Verify-ObjectEditing.ps1
 !checks/Verify-EraseAll.ps1
+!checks/Verify-RecentSnipsUi.ps1
+!checks/Verify-RecentSnips.ps1
 !checks/Verify-EmojiRendering.ps1
 !checks/Verify-IconArtwork.ps1
 !checks/Verify-UnsavedClose.ps1

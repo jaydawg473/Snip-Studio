@@ -51,11 +51,38 @@ namespace SnipStudio
         private readonly ToolTip tips = TooltipService.RegisterProvider(new ToolTip());
         private readonly Font bodyFont, titleFont, kickerFont;
         private readonly float scale;
-        private Size preferredBody;
+        private Size preferredBody, scrollContentSize;
         private Rectangle workingArea;
         private bool restoring, resourcesDisposed;
+        private bool compactMode = true, showCompactCaption;
 
         internal Panel Content { get { return content; } }
+        // A single row may reserve viewport space for the native horizontal
+        // scrollbar without making that space part of the scrollable row.
+        // Empty retains the legacy SetContentSize scrolling contract.
+        internal Size ScrollContentSize
+        {
+            get { return scrollContentSize; }
+            set
+            {
+                scrollContentSize = value.IsEmpty ? Size.Empty : new Size(Math.Max(1, value.Width), Math.Max(1, value.Height));
+                ArrangeFrame();
+            }
+        }
+        internal bool CompactMode
+        {
+            get { return compactMode; }
+            set { if (compactMode != value) { compactMode = value; ArrangeFrame(); } }
+        }
+        internal bool ShowCompactCaption
+        {
+            get { return showCompactCaption; }
+            set { if (showCompactCaption != value) { showCompactCaption = value; ArrangeFrame(); } }
+        }
+        // Device-pixel reservations include their outside inset and the gap to
+        // the body. Callers subtract these from the available strip width.
+        internal int HeaderWidth { get { return compactMode ? S(showCompactCaption ? 88 : 8) : S(28); } }
+        internal int ReservedCloseWidth { get { return compactMode ? S(32) : 0; } }
         internal event EventHandler CardClosed;
         // Retained for existing combo-box handlers. An attached card remains
         // available while a nested field opens; it has no native auto-close.
@@ -85,7 +112,7 @@ namespace SnipStudio
                 tips.SetToolTip(closeButton, "Close tool options (Escape)");
                 frame.Controls.Add(header); frame.Controls.Add(content); header.Controls.Add(closeButton);
                 Controls.Add(frame);
-                SetContentSize(new Size(S(304), S(130)));
+                SetContentSize(new Size(S(304), S(32)));
                 StudioTheme.ThemeChanged += ThemeChanged;
             }
             catch { Dispose(); throw; }
@@ -124,8 +151,8 @@ namespace SnipStudio
             }
         }
 
-        // Keep the group name and current tool visually separate, as in the
-        // toolbar reference (SHAPE OPTIONS | Arrow, TEXT OPTIONS | Formatting).
+        // The context remains available to accessibility even when the compact
+        // strip hides its caption. Expanded chrome shows both group and tool.
         internal void SetContext(string kicker, string currentTool)
         {
             header.SetContext(kicker, currentTool);
@@ -154,7 +181,8 @@ namespace SnipStudio
         }
 
         // The size is for the scrolling body in device pixels, excluding the
-        // header and frame. Larger bodies remain reachable on smaller monitors.
+        // frame. Compact chrome shares the first body row and adds only eight
+        // logical pixels vertically. It never covers a borrowed field.
         internal void SetContentSize(Size size)
         {
             preferredBody = new Size(Math.Max(1, size.Width), Math.Max(1, size.Height));
@@ -170,12 +198,14 @@ namespace SnipStudio
         private void ArrangeFrame()
         {
             if (content == null || frame == null) return;
-            int inset = S(14), heading = S(28), gap = S(6);
-            Size desired = new Size(preferredBody.Width + inset * 2, preferredBody.Height + heading + gap + inset * 2);
+            int inset = compactMode ? S(4) : S(14), heading = S(compactMode ? 24 : 28), gap = S(6);
+            Size desired = compactMode
+                ? new Size(preferredBody.Width + HeaderWidth + ReservedCloseWidth, Math.Max(preferredBody.Height, heading) + inset * 2)
+                : new Size(preferredBody.Width + inset * 2, preferredBody.Height + heading + gap + inset * 2);
             if (!workingArea.IsEmpty)
             {
-                int maximumWidth = Math.Max(1, workingArea.Width - S(8));
-                int maximumHeight = Math.Max(1, workingArea.Height - S(8));
+                int maximumWidth = Math.Max(1, workingArea.Width - (compactMode ? 0 : S(8)));
+                int maximumHeight = Math.Max(1, workingArea.Height - (compactMode ? 0 : S(8)));
                 // Reserve room for a vertical scrollbar when the monitor forces
                 // a shorter body, so it does not create an unnecessary second bar.
                 if (desired.Height > maximumHeight)
@@ -184,14 +214,27 @@ namespace SnipStudio
             }
             Size = frame.Size = desired;
             frame.Location = Point.Empty;
-            header.SetBounds(inset, inset, Math.Max(1, desired.Width - inset * 2), heading);
-            content.SetBounds(inset, inset + heading + gap, Math.Max(1, desired.Width - inset * 2), Math.Max(1, desired.Height - heading - gap - inset * 2));
-            content.AutoScrollMinSize = preferredBody;
-            closeButton.SetBounds(Math.Max(0, header.Width - S(28)), 0, S(28), heading);
+            header.Compact = frame.Compact = compactMode;
+            header.Visible = !compactMode || showCompactCaption;
+            if (compactMode)
+            {
+                header.SetBounds(S(8), inset, Math.Max(1, HeaderWidth - S(16)), Math.Min(heading, Math.Max(1, desired.Height - inset * 2)));
+                content.SetBounds(HeaderWidth, inset, Math.Max(1, desired.Width - HeaderWidth - ReservedCloseWidth), Math.Max(1, desired.Height - inset * 2));
+                if (!Object.ReferenceEquals(closeButton.Parent, frame)) frame.Controls.Add(closeButton);
+                closeButton.SetBounds(Math.Max(0, desired.Width - S(28)), inset, S(24), Math.Min(heading, Math.Max(1, desired.Height - inset * 2)));
+            }
+            else
+            {
+                header.SetBounds(inset, inset, Math.Max(1, desired.Width - inset * 2), heading);
+                content.SetBounds(inset, inset + heading + gap, Math.Max(1, desired.Width - inset * 2), Math.Max(1, desired.Height - heading - gap - inset * 2));
+                if (!Object.ReferenceEquals(closeButton.Parent, header)) header.Controls.Add(closeButton);
+                closeButton.SetBounds(Math.Max(0, header.Width - S(28)), 0, S(28), heading);
+            }
+            content.AutoScrollMinSize = scrollContentSize.IsEmpty ? preferredBody : scrollContentSize;
             closeButton.BringToFront();
             // Clip the editor child to the same rounded card outline.
             Region previous = Region;
-            using (GraphicsPath outline = StudioTheme.Round(new RectangleF(0, 0, Math.Max(1, Width), Math.Max(1, Height)), 12 * scale))
+            using (GraphicsPath outline = StudioTheme.Round(new RectangleF(0, 0, Math.Max(1, Width), Math.Max(1, Height)), (compactMode ? 6 : 12) * scale))
                 Region = new Region(outline);
             if (previous != null) previous.Dispose();
             frame.Invalidate(); header.Invalidate();
@@ -256,6 +299,7 @@ namespace SnipStudio
         private sealed class FramePanel : Panel
         {
             private readonly float scale;
+            internal bool Compact { get; set; }
             internal FramePanel(float scale)
             {
                 this.scale = scale;
@@ -266,7 +310,7 @@ namespace SnipStudio
                 Graphics graphics = e.Graphics; graphics.Clear(ToolOptionsAppearance.Background);
                 graphics.SmoothingMode = SmoothingMode.AntiAlias;
                 float line = Math.Max(1f, scale);
-                using (GraphicsPath path = StudioTheme.Round(new RectangleF(line / 2, line / 2, Math.Max(1, Width - line), Math.Max(1, Height - line)), 12 * scale))
+                using (GraphicsPath path = StudioTheme.Round(new RectangleF(line / 2, line / 2, Math.Max(1, Width - line), Math.Max(1, Height - line)), (Compact ? 6 : 12) * scale))
                 using (Brush fill = new SolidBrush(ToolOptionsAppearance.Background))
                 using (Pen border = new Pen(ToolOptionsAppearance.Border, line))
                 {
@@ -288,6 +332,7 @@ namespace SnipStudio
             private string kicker, currentTool;
             private readonly float scale;
             private readonly Font kickerFont;
+            internal bool Compact { get; set; }
             internal HeaderPanel(string title, float scale, Font kickerFont)
             {
                 this.scale = scale; this.kickerFont = kickerFont;
@@ -305,6 +350,14 @@ namespace SnipStudio
             protected override void OnPaint(PaintEventArgs e)
             {
                 Graphics graphics = e.Graphics; graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                if (Compact)
+                {
+                    string caption = currentTool.Length > 0 ? currentTool : kicker;
+                    if (caption.EndsWith(" OPTIONS", StringComparison.Ordinal)) caption = caption.Substring(0, caption.Length - 8);
+                    TextRenderer.DrawText(graphics, caption, kickerFont, ClientRectangle, ToolOptionsAppearance.Muted,
+                        TextFormatFlags.SingleLine | TextFormatFlags.VerticalCenter | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+                    return;
+                }
                 int available = Math.Max(0, Width - (int)Math.Ceiling(38 * scale));
                 int measured = TextRenderer.MeasureText(graphics, kicker, kickerFont, Size.Empty,
                     TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width;

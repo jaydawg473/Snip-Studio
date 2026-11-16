@@ -1,3 +1,63 @@
+SNIP STUDIO 0.6.4 - AUTOMATION FORGE, 2026-11-13
+https://automation-forge.com/
+
+COMPACT OPTIONS OUTSIDE THE SNIP
+Normal tool options occupy one slim row beneath the toolbars, in the band above
+the image. Large headings, instructions and the large sample box are removed
+from that row. Font and stroke size menus retain their samples. Advanced text
+still opens the full formatting editor. Eraser retains Erase all annotations
+and its Undo hint.
+
+Color and emoji choices open only when selected, in a reserved side area. The
+side area and the options row are outside the image workspace. Closing them
+returns that space to the image. Image zoom and source-center view are retained.
+On unusually narrow windows, the same control row scrolls horizontally rather
+than wrapping into the snip. Existing preferences, original emoji artwork,
+capture/recording behavior and the offline translation bundle are retained.
+
+MORE > RECENT SNIPS
+The in-app Recent snips gallery reads Windows' own list for Snip Studio when
+opened. Hover or select an image for a larger preview before opening it.
+Choose Open snip, double-click, or press Enter to open the selected image with
+the editor's unsaved-work safeguard. Previews run in bounded background work;
+unavailable previews are identified without deleting list entries. No second
+recent-history database or new saved preference is created. Windows' taskbar
+Recent menu remains available.
+
+CURRENT VERIFICATION
+C#5/.NET Framework 4.8 built without warnings. Timestamped Automation Forge
+Authenticode signature verified Valid. Application SHA256:
+F0A0BA242F5E1319C6D218E85763E32A604C4ADB0BF36DA6D27AAA1248738919
+
+- editor-tool-updates: 124 passed.
+- object-editing: 160 passed.
+- color-dialogs: 97 passed.
+- erase-all: 23 passed.
+- crop-frame: 78 passed.
+- zoom-frames: 181 passed.
+- icon-artwork: 532 passed.
+- emoji-rendering: 338 passed.
+- scrolling-ui: 195 passed.
+- unsaved-close: 118 passed.
+- compact-options: 9255 passed.
+- recent-snips: 33 passed.
+- recent-snips-ui: 63 passed.
+
+The compact layout checks include exact zero intersection between the options,
+palette and workspace, all four toolbar positions, light/dark themes, synthetic
+scales, small/normal/fullscreen geometry, image-view retention and actual-control
+renders of full editor content. They do not prove physical monitor/DPI, native
+ComboBox message/closed-caption composition, mouse/focus or installed-upgrade
+acceptance. DrawToBitmap may allocate unshown child handles. No application
+entrypoint, user screenshots or preferences are used by these component checks.
+Final installer/ZIP integrity, signatures, payload/privacy and read-only
+readiness evidence are recorded against the exact final downloads separately.
+
+Save current work, then run SnipStudio-0.6.4-Setup.exe. The updater retains its
+normal Save/Cancel/close flow and does not reset saved preferences.
+
+HISTORICAL 0.6.3 RECORD FOLLOWS
+
 SNIP STUDIO 0.6.3 - AUTOMATION FORGE, 2026-11-13
 https://automation-forge.com/
 

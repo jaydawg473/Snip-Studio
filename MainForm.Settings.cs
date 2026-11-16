@@ -52,6 +52,8 @@ namespace SnipStudio
             moreMenu.Items.Add(zoom);
             ToolStripMenuItem shareItem = AddMenuItem("Share…", "copy", delegate { ShareCurrentImage(); });
             AddMenuItem("Open file…", "open", delegate { ChooseImage(); });
+            ToolStripMenuItem recentSnipsItem = AddMenuItem("Recent snips…", "open", delegate { ShowRecentSnips(); });
+            recentSnipsItem.ToolTipText = "Browse Windows recent snips with hover previews, then choose an image to open.";
             AddMenuItem("Full-screen capture (choose monitor)", "camera", delegate { SetCaptureKind(false); mode.SelectedIndex = 3; StartCapture(); });
             AddMenuItem("Capture all monitors", "fullscreen", delegate { SetCaptureKind(false); mode.SelectedIndex = 5; StartCapture(); });
             ToolStripMenuItem captureOpenSnipsItem = AddMenuItem("Capture open snips…", "camera", delegate { CaptureOpenSnips(); });
@@ -89,6 +91,7 @@ namespace SnipStudio
                 checkUpdatesItem.Enabled = !checkingForUpdates;
                 captureOpenSnipsItem.Enabled = CanStartBackgroundCapture() && !IsCaptureSavePending;
                 shareItem.Enabled = canvas.HasImage && !capturePending && !preparingShare;
+                recentSnipsItem.Enabled = CanChangeAnnotationAppearance && !IsCaptureSavePending;
                 foreach (ToolStripItem item in moreMenu.Items) item.ForeColor = StudioTheme.Text;
             };
             StudioTheme.StyleMenu(moreMenu);
@@ -160,6 +163,7 @@ namespace SnipStudio
 
         private void InitializeSettingsIntegration()
         {
+            InitializeRecentSnipsIntegration();
             automaticCopyTimer = new Timer();
             automaticCopyTimer.Interval = 180;
             automaticCopyTimer.Tick += async delegate
@@ -458,6 +462,7 @@ namespace SnipStudio
 
         private void DisposeSettingsIntegration()
         {
+            DisposeRecentSnipsIntegration();
             DisposeCaptureProcessing();
             if (delayPopup != null) { delayPopup.Dispose(); delayPopup = null; }
             if (automaticCopyTimer != null) { automaticCopyTimer.Stop(); automaticCopyTimer.Dispose(); automaticCopyTimer = null; }

@@ -7,9 +7,11 @@ namespace SnipStudio
     public sealed partial class MainForm
     {
         private Panel inlineAnnotationPalette;
+        private Panel paletteDockHost;
         private Func<Size> inlineAnnotationPaletteSize;
         private bool inlineAnnotationPaletteOwned;
         private Func<bool> inlineAnnotationPaletteIsCurrent;
+        private bool changingInlineAnnotationPalette;
 
         private Func<bool> InlinePaletteContextGuard()
         {
@@ -34,30 +36,63 @@ namespace SnipStudio
 
         private void SetInlineAnnotationPalette(Panel panel, Func<Size> preferredSize, bool owned = false, Func<bool> current = null)
         {
-            ClearInlineAnnotationPalette();
-            if (panel == null || panel.IsDisposed || toolOptionsPopup == null || toolOptionsPopup.IsDisposed) return;
-            inlineAnnotationPalette = panel;
-            inlineAnnotationPaletteSize = preferredSize;
-            inlineAnnotationPaletteOwned = owned;
-            inlineAnnotationPaletteIsCurrent = current;
-            // One scroll owner keeps the expanded palette reachable as part of
-            // the same attached card. The original picker still owns its panel.
-            panel.AutoScrollMinSize = Size.Empty;
-            panel.AutoScroll = false;
-            toolOptionsPopup.Content.Controls.Add(panel);
-            panel.Visible = true;
-            RefreshToolOptionsContents();
+            changingInlineAnnotationPalette = true;
+            try
+            {
+                ClearInlineAnnotationPalette();
+                if (panel == null || panel.IsDisposed || !IsToolOptionsOpen || paletteDockHost == null) return;
+                inlineAnnotationPalette = panel;
+                inlineAnnotationPaletteSize = preferredSize;
+                inlineAnnotationPaletteOwned = owned;
+                inlineAnnotationPaletteIsCurrent = current;
+                // The reserved side pane owns scrolling. Picker controls keep
+                // their full preferred width and their original Apply/Cancel.
+                panel.AutoScrollMinSize = Size.Empty;
+                panel.AutoScroll = false;
+                paletteDockHost.AutoScrollPosition = Point.Empty;
+                paletteDockHost.Controls.Add(panel);
+                panel.Visible = true;
+            }
+            finally
+            {
+                changingInlineAnnotationPalette = false;
+                if (!arrangingChrome && !openingToolOptions && !closing && !IsDisposed) LayoutChrome();
+            }
         }
 
-        private int LayoutInlineAnnotationPalette(int bodyWidth, int y)
+        private int InlineAnnotationPaletteDockWidth(int availableWidth)
         {
+            if (!IsToolOptionsOpen || inlineAnnotationPalette == null || inlineAnnotationPalette.IsDisposed) return 0;
+            Size preferred = inlineAnnotationPaletteSize == null ? inlineAnnotationPalette.Size : inlineAnnotationPaletteSize();
+            int desired = Math.Max(1, preferred.Width) + Ui(16) + Math.Max(SystemInformation.VerticalScrollBarWidth, Ui(17));
+            // Preserve a useful image viewport. At smaller widths the palette
+            // itself scrolls horizontally rather than clipping picker fields.
+            return Math.Min(desired, Math.Max(0, availableWidth - Math.Min(availableWidth, Ui(120))));
+        }
+
+        private void LayoutInlineAnnotationPaletteDock(Rectangle bounds)
+        {
+            if (paletteDockHost == null) return;
             Panel panel = inlineAnnotationPalette;
-            if (panel == null || panel.IsDisposed) return y;
+            if (!IsToolOptionsOpen || panel == null || panel.IsDisposed || bounds.Width <= 0)
+            {
+                paletteDockHost.Visible = false;
+                paletteDockHost.SetBounds(bounds.X, bounds.Y, 0, Math.Max(0, bounds.Height));
+                return;
+            }
             Size preferred = inlineAnnotationPaletteSize == null ? panel.Size : inlineAnnotationPaletteSize();
-            int width = Math.Max(1, preferred.Width);
-            panel.SetBounds(Ui(8), y + Ui(10), width, Math.Max(1, preferred.Height));
-            panel.Visible = true;
-            return panel.Bottom + Ui(8);
+            Point scroll = new Point(Math.Max(0, -paletteDockHost.AutoScrollPosition.X), Math.Max(0, -paletteDockHost.AutoScrollPosition.Y));
+            paletteDockHost.SuspendLayout();
+            try
+            {
+                paletteDockHost.AutoScrollPosition = Point.Empty;
+                paletteDockHost.SetBounds(bounds.X, bounds.Y, bounds.Width, bounds.Height);
+                panel.SetBounds(Ui(8), Ui(8), Math.Max(1, preferred.Width), Math.Max(1, preferred.Height));
+                paletteDockHost.AutoScrollMinSize = new Size(panel.Right + Ui(8), panel.Bottom + Ui(8));
+                paletteDockHost.AutoScrollPosition = scroll;
+                panel.Visible = paletteDockHost.Visible = true;
+            }
+            finally { paletteDockHost.ResumeLayout(false); }
         }
 
         private void ClearInlineAnnotationPalette()
@@ -68,15 +103,24 @@ namespace SnipStudio
             inlineAnnotationPaletteSize = null;
             inlineAnnotationPaletteOwned = false;
             inlineAnnotationPaletteIsCurrent = null;
-            if (panel == null || panel.IsDisposed) return;
-            panel.Visible = false;
-            if (panel.Parent != null) panel.Parent.Controls.Remove(panel);
-            if (owned) panel.Dispose();
+            if (paletteDockHost != null && !paletteDockHost.IsDisposed)
+            {
+                paletteDockHost.Visible = false;
+                paletteDockHost.AutoScrollMinSize = Size.Empty;
+            }
+            if (panel != null && !panel.IsDisposed)
+            {
+                panel.Visible = false;
+                if (panel.Parent != null) panel.Parent.Controls.Remove(panel);
+                if (owned) panel.Dispose();
+            }
+            if (panel != null && !changingInlineAnnotationPalette && !arrangingChrome && !openingToolOptions && !closing && !IsDisposed)
+                LayoutChrome();
         }
 
         private void OpenInlineInkPalette()
         {
-            if (!CanChangeAnnotationAppearance || toolOptionsPopup == null || toolOptionsPopup.IsDisposed) return;
+            if (!CanChangeAnnotationAppearance || !IsToolOptionsOpen) return;
             CloseNestedAnnotationPopups();
             Func<bool> current = InlinePaletteContextGuard();
             Panel panel = new Panel { BackColor = StudioTheme.Surface, ForeColor = StudioTheme.Text,

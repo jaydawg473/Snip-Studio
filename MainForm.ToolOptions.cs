@@ -17,7 +17,13 @@ namespace SnipStudio
         private Label optionsHint;
         private ToolSizePreview optionsSizePreview;
         private bool arrangingToolOptions, openingToolOptions;
+        private bool toolOptionsOpen;
+        private Rectangle toolOptionsDockBounds;
         private int queuedToolPopup;
+
+        // Control.Visible is inherited from the form, so it cannot describe an
+        // open options row while a layout-only check keeps the form unshown.
+        private bool IsToolOptionsOpen { get { return toolOptionsOpen && toolOptionsPopup != null && !toolOptionsPopup.IsDisposed; } }
 
         private bool HasInlineTextWorkflow { get { return canvas.HasImage && !canvas.TextActionsMode && canvas.InlineTextEditing; } }
 
@@ -25,6 +31,9 @@ namespace SnipStudio
         {
             toolOptionsParking = new Panel { Visible = false, Size = Size.Empty };
             chromeRoot.Controls.Add(toolOptionsParking);
+            paletteDockHost = new Panel { Visible = false, AutoScroll = true, Margin = Padding.Empty,
+                Padding = Padding.Empty, BackColor = StudioTheme.Surface, AccessibleName = "Expanded tool palette" };
+            chromeRoot.Controls.Add(paletteDockHost);
             List<Control> parked = new List<Control> { colorButton, width, textSize, advancedTextButton,
                 shapeFillButton, shapeOutlineButton, shapeSummary, emojiButton, snapToText };
             foreach (StudioButton button in shapeChoiceButtons.Values) parked.Add(button);
@@ -55,7 +64,7 @@ namespace SnipStudio
         {
             combo.DropDown += delegate
             {
-                if (toolOptionsPopup != null && toolOptionsPopup.Visible) toolOptionsPopup.AutoClose = false;
+                if (IsToolOptionsOpen) toolOptionsPopup.AutoClose = false;
                 int sampleWidth = Ui(combo == textSize ? 204 : 164);
                 combo.DropDownWidth = Math.Max(combo.DropDownWidth, Math.Min(sampleWidth, Math.Max(1, EditorWorkingArea().Width - Ui(16))));
             };
@@ -82,7 +91,7 @@ namespace SnipStudio
         {
             bool alreadySelected = !canvas.TextActionsMode && (canvas.Tool == tool || (tool == EditorTool.Text && IsInlineTextContext) ||
                 ((IsShapeToolKind(tool) || tool == EditorTool.Emoji) && IsShapeContext));
-            if (alreadySelected && toolOptionsPopup != null && !toolOptionsPopup.IsDisposed && toolOptionsPopup.Visible && toolOptionsKind == CurrentToolOptionsKind)
+            if (alreadySelected && IsToolOptionsOpen && toolOptionsKind == CurrentToolOptionsKind)
             {
                 queuedToolPopup++; CloseToolOptions(); return;
             }
@@ -117,8 +126,7 @@ namespace SnipStudio
         private void OpenToolOptions(Rectangle anchorBounds)
         {
             if (!CanChangeAnnotationAppearance || CurrentToolOptionsKind == AnnotationOptionsKind.None || toolOptionsParking == null) return;
-            ToolOptionsPopup popup = PrepareToolOptions(CurrentToolOptionsKind, anchorBounds);
-            popup.Show(this, AttachedToolOptionsLocation(popup), ToolStripDropDownDirection.BelowRight);
+            PrepareToolOptions(CurrentToolOptionsKind, anchorBounds);
         }
 
         // This layout-only seam also lets the signed component checks construct
@@ -130,8 +138,14 @@ namespace SnipStudio
             optionsSizePreview = null;
             toolOptionsKind = kind;
             string title = kind == AnnotationOptionsKind.Shapes ? "Shape options" : kind == AnnotationOptionsKind.Text ? "Text options" : kind == AnnotationOptionsKind.Highlight ? "Highlight options" : kind == AnnotationOptionsKind.Eraser ? "Eraser options" : "Pen options";
-            toolOptionsPopup = new ToolOptionsPopup(title, Ui(1000) / 1000f);
-            toolOptionsPopup.CardClosed += delegate { ClearInlineAnnotationPalette(); };
+            toolOptionsPopup = new ToolOptionsPopup(title, Ui(1000) / 1000f) { CompactMode = true, ShowCompactCaption = false };
+            toolOptionsPopup.CardClosed += delegate
+            {
+                queuedToolPopup++;
+                toolOptionsOpen = false;
+                ClearInlineAnnotationPalette();
+                if (!openingToolOptions && !arrangingChrome && !closing && !IsDisposed) LayoutChrome();
+            };
             optionsColorLabel = NewToolOptionsLabel(kind == AnnotationOptionsKind.Text ? "Text color" : "Color");
             optionsSizeLabel = NewToolOptionsLabel(kind == AnnotationOptionsKind.Text ? "Font size" : "Stroke width");
             toolOptionsPopup.Content.Controls.Add(optionsColorLabel);
@@ -152,8 +166,8 @@ namespace SnipStudio
                 toolOptionsPopup.AttachControl(colorButton);
                 toolOptionsPopup.AttachControl(kind == AnnotationOptionsKind.Text ? (Control)textSize : width);
                 if (kind == AnnotationOptionsKind.Text) toolOptionsPopup.AttachControl(advancedTextButton);
-                optionsSizePreview = new ToolSizePreview { Font = toolOptionsPopup.Content.Font };
-                toolOptionsPopup.Content.Controls.Add(optionsSizePreview);
+                // Actual-size samples remain in the size menu. The resting
+                // options row has no preview card competing with the snip.
                 if (kind == AnnotationOptionsKind.Highlight)
                 {
                     toolOptionsPopup.AttachControl(snapToText);
@@ -163,8 +177,11 @@ namespace SnipStudio
             openingToolOptions = true;
             try
             {
-                UpdateAnnotationContextControls(); RefreshToolOptionsContents();
-                toolOptionsPopup.FitToWorkingArea(AttachedToolOptionsArea());
+                chromeRoot.Controls.Add(toolOptionsPopup);
+                toolOptionsOpen = true;
+                toolOptionsPopup.Visible = true;
+                UpdateAnnotationContextControls();
+                LayoutChrome();
             }
             finally { openingToolOptions = false; }
             return toolOptionsPopup;
@@ -183,141 +200,107 @@ namespace SnipStudio
 
         private void RefreshToolOptionsContents()
         {
-            if (arrangingToolOptions || toolOptionsPopup == null || toolOptionsPopup.IsDisposed || toolOptionsPopup.Content == null || (!openingToolOptions && !toolOptionsPopup.Visible)) return;
-            if (CurrentToolOptionsKind != toolOptionsKind) { CloseToolOptions(); return; }
+            if (arrangingToolOptions || !IsToolOptionsOpen) return;
+            if (!CanChangeAnnotationAppearance || CurrentToolOptionsKind != toolOptionsKind) { CloseToolOptions(); return; }
+            // LayoutChrome owns both the row and the viewport. Event handlers
+            // raised during chrome layout leave the final measurement to it.
+            if (!arrangingChrome) LayoutChrome();
+        }
+
+        private int LayoutDockedToolOptions(int availableWidth, int top)
+        {
+            toolOptionsDockBounds = Rectangle.Empty;
+            if (!IsToolOptionsOpen) return 0;
+            if (!CanChangeAnnotationAppearance || CurrentToolOptionsKind != toolOptionsKind) { CloseToolOptions(); return 0; }
             arrangingToolOptions = true;
             try
             {
-                Rectangle attachedArea = AttachedToolOptionsArea();
-                // Leave room for the card inset and its vertical scrollbar, so
-                // a shorter editor window does not introduce horizontal scroll.
-                int bodyWidth = Math.Max(1, Math.Min(Ui(590), attachedArea.Width - Ui(40) - Math.Max(SystemInformation.VerticalScrollBarWidth, Ui(17))));
-                int gap = Ui(10), rowHeight = Ui(36), labelHeight = Ui(22), y = Ui(4);
+                int bodyWidth = Math.Max(1, availableWidth - toolOptionsPopup.HeaderWidth - toolOptionsPopup.ReservedCloseWidth);
+                int rowHeight = Math.Max(Ui(32), Math.Max(Math.Max(width.PreferredSize.Height, textSize.PreferredSize.Height),
+                    Math.Max(width.Height, textSize.Height)));
+                int x = 0, gap = Ui(6);
                 bool shapes = toolOptionsKind == AnnotationOptionsKind.Shapes;
                 bool eraser = toolOptionsKind == AnnotationOptionsKind.Eraser;
                 width.BackColor = textSize.BackColor = ToolOptionsAppearance.Field;
                 width.ForeColor = textSize.ForeColor = ToolOptionsAppearance.Ink;
-                optionsColorLabel.Visible = optionsSizeLabel.Visible = !shapes && !eraser;
-                optionsHint.Visible = !shapes && !eraser;
+                optionsColorLabel.Visible = optionsSizeLabel.Visible = optionsHint.Visible = false;
+                shapeSummary.Visible = false;
                 string context = shapes ? IsEmojiContext ? "Emoji" : canvas.Tool == EditorTool.Select && canvas.SelectedShapeTool.HasValue
-                    ? canvas.SelectedShapeTool.Value.ToString() : canvas.Tool.ToString() : toolOptionsKind == AnnotationOptionsKind.Text ? "Formatting" : "";
-                toolOptionsPopup.SetContext(shapes ? "SHAPE OPTIONS" : toolOptionsKind == AnnotationOptionsKind.Highlight ? "HIGHLIGHT OPTIONS" : toolOptionsKind.ToString().ToUpperInvariant() + " OPTIONS", context);
+                    ? canvas.SelectedShapeTool.Value.ToString() : canvas.Tool.ToString() : "";
+                toolOptionsPopup.SetContext(shapes ? "SHAPE OPTIONS" : toolOptionsKind.ToString().ToUpperInvariant() + " OPTIONS", context);
+                Point optionsScroll = new Point(Math.Max(0, -toolOptionsPopup.Content.AutoScrollPosition.X), 0);
+                toolOptionsPopup.Content.AutoScrollPosition = Point.Empty;
                 if (shapes)
                 {
-                    int x = 0;
                     foreach (EditorTool kind in new EditorTool[] { EditorTool.Rectangle, EditorTool.Ellipse, EditorTool.Line, EditorTool.Arrow })
-                    {
-                        if (x > 0 && x + rowHeight > bodyWidth) { x = 0; y += rowHeight + Ui(3); }
-                        shapeChoiceButtons[kind].SetBounds(x, y, rowHeight, rowHeight); x += Ui(39);
-                    }
-                    if (x > 0 && x + rowHeight > bodyWidth) { x = 0; y += rowHeight + Ui(3); }
-                    emojiButton.SetBounds(x, y, rowHeight, rowHeight); x += rowHeight + gap;
+                        PlaceCompactOptionsControl(shapeChoiceButtons[kind], Ui(28), ref x, rowHeight, Ui(3));
+                    PlaceCompactOptionsControl(emojiButton, Ui(28), ref x, rowHeight, gap);
                     if (!IsEmojiContext)
                     {
-                        int fillWidth = Math.Max(Ui(132), shapeFillButton.PreferredContentWidth(Ui(1000) / 1000f));
-                        int outlineWidth = Math.Max(Ui(162), shapeOutlineButton.PreferredContentWidth(Ui(1000) / 1000f));
-                        if (x + fillWidth + outlineWidth + gap > bodyWidth) { y += rowHeight + gap; x = 0; }
-                        shapeFillButton.SetBounds(x, y, Math.Min(fillWidth, bodyWidth), rowHeight); x += fillWidth + gap;
-                        if (x + outlineWidth > bodyWidth) { y += rowHeight + gap; x = 0; }
-                        shapeOutlineButton.SetBounds(x, y, Math.Min(outlineWidth, bodyWidth), rowHeight);
+                        PlaceCompactOptionsControl(shapeFillButton, shapeFillButton.PreferredContentWidth(Ui(1000) / 1000f), ref x, rowHeight, gap);
+                        PlaceCompactOptionsControl(shapeOutlineButton, shapeOutlineButton.PreferredContentWidth(Ui(1000) / 1000f), ref x, rowHeight, gap);
                     }
-                    y += rowHeight + Ui(10);
-                    int summaryHeight = WrappedTextHeight(shapeSummary, bodyWidth, Ui(28));
-                    shapeSummary.ForeColor = ToolOptionsAppearance.Muted;
-                    shapeSummary.SetBounds(0, y, bodyWidth, summaryHeight); y += summaryHeight;
+                    tips.SetToolTip(emojiButton, shapeSummary.Text);
                 }
-                else if (eraser) y = LayoutEraserOptions(bodyWidth, y);
+                else if (eraser)
+                {
+                    eraseAllAnnotationsGuidance.Visible = false;
+                    eraseAllAnnotationsButton.Enabled = CanChangeAnnotationAppearance && canvas.AnnotationCount > 0;
+                    PlaceCompactOptionsControl(eraseAllAnnotationsButton, ToolbarWidth(eraseAllAnnotationsButton, 198), ref x, rowHeight, gap);
+                    tips.SetToolTip(eraseAllAnnotationsButton, eraseAllAnnotationsGuidance.Text);
+                    optionsHint.Text = "Undo: Ctrl+Z";
+                    optionsHint.Visible = true;
+                    PlaceCompactOptionsControl(optionsHint, ToolbarWidth(optionsHint, 88), ref x, rowHeight, gap);
+                }
                 else
                 {
-                    int colorWidth = Math.Min(Ui(76), bodyWidth), sizeWidth = Ui(164), sizeX = colorWidth + gap;
-                    optionsColorLabel.SetBounds(0, y, colorWidth, labelHeight);
-                    int sizeLabelY = y;
-                    y += labelHeight;
-                    colorButton.SetBounds(0, y, colorWidth, rowHeight); colorButton.Visible = true;
-                    int fieldY = y, rowBottom = y + rowHeight;
-                    if (bodyWidth - sizeX < Ui(112)) { sizeX = 0; sizeLabelY = rowBottom + gap; fieldY = sizeLabelY + labelHeight; }
+                    PlaceCompactOptionsControl(colorButton, Ui(32), ref x, rowHeight, gap);
                     Control size = toolOptionsKind == AnnotationOptionsKind.Text ? (Control)textSize : width;
-                    sizeWidth = Math.Max(1, Math.Min(sizeWidth, bodyWidth - sizeX));
-                    optionsSizeLabel.SetBounds(sizeX, sizeLabelY, sizeWidth, labelHeight);
-                    size.SetBounds(sizeX, fieldY + Ui(2), sizeWidth, Math.Max(Ui(30), size.PreferredSize.Height)); size.Visible = true;
-                    rowBottom = Math.Max(rowBottom, fieldY + rowHeight);
+                    PlaceCompactOptionsControl(size, ToolbarWidth(size, toolOptionsKind == AnnotationOptionsKind.Text ? 104 : 106), ref x, rowHeight, gap);
                     if (toolOptionsKind == AnnotationOptionsKind.Text)
-                    {
-                        int advancedWidth = Ui(164), advancedX = sizeX + sizeWidth + gap, advancedY = fieldY;
-                        if (advancedX + advancedWidth > bodyWidth) { advancedY = rowBottom + gap; advancedX = 0; }
-                        advancedTextButton.SetBounds(advancedX, advancedY, Math.Min(advancedWidth, bodyWidth), rowHeight);
-                        advancedTextButton.Visible = true;
-                        rowBottom = Math.Max(rowBottom, advancedY + rowHeight);
-                    }
-                    y = rowBottom + Ui(12);
-                    optionsSizePreview.SetBounds(0, y, bodyWidth, Ui(toolOptionsKind == AnnotationOptionsKind.Text ? 118 : 104));
-                    optionsSizePreview.Visible = true;
-                    UpdateToolSizePreview();
-                    y += optionsSizePreview.Height + Ui(8);
-                    optionsHint.Text = toolOptionsKind == AnnotationOptionsKind.Text
-                        ? "Size is in image pixels. Advanced text offers fonts, bold, italic and alignment."
-                        : toolOptionsKind == AnnotationOptionsKind.Highlight ? "The sample shows the freehand stroke. Snap to text follows the recognized text height."
-                        : "Preview uses image pixels; the image zoom stays unchanged.";
-                    int hintHeight = WrappedTextHeight(optionsHint, bodyWidth, Ui(24));
-                    optionsHint.SetBounds(0, y, bodyWidth, hintHeight); y += hintHeight;
+                        PlaceCompactOptionsControl(advancedTextButton, ToolbarWidth(advancedTextButton, 130), ref x, rowHeight, gap);
                     if (toolOptionsKind == AnnotationOptionsKind.Highlight)
                     {
-                        snapToText.SetBounds(0, y, bodyWidth, Ui(28)); snapToText.Visible = true; y += Ui(34);
-                        recognitionStatus.AutoEllipsis = false;
-                        int messageHeight = WrappedTextHeight(recognitionStatus, bodyWidth, Ui(38));
-                        recognitionStatus.SetBounds(0, y, bodyWidth, messageHeight);
-                        recognitionStatus.Visible = true; y += messageHeight + Ui(6);
+                        PlaceCompactOptionsControl(snapToText, Math.Max(Ui(112), snapToText.GetPreferredSize(Size.Empty).Width), ref x, rowHeight, gap);
+                        recognitionStatus.Visible = false;
+                        tips.SetToolTip(snapToText, "Snap to recognized text height. " + recognitionStatus.Text);
                     }
                 }
-                y = LayoutInlineAnnotationPalette(bodyWidth, y);
-                toolOptionsPopup.SetContentSize(new Size(Math.Max(bodyWidth, InlineAnnotationPaletteMinimumWidth), y));
-                toolOptionsPopup.FitToWorkingArea(attachedArea);
-                if (toolOptionsPopup.Visible)
-                {
-                    Point location = AttachedToolOptionsLocation(toolOptionsPopup);
-                    if (toolOptionsPopup.Location != location) toolOptionsPopup.Location = location;
-                    toolOptionsPopup.BringToFront();
-                }
+                int neededWidth = Math.Max(1, x - (x > 0 ? gap : 0));
+                // On unusually narrow windows the same single row scrolls
+                // horizontally; controls never wrap over the image.
+                int scrollHeight = neededWidth > bodyWidth ? Math.Max(SystemInformation.HorizontalScrollBarHeight, Ui(17)) : 0;
+                toolOptionsPopup.ScrollContentSize = new Size(neededWidth, rowHeight);
+                toolOptionsPopup.SetContentSize(new Size(Math.Max(bodyWidth, neededWidth), rowHeight + scrollHeight));
+                toolOptionsPopup.FitToWorkingArea(new Rectangle(0, 0, availableWidth, rowHeight + scrollHeight + Ui(8)));
+                toolOptionsPopup.Content.AutoScrollPosition = optionsScroll;
+                toolOptionsDockBounds = new Rectangle(0, top, availableWidth, toolOptionsPopup.Height);
+                toolOptionsPopup.Location = toolOptionsDockBounds.Location;
+                toolOptionsPopup.Visible = true;
+                toolOptionsPopup.BringToFront();
+                return toolOptionsPopup.Height;
             }
             finally { arrangingToolOptions = false; }
         }
 
-        // The card overlays the image; opening it never resizes the workspace,
-        // changes the editor zoom, or owns a separate native popup window.
-        private Rectangle AttachedToolOptionsArea()
+        private void PlaceCompactOptionsControl(Control control, int span, ref int x, int rowHeight, int gap)
         {
-            int margin = Ui(10), gap = Ui(4);
-            int left = margin, top = margin, right = Math.Max(margin + 1, ClientSize.Width - margin), bottom = Math.Max(margin + 1, ClientSize.Height - margin);
-            Rectangle shelf = BoundsInMainForm(annotationToolbar);
-            Rectangle capture = BoundsInMainForm(captureToolbar);
-            Rectangle footer = BoundsInMainForm(footerStrip);
-            if (footerStrip.Visible && footer.Top > top) bottom = Math.Max(top + 1, Math.Min(bottom, footer.Top - gap));
-            if (AnnotationToolbarIsVertical)
-            {
-                top = Math.Min(bottom - 1, Math.Max(top, capture.Bottom + gap));
-                if (String.Equals(preferences.AnnotationToolbarPosition, "Left", StringComparison.OrdinalIgnoreCase))
-                    left = Math.Max(left, Math.Min(right - 1, shelf.Right + gap));
-                else right = Math.Max(left + 1, Math.Min(right, shelf.Left - gap));
-            }
-            else if (String.Equals(preferences.AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase))
-            {
-                bottom = Math.Max(top + 1, Math.Min(bottom, shelf.Top - gap));
-                top = Math.Min(bottom - 1, Math.Max(top, capture.Bottom + gap));
-            }
-            else top = Math.Min(bottom - 1, Math.Max(top, shelf.Bottom + gap));
-            if (contextToolbar.Visible) top = Math.Min(bottom - 1, Math.Max(top, BoundsInMainForm(contextToolbar).Bottom + gap));
-            return Rectangle.FromLTRB(left, top, right, bottom);
+            int height = control is ComboBox ? Math.Max(Ui(28), control.PreferredSize.Height) : rowHeight;
+            // Native owner-drawn combos enforce their own height. Position
+            // after SetBounds so a requested 28px field that becomes 32px does
+            // not protrude below this 32px row and create a vertical scrollbar.
+            control.Margin = Padding.Empty;
+            control.SetBounds(x, 0, Math.Max(1, span), height);
+            control.Top = Math.Max(0, (rowHeight - control.Height) / 2);
+            control.Visible = true;
+            x += span + gap;
         }
 
-        private Point AttachedToolOptionsLocation(ToolOptionsPopup popup)
-        {
-            Rectangle area = AttachedToolOptionsArea();
-            int x = area.Left, y = area.Top;
-            if (String.Equals(preferences.AnnotationToolbarPosition, "Right", StringComparison.OrdinalIgnoreCase)) x = area.Right - popup.Width;
-            if (String.Equals(preferences.AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase)) y = area.Bottom - popup.Height;
-            return new Point(Math.Max(0, Math.Min(x, Math.Max(0, ClientSize.Width - popup.Width))),
-                Math.Max(0, Math.Min(y, Math.Max(0, ClientSize.Height - popup.Height))));
-        }
+        // The row occupies a dedicated band in chromeRoot. Its bounds and the
+        // workspace bounds share coordinates and can never intersect.
+        private Rectangle AttachedToolOptionsArea() { return toolOptionsDockBounds; }
+
+        private Point AttachedToolOptionsLocation(ToolOptionsPopup popup) { return toolOptionsDockBounds.Location; }
 
         private Rectangle BoundsInMainForm(Control control)
         {
@@ -349,9 +332,12 @@ namespace SnipStudio
             DrawSizeOptionBackground(e, selected);
             float scale = e.Graphics.DpiX / 96f;
             float value = new int[] { 2, 4, 8, 12, 20 }[e.Index];
-            int padding = (int)Math.Round(8 * scale), labelWidth = (int)Math.Round(62 * scale);
+            string labelText = value.ToString("0", CultureInfo.CurrentCulture) + " px";
+            if (DrawClosedSizeSelection(e, labelText, width.Font, width.Enabled)) return;
+            int padding = (int)Math.Round(8 * scale), labelWidth = Math.Max((int)Math.Round(62 * scale),
+                TextRenderer.MeasureText(labelText, width.Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width);
             Rectangle label = new Rectangle(e.Bounds.Left + padding, e.Bounds.Top, labelWidth, e.Bounds.Height);
-            TextRenderer.DrawText(e.Graphics, value.ToString("0", CultureInfo.CurrentCulture) + " px", width.Font, label,
+            TextRenderer.DrawText(e.Graphics, labelText, width.Font, label,
                 width.Enabled ? ToolOptionsAppearance.Ink : StudioTheme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
             float sampleLeft = label.Right + padding, sampleRight = e.Bounds.Right - padding - value / 2;
             if (sampleRight > sampleLeft)
@@ -374,8 +360,10 @@ namespace SnipStudio
             if (choice == null) return;
             bool selected = (e.State & DrawItemState.Selected) != 0;
             DrawSizeOptionBackground(e, selected);
+            if (DrawClosedSizeSelection(e, choice.ToString(), textSize.Font, textSize.Enabled)) return;
             float scale = e.Graphics.DpiX / 96f;
-            int padding = (int)Math.Round(8 * scale), labelWidth = (int)Math.Round(62 * scale);
+            int padding = (int)Math.Round(8 * scale), labelWidth = Math.Max((int)Math.Round(62 * scale),
+                TextRenderer.MeasureText(choice.ToString(), textSize.Font, Size.Empty, TextFormatFlags.SingleLine | TextFormatFlags.NoPadding).Width);
             Rectangle label = new Rectangle(e.Bounds.Left + padding, e.Bounds.Top, labelWidth, e.Bounds.Height);
             TextRenderer.DrawText(e.Graphics, choice.ToString(), textSize.Font, label,
                 textSize.Enabled ? ToolOptionsAppearance.Ink : StudioTheme.Muted, TextFormatFlags.VerticalCenter | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
@@ -404,17 +392,33 @@ namespace SnipStudio
             using (Brush fill = new SolidBrush(selected ? StudioTheme.Selection : ToolOptionsAppearance.Field)) e.Graphics.FillRectangle(fill, e.Bounds);
         }
 
+        private static bool DrawClosedSizeSelection(DrawItemEventArgs e, string label, Font font, bool enabled)
+        {
+            if ((e.State & DrawItemState.ComboBoxEdit) == 0) return false;
+            int padding = Math.Max(1, (int)Math.Round(8 * e.Graphics.DpiX / 96f));
+            TextRenderer.DrawText(e.Graphics, label, font, new Rectangle(e.Bounds.Left + padding, e.Bounds.Top,
+                Math.Max(1, e.Bounds.Width - padding * 2), e.Bounds.Height), enabled ? ToolOptionsAppearance.Ink : StudioTheme.Muted,
+                TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix);
+            if ((e.State & DrawItemState.Focus) != 0) e.DrawFocusRectangle();
+            return true;
+        }
+
         private bool CloseToolOptions()
         {
-            if (toolOptionsPopup == null || toolOptionsPopup.IsDisposed) return false;
+            queuedToolPopup++;
+            bool wasOpen = IsToolOptionsOpen;
+            toolOptionsOpen = false;
             ClearInlineAnnotationPalette();
-            if (!toolOptionsPopup.Visible) return false;
-            toolOptionsPopup.Close(ToolStripDropDownCloseReason.CloseCalled); return true;
+            if (toolOptionsPopup != null && !toolOptionsPopup.IsDisposed)
+                toolOptionsPopup.Close(ToolStripDropDownCloseReason.CloseCalled);
+            else if (wasOpen && !arrangingChrome && !closing && !IsDisposed) LayoutChrome();
+            return wasOpen;
         }
 
         private void DisposeToolOptions()
         {
             queuedToolPopup++;
+            toolOptionsOpen = false;
             ClearInlineAnnotationPalette();
             if (toolOptionsPopup != null) { toolOptionsPopup.Dispose(); toolOptionsPopup = null; }
         }
