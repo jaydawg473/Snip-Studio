@@ -1,10 +1,20 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.4
+# Snip Studio 0.6.5
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
+
+## Toolbar and settings layout in 0.6.5
+
+- The normal window widens to keep the capture toolbar and horizontal annotation toolbar on one row, measuring labels at the current Windows scale. Its width stays within the current monitor's working area; narrow monitors retain horizontal scrolling instead of wrapping the controls.
+- Changing tools and closing options do not shrink an existing snip window. Maximized and full-screen bounds are retained, and left/right toolbars keep their vertical layout.
+- The detected-editor selector in Settings returns to its compact header height when closed, removing the empty space beneath it. Expanded choices still move the following settings down.
+
+The final signed application passed 14,849 component, rendering and unshown layout checks on November 16, 2026. Physical mixed-monitor DPI transitions, displayed native UI/input and installed upgrades remain unverified. See [VALIDATION.txt](VALIDATION.txt) for the exact application hash and scope.
+
+Download the signed [0.6.5 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.5/SnipStudio-0.6.5-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.5/SnipStudio-0.6.5-signed-portable.zip).
 
 ## Compact options in 0.6.4
 
@@ -154,7 +164,9 @@ See [installer packaging](installer/README.md) for the signed-release inputs. Pr
 
 Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Automatic update checks contact the official GitHub release endpoint by default and can be disabled in Settings; capture content, recognized text, preferences and user identity are not sent. Browser downloads, sharing, external-editor opening and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
 
-The final 0.5.9 application built without compiler warnings and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **593 signed-library checks passed**: 392 core checks (78 crop frame, 88 translation, 181 zoom frame and 45 removal movement) plus 201 offscreen crop-layout checks across eight toolbar/dimension/scale cases at scales 1, 1.5 and 2. **73 installer source-policy checks** passed separately. Two synthetic offscreen renders were visually inspected for full and adjusted frames with eight handles; those inspections do not add to the automated count. `VALIDATION.txt` records the exact application hash and coverage.
+Current 0.6.5 verification is recorded in [VALIDATION.txt](VALIDATION.txt). The following notes describe older releases and do not establish current live acceptance.
+
+The final 0.5.9 application built without compiler warnings and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **593 signed-library checks passed**: 392 core checks (78 crop frame, 88 translation, 181 zoom frame and 45 removal movement) plus 201 offscreen crop-layout checks across eight toolbar/dimension/scale cases at scales 1, 1.5 and 2. **73 installer source-policy checks** passed separately. Two synthetic offscreen renders were visually inspected for full and adjusted frames with eight handles; those inspections do not add to the automated count. That release's historical validation records its exact application hash and coverage.
 
 The preferences source is byte-identical to 0.5.8 and reuses the existing settings file; the crop feature adds no preference fields or reset. Installer logic is unchanged apart from version metadata. This is source evidence for saved-setting preservation, not an executed upgrade with the user's installed profile.
 
@@ -166,7 +178,7 @@ Historically, the signed 0.5.7 application passed **418 component checks** and *
 
 Historically, the signed 0.5.6 application passed **272 signed-library checks**, plus **35 in-memory native Windows Shell-link/property round trips** and **39 installer source-policy checks**. Those objects were held only in memory: no shortcut was saved and no application entry point, recent-history API, Jump List update or association helper was called. These counts do not add to the current 0.5.7 totals.
 
-Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. `VALIDATION.txt` retains those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
+Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. That release's historical validation records those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
 
 Historically, 658 focused checks passed against signed **0.5.4**; earlier release results do not verify 0.5.9. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
 

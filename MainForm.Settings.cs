@@ -349,6 +349,9 @@ namespace SnipStudio
             Size = new Size(Math.Max(MinimumSize.Width, Math.Min(maximumWidth, (int)Math.Ceiling(canvas.ImageSize.Width * fit) + 64)),
                 Math.Max(MinimumSize.Height, Math.Min(maximumHeight, (int)Math.Ceiling(canvas.ImageSize.Height * fit) + chromeHeight)));
             Location = new Point(Math.Max(work.Left, Math.Min(Left, work.Right - Width)), Math.Max(work.Top, Math.Min(Top, work.Bottom - Height)));
+            // The snip's preferred image width must not reintroduce toolbar
+            // wrapping after the initial chrome measurement.
+            LayoutChrome();
             canvas.FitToWindow();
         }
 

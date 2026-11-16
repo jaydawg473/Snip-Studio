@@ -718,8 +718,13 @@ namespace SnipStudio
             detectedLabel.Font = new Font(Font, FontStyle.Bold);
             TableLayoutPanel detectedRow = new TableLayoutPanel();
             detectedRow.AutoSize = true;
+            // The inline list grows this row while open; release that height
+            // again when it closes instead of retaining an empty list-sized gap.
+            detectedRow.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             detectedRow.Dock = DockStyle.Top;
             detectedRow.ColumnCount = 3;
+            detectedRow.RowCount = 1;
+            detectedRow.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             detectedRow.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 38));
             detectedRow.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             detectedRow.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
@@ -731,7 +736,11 @@ namespace SnipStudio
             detectedEditorIcon.Tag = "PreserveColor";
             detectedEditorIcon.AccessibleName = "Selected editing application icon";
             detectedRow.Controls.Add(detectedEditorIcon, 0, 0);
-            detectedEditors.Dock = DockStyle.Fill;
+            // InlineChoiceBox owns its height. A percent-column TableLayout
+            // AutoSize probe can measure it at its minimum width and preserve
+            // a tall wrapped height even after the real column becomes wide.
+            detectedEditors.AutoSize = false;
+            detectedEditors.Dock = DockStyle.Top;
             detectedEditors.DropDownWidth = 520;
             detectedEditors.AccessibleName = "Detected image editing applications";
             detectedEditors.Margin = new Padding(0, 7, 10, 0);

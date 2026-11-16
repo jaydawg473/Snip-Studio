@@ -30,6 +30,7 @@ namespace SnipStudio
         private object lastViewLayoutImageIdentity;
         private bool audioOptionsOpen;
         private ContextMenuStrip delayPopup;
+        private Rectangle lastToolbarWorkingArea;
         internal float LayoutScaleOverride = 0f;
         internal Rectangle LayoutWorkingAreaOverride = Rectangle.Empty;
         [DllImport("user32.dll")] private static extern uint GetDpiForWindow(IntPtr window);
@@ -256,6 +257,11 @@ namespace SnipStudio
             recognitionStatus.TextChanged += delegate { LayoutChrome(); RefreshToolOptionsContents(); };
             externalEditorButton.TextChanged += delegate { LayoutChrome(); };
             chromeRoot.Layout += delegate { LayoutChrome(); };
+            LocationChanged += delegate
+            {
+                if (!arrangingChrome && IsHandleCreated && EditorWorkingArea() != lastToolbarWorkingArea) LayoutChrome();
+            };
+            DpiChanged += delegate { LayoutChrome(); };
             UpdateTextStyleControls();
             ResumeLayout(true);
             LayoutChrome();
@@ -340,7 +346,23 @@ namespace SnipStudio
                 ((StudioComboBox)delay).UpdateMetrics(scale);
                 ((StudioComboBox)width).UpdateMetrics(scale);
                 textSize.UpdateMetrics(scale);
-                int x = Ui(12), rowY = Ui(10), rowHeight = Ui(34), rowGap = Ui(6);
+                bool verticalAnnotation = AnnotationToolbarIsVertical;
+                foreach (KeyValuePair<StudioButton, bool> pair in annotationHorizontalIconOnly)
+                {
+                    bool iconOnly = verticalAnnotation || pair.Value;
+                    if (pair.Key.IconOnly != iconOnly) { pair.Key.IconOnly = iconOnly; pair.Key.Invalidate(); }
+                }
+                bool showTextSize = !canvas.TextActionsMode && !IsEmojiContext && (canvas.Tool == EditorTool.Text || canvas.HasSelectedTextAnnotation);
+                int requiredWidth = MeasureSingleRowToolbarWidth(showTextSize);
+                EnsureSingleRowWindowWidth(requiredWidth);
+                // Dock=Fill may be deferred by an enclosing layout operation.
+                chromeRoot.Size = ClientSize;
+                w = chromeRoot.ClientSize.Width; h = chromeRoot.ClientSize.Height;
+                int captureScroll = ResetHorizontalToolbar(captureToolbar);
+                int annotationScroll = verticalAnnotation ? 0 : ResetHorizontalToolbar(annotationToolbar);
+                int contextScroll = ResetHorizontalToolbar(contextToolbar);
+                int captureWidth = Math.Max(w, MeasureCaptureToolbarWidth());
+                int x = Ui(12), rowY = Ui(10), rowHeight = Ui(34);
                 PlaceToolbarControl(newButton, ToolbarWidth(newButton, canvas.HasImage || recordingModeSelected ? 104 : 80), ref x, ref rowY, rowHeight, w, Ui(8));
                 PlaceToolbarControl(screenshotModeButton, Ui(34), ref x, ref rowY, rowHeight, w, 0);
                 PlaceToolbarControl(videoModeButton, Ui(34), ref x, ref rowY, rowHeight, w, Ui(10));
@@ -355,32 +377,26 @@ namespace SnipStudio
                     PlaceToolbarControl(delayOptionsButton, ToolbarWidth(delayOptionsButton, 80), ref x, ref rowY, rowHeight, w, Ui(8));
                 }
                 else PlaceToolbarControl(audioOptionsButton, Ui(34), ref x, ref rowY, rowHeight, w, Ui(8));
-                int actionsWidth = (compact ? 1 : captureActions.Count) * Ui(38) - Ui(4);
+                int actionsWidth = (compact ? 1 : captureActions.Count) * (Ui(34) + Ui(4)) - Ui(4);
                 int captionWidth = ToolbarWidth(recordingModeCaption, 150);
                 recordingModeCaption.AutoEllipsis = false;
-                recordingModeCaption.Visible = recordingModeSelected && x + captionWidth + actionsWidth + Ui(20) <= w;
-                if (recordingModeCaption.Visible)
+                bool showRecordingCaption = recordingModeSelected && x + captionWidth + actionsWidth + Ui(20) <= w;
+                recordingModeCaption.Visible = showRecordingCaption;
+                if (showRecordingCaption)
                     PlaceToolbarControl(recordingModeCaption, captionWidth, ref x, ref rowY, rowHeight, w, Ui(8));
-                if (x + actionsWidth > w - Ui(12)) { rowY += rowHeight + rowGap; x = Ui(12); }
-                x = Math.Max(x, w - Ui(12) - actionsWidth);
+                x = Math.Max(x, captureWidth - Ui(12) - actionsWidth);
                 for (int i = 0; i < captureActions.Count; i++)
                 {
-                    captureActions[i].Visible = !compact || i == captureActions.Count - 1;
-                    if (captureActions[i].Visible) PlaceToolbarControl(captureActions[i], Ui(34), ref x, ref rowY, rowHeight, w, Ui(4));
+                    bool showAction = !compact || i == captureActions.Count - 1;
+                    captureActions[i].Visible = showAction;
+                    if (showAction) PlaceToolbarControl(captureActions[i], Ui(34), ref x, ref rowY, rowHeight, w, Ui(4));
                 }
                 int y = rowY + rowHeight + Ui(10);
-                captureToolbar.SetBounds(0, 0, w, y);
+                y = LayoutHorizontalToolbar(captureToolbar, 0, w, y, captureWidth, captureScroll);
                 y += LayoutUpdateIndicator(y, w);
                 annotationToolbar.Visible = canvas.HasImage;
-                bool verticalAnnotation = AnnotationToolbarIsVertical;
                 bool bottomAnnotation = String.Equals(preferences.AnnotationToolbarPosition, "Bottom", StringComparison.OrdinalIgnoreCase);
-                foreach (KeyValuePair<StudioButton, bool> pair in annotationHorizontalIconOnly)
-                {
-                    bool iconOnly = verticalAnnotation || pair.Value;
-                    if (pair.Key.IconOnly != iconOnly) { pair.Key.IconOnly = iconOnly; pair.Key.Invalidate(); }
-                }
                 externalEditorButton.AccessibleName = externalEditorButton.Text;
-                bool showTextSize = !canvas.TextActionsMode && !IsEmojiContext && (canvas.Tool == EditorTool.Text || canvas.HasSelectedTextAnnotation);
                 int annotationHeight = 0;
                 if (!verticalAnnotation)
                 {
@@ -396,10 +412,10 @@ namespace SnipStudio
                         if ((control == width && showTextSize) || (control == textSize && !showTextSize)) continue;
                         if (IsShapeContext && (control == width || control == colorButton)) continue;
                         int span = ToolbarWidth(control, control == width ? 94 : control == textSize ? 106 : control == externalEditorButton ? 132 : 34);
-                        span = Math.Min(span, Math.Max(Ui(34), w - Ui(24)));
                         PlaceToolbarControl(control, span, ref x, ref rowY, rowHeight, w, Ui(control == colorButton || control == width || control == textSize ? 8 : 2));
                     }
-                    annotationHeight = rowY + rowHeight + Ui(6);
+                    annotationHeight = LayoutHorizontalToolbar(annotationToolbar, y, w, rowY + rowHeight + Ui(6),
+                        Math.Max(w, x - Ui(2) + Ui(12)), annotationScroll);
                 }
                 if (!verticalAnnotation && !bottomAnnotation)
                 {
@@ -427,10 +443,11 @@ namespace SnipStudio
                 editRecognizedLineButton.Enabled = textMode && !capturePending && canvas.CanEditRecognizedLine;
                 deleteRecognizedTextButton.Enabled = textMode && !capturePending && canvas.CanDeleteRecognizedText;
                 int contextHeight = 0;
+                int contextWidth = Math.Max(w, MeasureContextCommandsWidth());
                 UpdateCropActionControls();
                 UpdateAnnotationContextControls();
-                if (cropMode) contextHeight = LayoutCropActions(w);
-                else if (composeMode) contextHeight = LayoutInlineTextActions(w);
+                if (cropMode) contextHeight = LayoutCropActions(contextWidth);
+                else if (composeMode) contextHeight = LayoutInlineTextActions(contextWidth);
                 else if (context)
                 {
                     x = Ui(12); rowY = Ui(3);
@@ -450,12 +467,12 @@ namespace SnipStudio
                     else PlaceToolbarControl(snapToText, Math.Max(Ui(120), snapToText.GetPreferredSize(Size.Empty).Width), ref x, ref rowY, contextRowHeight, w, Ui(12));
                     recognitionStatus.AutoEllipsis = false;
                     int messageWidth = ToolbarWidth(recognitionStatus, 0);
-                    if (x + messageWidth > w - Ui(12)) { x = Ui(12); rowY += contextRowHeight + Ui(3); }
-                    int messageHeight = WrappedTextHeight(recognitionStatus, Math.Max(Ui(80), w - x - Ui(12)), Ui(24));
-                    recognitionStatus.SetBounds(x, rowY, Math.Max(1, w - x - Ui(12)), Math.Max(contextRowHeight, messageHeight));
+                    if (x + messageWidth > contextWidth - Ui(12)) { x = Ui(12); rowY += contextRowHeight + Ui(3); }
+                    int messageHeight = WrappedTextHeight(recognitionStatus, Math.Max(Ui(80), contextWidth - x - Ui(12)), Ui(24));
+                    recognitionStatus.SetBounds(x, rowY, Math.Max(1, contextWidth - x - Ui(12)), Math.Max(contextRowHeight, messageHeight));
                     contextHeight = rowY + Math.Max(contextRowHeight, messageHeight) + Ui(4);
                 }
-                contextToolbar.SetBounds(0, y, w, contextHeight);
+                contextHeight = LayoutHorizontalToolbar(contextToolbar, y, w, contextHeight, contextWidth, contextScroll);
                 y += contextHeight;
                 // Options are a compact band in the chrome, outside the image.
                 // Keep the same location for Top/Bottom/Left/Right toolbars.
@@ -598,6 +615,89 @@ namespace SnipStudio
             return HasLayoutWorkingAreaOverride ? LayoutWorkingAreaOverride : Screen.FromControl(this).WorkingArea;
         }
 
+        private int MeasureCaptureToolbarWidth()
+        {
+            int primary = ToolbarWidth(newButton, canvas.HasImage || recordingModeSelected ? 104 : 80) + Ui(8) + Ui(34) * 2 + Ui(10);
+            primary += recordingModeSelected ? Ui(34) + Ui(8) : ToolbarWidth(mode, 140) + Ui(8) + ToolbarWidth(delayOptionsButton, 80) + Ui(8);
+            int actions = (canvas.HasImage ? captureActions.Count : 1) * (Ui(34) + Ui(4)) - Ui(4);
+            return Ui(12) * 2 + primary + actions;
+        }
+
+        private int AnnotationControlWidth(Control control)
+        {
+            return ToolbarWidth(control, control == width ? 94 : control == textSize ? 106 : control == externalEditorButton ? 132 : 34);
+        }
+
+        private int MeasureContextCommandsWidth()
+        {
+            int content = 0;
+            if (IsCropContext) content = ToolbarWidth(applyCropButton, 128) + Ui(6) + ToolbarWidth(cancelCropButton, 82) + Ui(10);
+            else if (HasInlineTextWorkflow) content = ToolbarWidth(finishInlineTextButton, 70) + Ui(6) + ToolbarWidth(cancelInlineTextButton, 82) + Ui(10);
+            else if (canvas.HasImage && canvas.TextActionsMode)
+            {
+                if (canvas.TextActionCommandsReady)
+                    content = ToolbarWidth(copyAllTextButton, 126) + ToolbarWidth(copySelectedTextButton, 140) +
+                        ToolbarWidth(translateTextButton, 116) + ToolbarWidth(editRecognizedLineButton, 112) +
+                        ToolbarWidth(deleteRecognizedTextButton, 160) + Ui(6) * 5;
+                content += ToolbarWidth(closeTextActionsButton, 70) + Ui(10);
+            }
+            return content == 0 ? 0 : Ui(12) * 2 + content;
+        }
+
+        private int MeasureSingleRowToolbarWidth(bool showTextSize)
+        {
+            int required = Math.Max(MeasureCaptureToolbarWidth(), MeasureContextCommandsWidth());
+            if (canvas.HasImage && !AnnotationToolbarIsVertical)
+            {
+                int content = Ui(12) * 2;
+                foreach (Control control in annotationControls)
+                {
+                    if ((control == width && showTextSize) || (control == textSize && !showTextSize)) continue;
+                    if (IsShapeContext && (control == width || control == colorButton)) continue;
+                    content += AnnotationControlWidth(control) + Ui(control == colorButton || control == width || control == textSize ? 8 : 2);
+                }
+                required = Math.Max(required, content);
+            }
+            return required;
+        }
+
+        private void EnsureSingleRowWindowWidth(int requiredClientWidth)
+        {
+            if ((layoutTestMode && !HasLayoutWorkingAreaOverride) || IsFullScreenEditor || changingFullScreenEditor || WindowState != FormWindowState.Normal) return;
+            Rectangle work = EditorWorkingArea();
+            if (work.Width <= 0) return;
+            int maximumWidth = MaximumSize.Width > 0 ? Math.Min(work.Width, MaximumSize.Width) : work.Width;
+            int minimumWidth = Math.Min(maximumWidth, Math.Max(Ui(500), requiredClientWidth + Math.Max(0, Width - ClientSize.Width)));
+            if (MinimumSize.Width != minimumWidth) MinimumSize = new Size(minimumWidth, MinimumSize.Height);
+            // Grow for newly available commands; never shrink an existing snip
+            // merely because a tool, option row, or capture mode changes.
+            int targetWidth = Math.Min(maximumWidth, Math.Max(Width, minimumWidth));
+            if (Width != targetWidth) Width = targetWidth;
+            int left = Math.Max(work.Left, Math.Min(Left, work.Right - Width));
+            if (Left != left) Left = left;
+            lastToolbarWorkingArea = work;
+        }
+
+        private static int ResetHorizontalToolbar(Panel toolbar)
+        {
+            int offset = Math.Max(0, -toolbar.AutoScrollPosition.X);
+            toolbar.AutoScrollPosition = Point.Empty;
+            toolbar.AutoScrollMinSize = Size.Empty;
+            toolbar.AutoScroll = false;
+            return offset;
+        }
+
+        private int LayoutHorizontalToolbar(Panel toolbar, int top, int viewportWidth, int contentHeight, int contentWidth, int scrollOffset)
+        {
+            bool overflow = contentHeight > 0 && contentWidth > viewportWidth;
+            int height = contentHeight + (overflow ? SystemInformation.HorizontalScrollBarHeight : 0);
+            toolbar.SetBounds(0, top, viewportWidth, height);
+            toolbar.AutoScroll = overflow;
+            toolbar.AutoScrollMinSize = overflow ? new Size(contentWidth, 0) : Size.Empty;
+            if (overflow) toolbar.AutoScrollPosition = new Point(scrollOffset, 0);
+            return height;
+        }
+
         private int ToolbarWidth(Control control, int minimum)
         {
             float scale = Ui(1000) / 1000f;
@@ -616,7 +716,6 @@ namespace SnipStudio
 
         private void PlaceToolbarControl(Control control, int widthPixels, ref int x, ref int rowY, int rowHeight, int availableWidth, int gap)
         {
-            if (x > Ui(12) && x + widthPixels > availableWidth - Ui(12)) { x = Ui(12); rowY += rowHeight + Ui(6); }
             int height = control is ComboBox ? Math.Max(Ui(30), control.PreferredSize.Height) : rowHeight;
             control.SetBounds(x, rowY + Math.Max(0, (rowHeight - height) / 2), widthPixels, height);
             x += widthPixels + gap;
