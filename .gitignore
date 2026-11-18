@@ -28,6 +28,7 @@ checks/*
 !checks/regions/
 !checks/hdr/
 !checks/reliability/
+!checks/layout-spacing/
 checks/*/*
 !checks/*/*.cs
 !checks/Verify-StartupCompatibility.ps1

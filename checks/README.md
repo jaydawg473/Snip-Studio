@@ -3,9 +3,9 @@
 These checks use synthetic data. Private screenshot examples, generated reports,
 test executables, and signing credentials are excluded from this repository.
 
-The 0.6.23 checks cover document history, failed replacement, native text zoom,
+The 0.6.23 and 0.6.24 check sources cover document history, failed replacement, native text zoom,
 formatted-paste boundaries, OCR geometry and ordering, recorder notifications,
-metadata waits, save ownership, and compact window layouts. Some use unshown
+metadata waits, save ownership, compact window layouts, and visible toolbar spacing. Some use unshown
 native controls. The save workflow check's full mode briefly displays its own
 synthetic progress dialog; `--no-dialog` covers only file/state boundaries.
 
@@ -24,6 +24,6 @@ mode unless their own header states otherwise. Read each fixture's argument and
 side-effect contract before running it.
 
 The sources alone do not demonstrate a passing run. `VALIDATION.txt` records the
-signed 0.6.23 candidate's accepted checks and limits. Live capture, audio,
+signed current candidate's accepted checks and limits. Live capture, audio,
 physical DPI/monitor behavior, clipboard/printing, and installed upgrade or
 uninstall acceptance remain separate verification work.

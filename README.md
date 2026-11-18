@@ -1,14 +1,23 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.23
+# Snip Studio 0.6.24
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
 
-## Current main source: 0.6.23
+## Current main source: 0.6.24
 
-This source corresponds to the timestamp-signed 0.6.23 candidate with application SHA256 `370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C`. Its 117 application C# files match the compiled source freeze. The application, generated full uninstaller and Setup are signed; bundled Node 24.22.3 retains its original OpenJS signature and timestamp.
+This source corresponds to the timestamp-signed 0.6.24 application with SHA256 `7546A3AC9C4ED81986E29C6F8E9825437856F3054976D94CF4105D4AA8B92A4E`. Its 117 application C# files match the compiled source freeze `E519185C6D1999ED1835FFDD80D83EA50C464B98C70C9AA4E5A94963B8179D71`.
+
+The image viewport now begins below the toolbar and context rows actually visible. Hidden larger tool panels no longer reserve an oversized empty strip above the snip. Preferred sizing still accommodates larger tools. Fit adapts when visible rows change, while manual zoom and pan retain their view intent. The OCR, editing, saving, metadata and recorder recovery fixes from 0.6.23 remain.
+
+Release status is **INSUFFICIENT EVIDENCE** for full native and installed acceptance. Signed component checks do not establish physical focus/DPI/monitor behavior, live capture/audio/HDR, startup or installation/upgrade/uninstall. Exact current verification and layout limits are recorded in [VALIDATION.txt](VALIDATION.txt); the generic fixture sources alone do not demonstrate a passing run. OCR spelling and source typography remain estimates.
+
+See [0.6.24 release notes](release-notes-0.6.24.md), [verification sources](checks/README.md), and [installer preparation](installer/README.md). No GitHub 0.6.24 release download is claimed here; installation and a public GitHub Release remain separate approval steps.
+## 0.6.23 repair history
+
+The previous source snapshot corresponded to the timestamp-signed 0.6.23 candidate with application SHA256 `370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C`. Its 117 application C# files match the compiled source freeze. The application, generated full uninstaller and Setup are signed; bundled Node 24.22.3 retains its original OpenJS signature and timestamp.
 
 - Text conversion selects Text, recovers missing dense filename rows with bounded retries, and protects supported file icons. Color and source-font estimates use the remaining text pixels.
 - Drag selection retains native separators and source order. Validated caches reduce repeated selection allocations and font-refinement work.
@@ -21,7 +30,7 @@ The 0.6.23 installer and portable ZIP were prepared and audited locally. A GitHu
 
 See [0.6.23 release notes](release-notes-0.6.23.md), [verification sources](checks/README.md), and [installer preparation](installer/README.md).
 
-The following sections describe historical releases. Their counts and acceptance scope are not current 0.6.23 results.
+The following sections describe historical releases. Their counts and acceptance scope are not current 0.6.24 results.
 ## Eyedropper and Print Screen setup in 0.6.6
 
 - **Eyedropper** is available in the shared color palette. Click a visible color anywhere on the connected desktop, including the snip, then choose **Use color** or **Apply** to commit the palette draft. Sampling preserves shape opacity; Escape or right-click cancels.

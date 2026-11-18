@@ -29,7 +29,6 @@ namespace SnipStudio
         private bool lastTextCommandsReady;
         private Size lastViewLayoutClientSize;
         private object lastViewLayoutImageIdentity;
-        private int lastViewLayoutPaletteWidth;
         private bool audioOptionsOpen;
         private ContextMenuStrip delayPopup;
         private Rectangle lastToolbarWorkingArea;
@@ -509,8 +508,11 @@ namespace SnipStudio
                 y += contextHeight;
                 // Options are a compact band in the chrome, outside the image.
                 // Keep the same location for Top/Bottom/Left/Right toolbars.
-                LayoutDockedToolOptions(w, y);
-                y = submenuTop + reservedSubmenuHeight;
+                y += LayoutDockedToolOptions(w, y);
+                // Reserve the largest command combination for window sizing,
+                // but give every pixel below the actual visible controls to
+                // the image viewport. Closed/smaller rows leave no hidden band.
+                int minimumChromeBottom = Math.Max(y, submenuTop + reservedSubmenuHeight);
                 zoomLabel.UpdateMetrics(scale);
                 int zoomRowHeight = Math.Max(Ui(28), zoomLabel.PreferredSize.Height);
                 int footer = zoomRowHeight, zoomRowY = 0;
@@ -544,8 +546,9 @@ namespace SnipStudio
                     if (verticalAnnotation && !userSizedEditorWindow)
                         requiredViewport = Math.Max(requiredViewport, Math.Max(MeasureVerticalAnnotationToolbar(false, false).Height,
                             MeasureVerticalAnnotationToolbar(true, false).Height));
-                    // The fixed submenu band is part of the initial snip shell.
-                    int minimumHeight = Math.Min(work.Height, y + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
+                    // Keep tracking/preferred size stable across tool changes;
+                    // the actual image viewport above uses only visible rows.
+                    int minimumHeight = Math.Min(work.Height, minimumChromeBottom + footer + bottomAnnotationHeight + requiredViewport + nonClientHeight);
                     int previousHeight = Height;
                     if (MinimumSize.Height != minimumHeight) MinimumSize = new Size(MinimumSize.Width, minimumHeight);
                     if (Height > previousHeight || verticalAnnotation || cropMode || shapeMode || composeMode)
@@ -568,17 +571,17 @@ namespace SnipStudio
                 int viewportLeft = leftAnnotation ? annotationWidth : 0;
                 int availableViewportWidth = Math.Max(1, w - annotationWidth);
                 int paletteWidth = InlineAnnotationPaletteDockWidth(availableViewportWidth);
-                // A palette changes the actual image viewport. A fitted image
-                // must fit that viewport, not become a manual view at its old
-                // scale with a new horizontal scrolling extent left behind.
-                bool refitPaletteView = paletteWidth != lastViewLayoutPaletteWidth && canvas.FitRequested;
+                Rectangle viewportBounds = new Rectangle(viewportLeft, y, Math.Max(1, availableViewportWidth - paletteWidth), viewportHeight);
+                // Options/context rows and palettes change the usable viewport.
+                // Fit follows that settled area; explicit zoom/pan retains the
+                // existing source-center preservation scope at the same scale.
+                bool refitLayoutView = canvas.FitRequested && workspace.Bounds != viewportBounds;
                 using (IDisposable preservedView = preserveView ? canvas.PreserveViewForLayout() : null)
                 {
-                    workspace.SetBounds(viewportLeft, y, Math.Max(1, availableViewportWidth - paletteWidth), viewportHeight);
+                    workspace.Bounds = viewportBounds;
                     LayoutInlineAnnotationPaletteDock(new Rectangle(viewportLeft + availableViewportWidth - paletteWidth, y, paletteWidth, viewportHeight));
                 }
-                lastViewLayoutPaletteWidth = paletteWidth;
-                if (refitPaletteView) canvas.RefitForPaletteLayout();
+                if (refitLayoutView && canvas.FitRequested) canvas.RefitForPaletteLayout();
                 lastViewLayoutClientSize = ClientSize;
                 lastViewLayoutImageIdentity = canvas.ImageIdentity;
                 int zoomRight = w - Ui(8);

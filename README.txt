@@ -1,4 +1,4 @@
-SNIP STUDIO 0.6.23 - AUTOMATION FORGE, 2026
+SNIP STUDIO 0.6.24 - AUTOMATION FORGE, 2026
 https://automation-forge.com/
 
 SIGNED RELEASE CANDIDATE
@@ -7,6 +7,10 @@ signatures. The bundled Node runtime retains its original publisher signature.
 See VALIDATION.txt for the checks performed and remaining acceptance work.
 
 WHAT CHANGED
+The canvas starts directly below the visible tool and context rows. Empty room
+for larger hidden panels is no longer held above the snip. Fit adapts when those
+rows open or close; a centered image uses the remaining canvas evenly.
+
 Text actions activates Text. Small filename snips receive bounded recognition
 retries; icons are protected during supported text edits. Drag selection keeps
 filename separators and reading order. Repeated text selection and font matching
@@ -111,17 +115,16 @@ license are included in About > Open-source licenses and translation credits.
 The feature uses Windows media APIs offline without an added video engine
 binary, paid media service or runtime download.
 
-FIXED LAYOUT AROUND THE IMAGE
-The editor measures room for its widest text commands and largest tool-options
-row when an image opens. That top space stays reserved while tools and their
-normal submenus change, keeping the window, viewport and image position steady.
-The image keeps a consistent surrounding margin. Footer help uses one line;
-hover its text for the full message. Narrow command rows scroll horizontally.
+LAYOUT AROUND THE IMAGE
+Only visible tool-options and context rows take space above the image. Closed
+rows and unused room for larger tools belong to the canvas, so a centered snip
+has balanced top and bottom margins below the controls that are actually shown.
+The preferred window size still allows room for larger tools without making
+the window jump between tool selections. Narrow command rows scroll.
 
-Initial fitting for a new image and a deliberate window resize can change the
-view. Merely selecting a tool is not a new image fit. The compact empty
-launcher is unchanged. See VALIDATION.txt for the signed-build cycle checks
-and physical-interaction limitations.
+Fit adapts to the available canvas when options open or close. Manual zoom and
+pan retain their existing view intent. Footer help uses one line; hover its
+text for the full message. See VALIDATION.txt for checks and native limitations.
 
 TOP-ROW TEXT
 The supplied header's sender, recipient and first body line were already
@@ -143,9 +146,9 @@ between recognized lines and their existing editable notes keeps the command
 row and image view stable. Cached recognition is reused only while its image
 and document revision remain current; stale work is rejected.
 
-Find text and inline text commands use the top space reserved when the image
-opens. Entering or leaving them keeps that image viewport in place. Monitor
-limits still apply to initial sizing, and manual window resizing remains usable.
+Find text and inline text commands use their actual visible height. Fit keeps
+the whole image inside the remaining canvas. Monitor limits still apply to
+initial sizing, and manual window resizing remains usable.
 
 Translation opens in an owned modeless window. Other snips remain available.
 Replacement warnings stay in the translation window; inline-edit warnings use
@@ -332,9 +335,9 @@ Windows remains optional. The program does not silently change Windows settings
 or install a low-level keyboard hook.
 
 INSTALL
-Installer: SnipStudio-0.6.23-Setup.exe. Save your work and close older Snip Studio
+Installer: SnipStudio-0.6.24-Setup.exe. Save your work and close older Snip Studio
 windows before installing this update. Installation is per user.
-Portable: extract every file from SnipStudio-0.6.23-signed-portable.zip into its
+Portable: extract every file from SnipStudio-0.6.24-signed-portable.zip into its
 own folder and run Snip Studio.exe. Keep its translation and licenses folders
 together. The portable build does not replace an installed copy.
 Verify Publisher and Digital Signatures before running either build.

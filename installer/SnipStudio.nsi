@@ -5,7 +5,7 @@ Unicode true
 !include "FileFunc.nsh"
 
 !ifndef RELEASE_VERSION
-  !define RELEASE_VERSION "0.6.23"
+  !define RELEASE_VERSION "0.6.24"
 !endif
 !ifndef UNINSTALL_SIGN_HOST
   !error "A verified signing host is required for the generated uninstaller."

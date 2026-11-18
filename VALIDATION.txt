@@ -1,95 +1,89 @@
-SNIP STUDIO 0.6.23 - VALIDATION, 18 NOVEMBER 2026
+SNIP STUDIO 0.6.24 - VALIDATION, 18 NOVEMBER 2026
 Automation Forge
 
-SIGNED APPLICATION
-File version: 0.6.23.0. Authenticode Valid, Automation Forge LLC, Microsoft
-timestamp. Application SHA256:
-370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C
-All 117 C# source files match the final clean-build freeze. Freeze SHA256:
-B430D4C57F852B675BBA2C963E207D72358A16EB81829C83FF913C8BF780F83A
+SIGNED SPACING-FIX CANDIDATE
+File version0.6.24.0. Application AuthenticodeValid, AutomationForgeLLC, timestamped.
+Application SHA256:
+7546A3AC9C4ED81986E29C6F8E9825437856F3054976D94CF4105D4AA8B92A4E
+All117 C# inputs match the clean-build source freeze. Freeze SHA256:
+E519185C6D1999ED1835FFDD80D83EA50C464B98C70C9AA4E5A94963B8179D71
 
-CURRENT CHECKS
-Checks run signed helpers against this exact signed application. Signatures,
-timestamps and hashes are checked before execution; original failures and
-superseded candidates are retained separately and excluded from final passes.
+SPACING CAUSE AND CORRECTION
+The signed0.6.23 baseline reproduced the supplied759x301snip case:
+closedPen top110px/bottom28px(hidden reserve82px); openHighlight top70px/
+bottom28px(hidden reserve42px). These were59 baseline diagnostic assertions,
+not fixed-build passes. The maximum combined text/context reserve was being
+used as actual viewport padding even when those controls were not visible.
 
-Core document checks: 74 assertions.
-Editing and paste checks: 198 assertions (includes 59 paste assertions).
-Ten conversion/selection/recovery fixtures: 774 assertions.
-OCR/selection/cache audit: 91 assertions.
-Window sizing: 452 assertions.
-Recent snips: 1,168 assertions across 46 control/layout cases.
-Capture selection and recording-notification workflow: 19 assertions.
-Video review: 45 managed and native synthetic-MP4 assertions.
+The viewport now starts immediately below the visible controls. The larger
+reserve remains only in preferred/minimum window sizing, preserving the frame.
+Fit adapts to actual viewport changes with bounded settling; manual zoom/pan
+keep their view intent. Existing source pixels and document history are retained.
 
-The six-row filename example recovers 6/6 filename bodies in source order;
-the earlier Explorer example covers 9/9 filename bodies. Tests exercise adjacent
-row dragging, column isolation, icon protection, source bounds and Undo.
-Coverage does not prove exact character transcription. Windows OCR can still
-confuse 0/O, 1/l and similar glyphs; no guessed identifier corrections are made.
-Color, font family, size, weight and reconstruction from pixels remain estimates.
+Actual production-control renders of the signed.24 candidate show closedPen
+69px/69px and openHighlight49px/49px at100%, hidden reserve0. Both images were
+visually inspected. These unshown-control exports do not establish physical
+focus/native dropdown painting. Native combo text is limited in such exports.
 
-Editing tests cover failed replacement and rejected-paste preservation,
-pending-draft history/buttons, low native-editor zoom, exact RTF paragraph
-semantics, 16,001-character rejection, and selected replacement at exactly 16,000.
-Below 2% canvas zoom the native text editing surface uses a valid 2% minimum;
-the requested canvas scale, stored font size and exported pixels are unchanged.
+One retained strict-fixture failure at150% logical DPI measured manual100%
+top126px/bottom128px, hidden0: one rendered pixel of center error. Independent
+review traced an initial half-pixel manual anchor plus whole-pixel projection
+after an odd63px row change. The reviewed manual contract bounds absolute and
+relative center error to1 rendered pixel, retaining100% zoom; Fit retains the
+stricter gap comparison and panned views retain their relative-anchor check.
+The original failed report and signed fixtures are preserved.
 
-Save workflow, owner-lifetime, raw encoding, update/startup/recent/zoom policies,
-and offline translation have separate hash-bound reports in the local review.
-The full feature matrix distinguishes verified contracts from native acceptance.
-Synthetic inputs and unshown controls are not whole-application acceptance.
+CURRENT COMPATIBILITY CHECKS
+Against this exact signed.24 app, pre/postsignature/hash gates passed for:
+Core74; Editing198(including59paste); ten extraction/region/selection fixtures774;
+OCR/cache91; WindowSizing452; RecentSnips1168/46layout cases; CaptureWorkflow19;
+VideoReview45(including synthetic nativeMP4); non-dialog save16; rawcodec51.
+That is2,888 accepted assertions before the separate spacing suite. Repeated
+runs, prior candidates, baseline diagnosis and the render subset are not added.
+Full spacing results are bound separately in the local spacing/release receipt.
 
-PERFORMANCE
-A 3,600-word, 60-pointer-sample selection trace allocated 289,760 bytes versus
-16,066,424 bytes on the signed baseline: 98.2% fewer measured allocations,
-with zero rather than two Gen0 collections. Final observed trace time was 13 ms.
-Repeated native font refinement measured under 1 ms stopwatch resolution after
-warming. Initial refinement is still costly; shared-machine contention affects
-latency. Native OCR speed is not claimed as improved.
+Supplied images remained hash-identical. Filename-body coverage6/6 and9/9,
+source order and adjacent drag/column separation passed. OCR can still confuse
+letters/digits; no guessed corrections are applied. Font/color/size reconstruction
+from screenshot pixels remains an estimate. Manual native text editing below2%
+uses a valid2%control floor without changing canvas scale, font model or exports.
 
-For synthetic 24 MP images, the earlier signed candidate's snapshot render took
-85-86 ms; encoding took 158-1,412 ms for PNG and 327-2,503 ms for PDF. Those
-single-run codec measurements are not a throughput improvement claim. The save
-change moves encoding/publishing off the UI thread. Snapshot rendering remains
-on the UI thread, and forced teardown may wait for the safe worker to finish.
-Full application startup, live scrolling latency, microphone/system audio,
-recording throughput and long-session memory have not been measured here.
+The0.6.23 signed candidate's167translation assertions are component evidence
+only here: translation code/runtime/models remain unchanged, but those scripts
+were not rerun as current.24 assertions. The same applies to its native save
+contracts: six modal assertions and five owner-lifetime assertions remain
+unverified on.24. The save modules match the earlier signed native-tested code.
+Four extra WindowsPowerShell policy jobs remain without accepted final reports
+after an AuthorizationManager sandbox failure and interrupted escalation.
 
-RUNTIME AND SIGNING
-Bundled Node was refreshed to official 24.22.3. Its checksum matches the vendor
-release; its original OpenJS signature is Valid and timestamped. All 113 pinned
-runtime files plus bundle.json are checked. Vendor notices and original licenses
-are preserved. Bergamot/model files remain pinned; this bounded source/advisory
-review is not an independent audit of every transitive native/WASM component.
+PERFORMANCE AND RUNTIME
+Final.24 single-run24MP observations: render98/103ms, PNG153/1418ms,
+PDF416/1786ms(compressible/noise). No codec throughput improvement is claimed.
+The earlier measured98.2%selection-allocation reduction and warm font cache
+remain unchanged components; no new cold-start or whole-process speed claim.
+Snapshot rendering remains synchronous; encoding/publication use the worker.
 
-The application, generated full uninstaller and Setup require timestamped
-Automation Forge signatures. Compiler/extractor copies and native installer
-plugins are signed before use; no unsigned executable is substituted.
-Final Setup/portable hashes, extracted byte identity, signatures, CRC and known
-private-marker checks belong to the separate local release receipt/package audit.
-The signing process does not certify absence of malware or prevent every endpoint
-security alert. No SentinelOne protection or quarantine was bypassed.
+The bundled Node24.22.3 binary preserves its original Valid timestamped OpenJS
+signature and official checksum. All113 runtime pins plus bundle.json and
+existing notices/models are checked. No runtime change is part of this patch.
 
-LIMITS AND ACCEPTANCE
-The scrolling stitch/session suites passed 152/59 checks on signed 0.6.21;
-those are historical component evidence, not final 0.6.23 whole-workflow checks.
-The corrected recorder startup module passed 16 synthetic fault/retry checks;
-its injected old-flow failure is not an exact released-binary baseline.
+DELIVERY AND LIMITS
+Application, Setup and the complete generated uninstaller require Valid,
+timestamped AutomationForge signatures. Native installer plugins and reviewed
+build/extraction tools are signed before use. The final package receipt binds
+exact hashes,124payload files, source freeze,13signature roles, embedded full
+uninstaller identity, notices/runtime and pre/post-signing CRC/private-marker
+checks. Neither installer nor uninstaller is run by those static checks.
 
-An isolated native editor was visually inspected with a synthetic 144x121 snip.
-Physical border dragging remained inconclusive through the automation tool;
-geometry checks do not establish physical resize, focus or multi-monitor behavior.
-Physical DPI rendering, live capture/HDR/exclusion, microphone/system audio,
-actual Windows Recent history, clipboard contention, printer/device behavior,
-Clipchamp import, startup/tray integration, live update transport, installation,
-upgrade and uninstall require separate native or installed acceptance.
+Overall release status: INSUFFICIENT EVIDENCE under MasterPromptV2. Physical
+resizing/focus/DPI/multi-monitor/HDR, actual capture/audio/recording, WindowsRecent,
+clipboard contention, printer/devices, Clipchamp import, startup/tray, live update
+transport, installed upgrade/uninstall, full startup and long-session memory
+remain separate acceptance work. Logical DPI overrides are not physical monitors.
+Native metadata operations already running cannot be forcibly aborted; UI waits
+and worker counts are bounded. No pixel-perfect OCR/font or frame-exact video
+editing guarantee is made. Known-marker scanning is not universal privacy proof.
 
-Metadata waits are bounded at the UI. Already-running Windows native metadata or
-shell calls cannot be forcibly aborted; worker slots remain bounded until return.
-No multi-track or frame-exact video editing guarantee is made.
-
-Installer and uninstaller are statically inspected, not run. Installation,
-Git pushes and publication remain pending approval. Private screenshots, test
-utilities, source paths, signing credentials and review logs are excluded from
-release packages. Known-marker checks are not a universal privacy guarantee.
+Installation and publicGitHubRelease remain pending approval. Git main is updated
+only after the signed candidate and package gates finish. Private screenshots,
+review logs, signing credentials and test executables are excluded from downloads.
