@@ -19,6 +19,8 @@ namespace SnipStudio
         // clipboard content, even when each window's own image is unchanged.
         private static long latestClipboardIntent;
         private long automaticClipboardIntent;
+        private uint automaticClipboardSequence;
+        private ClipboardPublisher clipboardPublisher = new ClipboardPublisher();
         private readonly SemaphoreSlim clipboardSlot = new SemaphoreSlim(1, 1);
         private bool captureProcessingPending, captureProcessingDisposed;
         private bool closeWhenCaptureReady, closeCaptureForceExit;
@@ -40,6 +42,7 @@ namespace SnipStudio
             internal long Revision;
             internal int Generation;
             internal long ClipboardIntent;
+            internal uint ClipboardSequence;
             internal bool SaveOriginal, CopyOriginal;
             internal bool Started;
             internal string Folder, Destination;
@@ -74,7 +77,11 @@ namespace SnipStudio
             bool save = preferences.AutoSaveOriginalScreenshots;
             bool copy = preferences.AutoCopyScreenshotChanges;
             long clipboardIntent = copy ? RegisterClipboardIntent() : 0;
-            if (copy) automaticClipboardIntent = clipboardIntent;
+            if (copy)
+            {
+                automaticClipboardIntent = clipboardIntent;
+                automaticClipboardSequence = clipboardPublisher.CaptureSequence();
+            }
             capturePolicyMessage = save ? "Captured. Saving the original in the background…"
                 : copy ? "Captured. Preparing the clipboard…" : "Captured. Annotate your snip, then Copy or Save.";
             if (!save && !copy) return;
@@ -87,6 +94,7 @@ namespace SnipStudio
                 Revision = canvas.DocumentRevision,
                 Generation = ++captureProcessingGeneration,
                 ClipboardIntent = clipboardIntent,
+                ClipboardSequence = automaticClipboardSequence,
                 SaveOriginal = save,
                 CopyOriginal = copy,
                 Folder = preferences.ScreenshotFolder
@@ -129,7 +137,7 @@ namespace SnipStudio
             if (job.Started) return;
             job.Started = true;
             if (Object.ReferenceEquals(queuedCaptureWork, job)) queuedCaptureWork = null;
-            bool saveSucceeded = !job.SaveOriginal, copied = false;
+            bool saveSucceeded = !job.SaveOriginal, copied = false, clipboardUnavailable = false;
             Exception failure = null;
             try
             {
@@ -151,7 +159,12 @@ namespace SnipStudio
                     }
                     if (job.CopyOriginal && preferences.AutoCopyScreenshotChanges && canvas.DocumentRevision == job.Revision)
                     {
-                        try { copied = await PublishClipboardAsync(job.Snapshot, result.Png, job.ImageIdentity, job.Revision, true, job.ClipboardIntent); }
+                        try
+                        {
+                            ClipboardPublishResult publication = await PublishClipboardAsync(job.Snapshot, result.Png, job.ImageIdentity, job.Revision, true, job.ClipboardIntent, job.ClipboardSequence);
+                            copied = publication == ClipboardPublishResult.Copied;
+                            clipboardUnavailable = publication == ClipboardPublishResult.Unavailable;
+                        }
                         catch (Exception error)
                         {
                             if (failure == null) failure = error;
@@ -162,6 +175,10 @@ namespace SnipStudio
                     capturePolicyMessage = job.SaveOriginal && saveSucceeded
                         ? "Captured and original saved. Your edits stay separate until you save."
                         : copied ? "Captured and copied to the clipboard." : "Captured. Annotate your snip, then Copy or Save.";
+                    if (clipboardUnavailable)
+                        capturePolicyMessage = job.SaveOriginal && saveSucceeded
+                            ? "Original saved. The clipboard could not be updated; use Copy image to retry. Your snip is still open."
+                            : "Captured. The clipboard could not be updated; use Copy image to retry. Your snip is still open.";
                     if (failure != null)
                     {
                         capturePolicyMessage = job.SaveOriginal && !saveSucceeded
@@ -202,6 +219,7 @@ namespace SnipStudio
                     }
                     if (!captureProcessingDisposed && !IsDisposed && !Disposing)
                     {
+                        CompleteInitialImageView(job.ImageIdentity, job.Revision);
                         ScheduleLatestAutomaticCopy();
                         if (retryClose)
                         {
@@ -257,6 +275,7 @@ namespace SnipStudio
         {
             if (!canvas.HasImage || IsDisposed || Disposing) return false;
             long intent = onlyIfCurrent ? automaticClipboardIntent : RegisterClipboardIntent();
+            uint initialSequence = onlyIfCurrent ? automaticClipboardSequence : clipboardPublisher.CaptureSequence();
             if (!IsLatestClipboardIntent(intent)) return false;
             if (onlyIfCurrent && (captureProcessingPending || clipboardCopyBusy)) { RetainLatestAutomaticCopyRequest(); return false; }
             object identity = canvas.ImageIdentity;
@@ -266,7 +285,7 @@ namespace SnipStudio
             try
             {
                 if (!ClipboardSourceIsCurrent(identity, revision, onlyIfCurrent, intent)) return false;
-                using (Bitmap image = canvas.RenderImage())
+                using (Bitmap image = onlyIfCurrent ? canvas.RenderCommittedImage() : canvas.RenderImage())
                 {
                     byte[] png;
                     await pngEncodeSlots.WaitAsync();
@@ -274,8 +293,11 @@ namespace SnipStudio
                     finally { pngEncodeSlots.Release(); }
                     if (!ClipboardSourceIsCurrent(identity, revision, onlyIfCurrent, intent))
                     { if (onlyIfCurrent) RetainLatestAutomaticCopyRequest(); return false; }
-                    SetClipboardPayload(image, png);
-                    return true;
+                    ClipboardPublishResult publication = await clipboardPublisher.PublishAsync(image, png, initialSequence,
+                        delegate { return ClipboardSourceIsCurrent(identity, revision, onlyIfCurrent, intent); });
+                    if (publication == ClipboardPublishResult.Unavailable && ClipboardSourceIsCurrent(identity, revision, onlyIfCurrent, intent))
+                        SetStatus("Your snip is kept. The clipboard could not be updated; use Copy image to retry.");
+                    return publication == ClipboardPublishResult.Copied;
                 }
             }
             finally
@@ -286,15 +308,15 @@ namespace SnipStudio
             }
         }
 
-        private async Task<bool> PublishClipboardAsync(Bitmap image, byte[] png, object identity, long revision, bool automatic, long intent)
+        private async Task<ClipboardPublishResult> PublishClipboardAsync(Bitmap image, byte[] png, object identity, long revision, bool automatic, long intent, uint initialSequence)
         {
             await clipboardSlot.WaitAsync();
             clipboardCopyBusy = true;
             try
             {
-                if (!ClipboardSourceIsCurrent(identity, revision, automatic, intent)) { if (automatic) RetainLatestAutomaticCopyRequest(); return false; }
-                SetClipboardPayload(image, png);
-                return true;
+                if (!ClipboardSourceIsCurrent(identity, revision, automatic, intent)) { if (automatic) RetainLatestAutomaticCopyRequest(); return ClipboardPublishResult.Superseded; }
+                return await clipboardPublisher.PublishAsync(image, png, initialSequence,
+                    delegate { return ClipboardSourceIsCurrent(identity, revision, automatic, intent); });
             }
             finally { clipboardCopyBusy = false; clipboardSlot.Release(); }
         }
@@ -320,6 +342,7 @@ namespace SnipStudio
         private void RequestAutomaticClipboardCopy()
         {
             automaticClipboardIntent = RegisterClipboardIntent();
+            automaticClipboardSequence = clipboardPublisher.CaptureSequence();
             automaticCopyRequested = true;
         }
 
@@ -340,18 +363,6 @@ namespace SnipStudio
         private static byte[] EncodePng(Bitmap image)
         {
             using (MemoryStream png = new MemoryStream()) { image.Save(png, ImageFormat.Png); return png.ToArray(); }
-        }
-
-        private static void SetClipboardPayload(Bitmap image, byte[] pngBytes)
-        {
-            using (MemoryStream png = new MemoryStream(pngBytes, false))
-            {
-                DataObject data = new DataObject();
-                data.SetData(DataFormats.Bitmap, true, image);
-                data.SetData("PNG", false, png);
-                // The call is STA-only. Avoid the previous 400ms retry stall.
-                Clipboard.SetDataObject(data, true, 2, 20);
-            }
         }
 
         private static void WritePngBytesAtomic(byte[] bytes, string destination)

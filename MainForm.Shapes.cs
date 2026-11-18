@@ -55,7 +55,7 @@ namespace SnipStudio
             annotationToolbar.Controls.Add(shapesButton);
             annotationControls.Add(shapesButton);
             documentControls.Add(shapesButton);
-            tips.SetToolTip(shapesButton, "Shapes: rectangle, ellipse, line, arrow and colored emoji stickers. Click again or use the arrow for Shape options (Alt+Down).");
+            tips.SetToolTip(shapesButton, "Shapes: rectangle, ellipse, line, arrow and colored emoji stickers. Shape options open when selected; use the arrow or close button to hide them (Alt+Down).");
         }
 
         private void BuildShapeActions()
@@ -182,9 +182,10 @@ namespace SnipStudio
             advancedTextButton.Visible = text;
             inlineTextGuidance.Visible = HasInlineTextWorkflow;
             advancedTextButton.Enabled = text && ready && canvas.CanShowAdvancedTextEditor;
-            finishInlineTextButton.Visible = cancelInlineTextButton.Visible = text && canvas.InlineTextEditing;
+            finishInlineTextButton.Visible = cancelInlineTextButton.Visible = text && HasInlineTextWorkflow;
             finishInlineTextButton.Enabled = cancelInlineTextButton.Enabled = text && ready && canvas.InlineTextEditing;
-            if (text) inlineTextGuidance.Text = canvas.InlineTextEditing ? "Type inside the box. Enter adds a line; Ctrl+Enter finishes; Esc cancels." :
+            if (text) inlineTextGuidance.Text = canvas.RecognizedTextEditing || canvas.RecognizedTextTransitionActive ? "Edit text in place. Ctrl+Enter finishes; Esc cancels." :
+                canvas.InlineTextEditing ? "Type inside the box. Enter adds a line; Ctrl+Enter finishes; Esc cancels." :
                 "Drag a text box, then type. Click for a quick default box. Advanced text opens the full editor.";
         }
 
@@ -207,7 +208,7 @@ namespace SnipStudio
         {
             UpdateAnnotationContextControls();
             int x = Ui(12), rowY = Ui(3), rowHeight = Ui(34), max = Math.Max(1, availableWidth - Ui(24));
-            if (canvas.InlineTextEditing)
+            if (HasInlineTextWorkflow)
             {
                 PlaceToolbarControl(finishInlineTextButton, Math.Min(ToolbarWidth(finishInlineTextButton, 70), max), ref x, ref rowY, rowHeight, availableWidth, Ui(6));
                 PlaceToolbarControl(cancelInlineTextButton, Math.Min(ToolbarWidth(cancelInlineTextButton, 82), max), ref x, ref rowY, rowHeight, availableWidth, Ui(10));

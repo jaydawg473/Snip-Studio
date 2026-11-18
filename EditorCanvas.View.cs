@@ -117,14 +117,15 @@ namespace SnipStudio
         private bool ZoomAnimationActive { get { return zoomTimer != null && zoomTimer.Enabled; } }
         private bool ScrollAnimationActive { get { return scrollTimer != null && scrollTimer.Enabled; } }
         private bool ViewAnimationActive { get { return ZoomAnimationActive || ScrollAnimationActive; } }
-        private bool RecognitionRequested { get { return textActionsMode || (tool == EditorTool.Highlighter && snapHighlightToText); } }
+        private bool RecognitionRequested { get { return textActionsMode || (tool == EditorTool.Highlighter && snapHighlightToText) ||
+            (tool == EditorTool.Text && recognizedTextToolHistory && !RecognizedTextSessionActive); } }
 
         private sealed class LayoutViewSnapshot
         {
             internal object ImageIdentity;
             internal Size Viewport;
             internal float Zoom;
-            internal PointF ImageCenter;
+            internal PointF ModelOrigin;
             internal bool FitRequested;
             internal long IntentVersion;
         }
@@ -149,12 +150,19 @@ namespace SnipStudio
             if (disposingCanvas || !HasImage) return new ViewLayoutScope(null);
             if (preserveLayoutDepth == 0)
             {
+                // Rendering, caret placement and hit testing deliberately use
+                // rounded ImageOrigin. Layout must keep the fractional model
+                // origin: an odd-width pane introduces half-pixel offsets that
+                // would otherwise be lost on its next open/close transition.
+                PointF origin = zoomViewActive ? zoomViewOrigin : new PointF(
+                    fit ? (ClientSize.Width - ImageSize.Width * zoom) / 2f : CanvasMargin + AutoScrollPosition.X + zoomOriginOffset.X,
+                    fit ? (ClientSize.Height - ImageSize.Height * zoom) / 2f : CanvasMargin + AutoScrollPosition.Y + zoomOriginOffset.Y);
                 layoutViewSnapshot = new LayoutViewSnapshot
                 {
                     ImageIdentity = ImageIdentity,
                     Viewport = ClientSize,
                     Zoom = zoom,
-                    ImageCenter = ViewportTransform.ImagePointAt(new PointF(ClientSize.Width / 2f, ClientSize.Height / 2f), ImageOrigin, zoom),
+                    ModelOrigin = origin,
                     FitRequested = fit || fitOnWindowResize,
                     IntentVersion = viewIntentVersion
                 };
@@ -184,8 +192,41 @@ namespace SnipStudio
                 for (int pass = 0; pass < 3; pass++)
                 {
                     Size viewport = ClientSize;
-                    PointF center = new PointF(viewport.Width / 2f, viewport.Height / 2f);
-                    PositionViewOrigin(ViewportTransform.OriginForAnchor(snapshot.ImageCenter, center, zoom));
+                    // Zoom is unchanged by this scope, so pixel-space deltas
+                    // preserve the center without inverse-scale roundoff.
+                    PositionViewOrigin(new PointF(
+                        snapshot.ModelOrigin.X + (viewport.Width - snapshot.Viewport.Width) / 2f,
+                        snapshot.ModelOrigin.Y + (viewport.Height - snapshot.Viewport.Height) / 2f));
+                    if (ClientSize == viewport) break;
+                }
+            }
+            finally { updatingView = wasUpdating; }
+            Invalidate();
+            RaiseViewChanged();
+        }
+
+        // A palette is a temporary reduction of the usable image viewport.
+        // Retain Fit without manufacturing user zoom/pan intent, committing a
+        // draft, or keeping a virtual scrolling extent after the pane closes.
+        internal void RefitForPaletteLayout()
+        {
+            if (disposingCanvas || !HasImage || !FitRequested) return;
+            StopViewAnimations();
+            bool wasUpdating = updatingView;
+            updatingView = true;
+            try
+            {
+                fit = true;
+                fitOnWindowResize = false;
+                zoomOriginOffset = PointF.Empty;
+                AutoScrollPosition = Point.Empty;
+                AutoScrollMinSize = Size.Empty;
+                // Removing an existing native scrollbar can enlarge ClientSize
+                // once more. Fit the settled viewport at most three times.
+                for (int pass = 0; pass < 3; pass++)
+                {
+                    Size viewport = ClientSize;
+                    RecalculateFit();
                     if (ClientSize == viewport) break;
                 }
             }

@@ -40,6 +40,13 @@ namespace SnipStudio
         // Selection is made against a frozen desktop so the overlay never appears in a snip.
         public static Bitmap Capture(CaptureMode mode)
         {
+            string warning;
+            return CaptureWithWarnings(mode, out warning);
+        }
+
+        internal static Bitmap CaptureWithWarnings(CaptureMode mode, out string warning)
+        {
+            warning = null;
             if (!Enum.IsDefined(typeof(CaptureMode), mode))
                 throw new ArgumentOutOfRangeException("mode");
 
@@ -51,12 +58,16 @@ namespace SnipStudio
             Bitmap desktop = null;
             try
             {
-                using (TaskbarVisibilityScope taskbars = HideTaskbarsDuringCapture ? TaskbarVisibilityScope.Hide(KeepPrimaryTaskbarVisible) : null)
+                using (TaskbarVisibilityScope taskbars = HideTaskbarsDuringCapture ? TaskbarVisibilityScope.HideBestEffort(KeepPrimaryTaskbarVisible) : null)
                 {
                     windows = mode == CaptureMode.Window ? FindWindows(desktopBounds) :
                         mode == CaptureMode.FullScreen ? FindMonitors(desktopBounds) : new List<CaptureWindow>();
                     desktop = CaptureDesktop(desktopBounds);
-                    if (taskbars != null) taskbars.VerifyHidden();
+                    if (taskbars != null)
+                    {
+                        taskbars.VerifyHidden();
+                        warning = taskbars.Warning;
+                    }
                 }
             }
             catch
@@ -137,14 +148,32 @@ namespace SnipStudio
 
         public static Rectangle? SelectRecordingRegion(bool hideTaskbars, bool keepPrimaryVisible)
         {
+            return SelectRecordingRegion(CaptureMode.Rectangle, hideTaskbars, keepPrimaryVisible);
+        }
+
+        internal static CaptureMode RecordingModeFromIndex(int index)
+        {
+            if (index == 0) return CaptureMode.Rectangle;
+            if (index == 1) return CaptureMode.Window;
+            throw new ArgumentOutOfRangeException("index", "Choose Draw area or Window for recording.");
+        }
+
+        public static Rectangle? SelectRecordingRegion(CaptureMode selectionMode, bool hideTaskbars, bool keepPrimaryVisible)
+        {
+            // Video uses rectangular pixels, so photo-only freeform, scrolling,
+            // and monitor modes must not silently change the recording selection.
+            if (selectionMode != CaptureMode.Rectangle && selectionMode != CaptureMode.Window)
+                throw new ArgumentOutOfRangeException("selectionMode", "Choose Draw area or Window for recording.");
             Rectangle desktopBounds = SystemInformation.VirtualScreen;
             if (desktopBounds.Width < 1 || desktopBounds.Height < 1)
                 throw new InvalidOperationException("No desktop is available to record.");
             Bitmap desktop = null;
+            List<CaptureWindow> windows = new List<CaptureWindow>();
             try
             {
                 using (TaskbarVisibilityScope taskbars = hideTaskbars ? TaskbarVisibilityScope.Hide(keepPrimaryVisible) : null)
                 {
+                    if (selectionMode == CaptureMode.Window) windows = FindWindows(desktopBounds);
                     desktop = CaptureDesktop(desktopBounds);
                     if (taskbars != null) taskbars.VerifyHidden();
                 }
@@ -155,7 +184,7 @@ namespace SnipStudio
                 throw;
             }
             using (desktop)
-            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, CaptureMode.Rectangle, new List<CaptureWindow>()))
+            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, selectionMode, windows, true))
                 return overlay.ShowDialog() == DialogResult.OK ? (Rectangle?)overlay.SelectedScreenBounds : null;
         }
 
@@ -287,6 +316,11 @@ namespace SnipStudio
         private bool SelectsWholeTarget { get { return mode == CaptureMode.Window || mode == CaptureMode.FullScreen; } }
 
         internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows)
+            : this(desktop, desktopBounds, mode, windows, false)
+        {
+        }
+
+        internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows, bool forRecording)
         {
             this.desktop = desktop;
             this.desktopBounds = desktopBounds;
@@ -298,7 +332,13 @@ namespace SnipStudio
             instructionDetail = mode == CaptureMode.FullScreen ? "One complete monitor    |    Esc or right-click to cancel" :
                 mode == CaptureMode.Window ? "Visible window area    |    Esc or right-click to cancel" :
                 "Release to capture    |    Esc or right-click to cancel";
-            Text = "Choose a snip - Snip Studio";
+            if (forRecording)
+            {
+                instructionTitle = mode == CaptureMode.Window ? "Click a window to record" : "Drag to select a recording area";
+                instructionDetail = mode == CaptureMode.Window ? "Visible window area    |    Esc or right-click to cancel" :
+                    "Release to choose the recording area    |    Esc or right-click to cancel";
+            }
+            Text = forRecording ? "Choose a recording area - Snip Studio" : "Choose a snip - Snip Studio";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;

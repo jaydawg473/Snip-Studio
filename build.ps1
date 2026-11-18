@@ -51,20 +51,42 @@ function Get-VerifiedEmojiResources([string]$ProjectFolder = $PSScriptRoot) {
     }
 }
 
+function Get-VerifiedVideoFilmstripNotice([string]$ProjectFolder = $PSScriptRoot) {
+    $projectRoot = [IO.Path]::GetFullPath($ProjectFolder).TrimEnd('\')
+    $noticeSource = Join-Path $projectRoot 'third-party\video-filmstrip\NOTICE.txt'
+    if (-not (Test-Path -LiteralPath $noticeSource -PathType Leaf)) { throw 'The reviewed video filmstrip technical-reference notice is required.' }
+    $cursor = $noticeSource
+    while ($cursor.Length -ge $projectRoot.Length) {
+        $item = Get-Item -LiteralPath $cursor -Force
+        if ($item.LinkType -in @('SymbolicLink','Junction')) { throw 'The video filmstrip notice source cannot use filesystem links.' }
+        if ($cursor.Equals($projectRoot,[StringComparison]::OrdinalIgnoreCase)) { break }
+        $cursor = [IO.Path]::GetDirectoryName($cursor)
+    }
+    if ((Get-Item -LiteralPath $noticeSource).Length -ne 2451 -or
+        (Get-FileHash -LiteralPath $noticeSource -Algorithm SHA256).Hash -cne '33CF5DF44BF729396A0CC94ADCA264B884645AF8238987B66C06EAABACFF1AC7') {
+        throw 'The video filmstrip notice differs from the reviewed reference credit and complete pinned MIT license.'
+    }
+    return [IO.File]::ReadAllText($noticeSource)
+}
+
 function Copy-OpenSourceNotices([string]$Folder) {
     $emojiFolder = Join-Path $PSScriptRoot 'assets\emoji'
+    $videoFilmstripNotice = Get-VerifiedVideoFilmstripNotice
     $noticeFolder = Join-Path $Folder 'licenses'
     [IO.Directory]::CreateDirectory($noticeFolder) | Out-Null
     $combinedNotices = "Snip Studio - third-party notices`r`n`r`n" +
         [IO.File]::ReadAllText((Join-Path $emojiFolder 'ATTRIBUTION.txt')) + "`r`n`r`n" +
         [IO.File]::ReadAllText((Join-Path $emojiFolder 'LICENSE.txt')) + "`r`n`r`n" +
-        [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'translation-bundle\runtime\licenses\NOTICES.txt'))
+        [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'translation-bundle\runtime\licenses\NOTICES.txt')) + "`r`n`r`n" +
+        $videoFilmstripNotice
     [IO.File]::WriteAllText((Join-Path $noticeFolder 'NOTICES.txt'),$combinedNotices,[Text.UTF8Encoding]::new($false))
     [IO.File]::Copy((Join-Path $emojiFolder 'LICENSE.txt'),(Join-Path $noticeFolder 'FluentEmoji-LICENSE.txt'),$true)
     [IO.File]::Copy((Join-Path $emojiFolder 'ATTRIBUTION.txt'),(Join-Path $noticeFolder 'FluentEmoji-ATTRIBUTION.txt'),$true)
     [IO.File]::Copy((Join-Path $emojiFolder 'manifest.json'),(Join-Path $noticeFolder 'FluentEmoji-manifest.json'),$true)
 }
 
+# Validate the required reference credit before compiling any application output.
+$null = Get-VerifiedVideoFilmstripNotice
 $emojiResources = @(Get-VerifiedEmojiResources)
 if ($UseExistingIcons) {
     if (-not (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'assets\SnipStudio.ico'))) { throw 'The existing application icon was not found.' }

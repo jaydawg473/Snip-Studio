@@ -1,4 +1,4 @@
-﻿param(
+param(
     [Parameter(Mandatory = $true)][string]$InstallerPath,
     [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{64}$')][string]$ExpectedInstallerSha256,
     [Parameter(Mandatory = $true)][ValidateSet(0, 2, 3)][int]$ExpectedExitCode,
@@ -15,7 +15,7 @@ $ErrorActionPreference = 'Stop'
 # never starts Snip Studio, closes an application, or runs an install/uninstall.
 $preflightInstaller = (Resolve-Path -LiteralPath $InstallerPath).Path
 $preflightVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($preflightInstaller).FileVersion
-if ($preflightVersion -ne '0.6.6.0') { throw 'Only the selected installer with /CHECKREADY (0.6.6.0) may be checked.' }
+if ($preflightVersion -ne '0.6.21.0') { throw 'Only the selected installer with /CHECKREADY (0.6.21.0) may be checked.' }
 $preflightHash = (Get-FileHash -LiteralPath $preflightInstaller -Algorithm SHA256).Hash
 if ($preflightHash -ine $ExpectedInstallerSha256) { throw 'Installer hash does not match the explicitly selected artifact.' }
 $preflightSignature = Get-AuthenticodeSignature -LiteralPath $preflightInstaller

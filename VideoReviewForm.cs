@@ -25,6 +25,15 @@ namespace SnipStudio
         private bool allowClose;
         private bool closePromptPending;
         private CancellationTokenSource exportCancellation;
+        private CancellationTokenSource visualCancellation, previewCancellation;
+        private int visualGeneration, previewGeneration;
+        private bool updatingTimeline, visualReloadPending;
+        private readonly System.Windows.Forms.Timer previewTimer = new System.Windows.Forms.Timer();
+        private readonly PictureBox preview = new PictureBox();
+        private readonly Label previewTime = new Label();
+        private readonly VideoFilmstripControl filmstrip = new VideoFilmstripControl();
+        private readonly StudioButton setStart = new StudioButton();
+        private readonly StudioButton setEnd = new StudioButton();
 
         private readonly Label heading = new Label();
         private readonly Label description = new Label();
@@ -39,6 +48,7 @@ namespace SnipStudio
         private readonly NumericUpDown endSeconds = new NumericUpDown();
         private readonly StudioButton applyTrim = new StudioButton();
         private readonly StudioButton play = new StudioButton();
+        private readonly StudioButton editInClipchamp = new StudioButton();
         private readonly StudioButton copy = new StudioButton();
         private readonly StudioButton saveAs = new StudioButton();
         private readonly StudioButton smaller = new StudioButton();
@@ -46,6 +56,9 @@ namespace SnipStudio
         private readonly StudioButton close = new StudioButton();
         private readonly ProgressBar progress = new ProgressBar();
         private readonly ToolTip tips = TooltipService.RegisterProvider(new ToolTip());
+        private Panel reviewScroll;
+        private TableLayoutPanel reviewLayout, previewSummary, summaryText;
+        private bool updatingReviewLayout;
 
         public VideoReviewForm(string path, Preferences prefs)
         {
@@ -65,12 +78,14 @@ namespace SnipStudio
             ForeColor = StudioTheme.Text;
             AutoScaleDimensions = new SizeF(96, 96);
             AutoScaleMode = AutoScaleMode.Dpi;
-            Size = new Size(890, 740);
-            MinimumSize = new Size(720, 610);
+            Size = new Size(1000, 860);
+            MinimumSize = new Size(760, 680);
             StartPosition = FormStartPosition.CenterParent;
             MinimizeBox = false;
             MainForm.TrySetAppIcon(this);
             BuildLayout();
+            previewTimer.Interval = 90;
+            previewTimer.Tick += async delegate { previewTimer.Stop(); await ReadPreviewAsync(); };
             UpdateSummary();
             UpdateControls();
             Shown += FitWorkingArea;
@@ -96,12 +111,23 @@ namespace SnipStudio
 
         private void BuildLayout()
         {
+            // Keep scrolling separate from row measurement. A scrolling TLP
+            // with its own padding can expose a virtual extent shorter than
+            // its final wrapped action row on a constrained screen.
+            Panel scroll = new Panel { Dock = DockStyle.Fill, AutoScroll = true, Padding = Padding.Empty, Margin = Padding.Empty };
+            reviewScroll = scroll;
+            Controls.Add(scroll);
             TableLayoutPanel layout = new TableLayoutPanel();
-            layout.Dock = DockStyle.Fill;
-            layout.Padding = new Padding(26, 22, 26, 22);
+            reviewLayout = layout;
+            layout.Dock = DockStyle.Top;
+            // An explicit minimum content height protects short screens; above
+            // that minimum the preview receives all spare vertical space.
+            layout.AutoSize = false;
+            layout.Padding = new Padding(16, 12, 16, 12);
             layout.ColumnCount = 1;
+            layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
             layout.RowCount = 7;
-            layout.AutoScroll = true;
+            layout.AutoScroll = false;
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
@@ -109,80 +135,103 @@ namespace SnipStudio
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));
-            Controls.Add(layout);
+            scroll.Controls.Add(layout);
 
             heading.Text = "Your recording, ready.";
-            heading.Font = new Font("Segoe UI", 22f, FontStyle.Bold);
+            heading.Font = new Font("Segoe UI", 17f, FontStyle.Bold);
             heading.AutoSize = true;
-            heading.Margin = new Padding(0, 0, 0, 7);
+            heading.Margin = new Padding(0, 0, 0, 4);
             layout.Controls.Add(heading, 0, 0);
-            description.Text = "Play, copy, trim, or make a smaller MP4 for email and chat. Your original stays unchanged.";
+            description.Text = "Scrub or trim a copy, make it smaller, or edit in Clipchamp. Your original stays unchanged.";
             description.ForeColor = StudioTheme.Muted;
             description.AutoSize = true;
-            description.Margin = new Padding(0, 0, 0, 18);
+            description.Margin = new Padding(0, 0, 0, 8);
             layout.Controls.Add(description, 0, 1);
 
             TableLayoutPanel summary = new TableLayoutPanel();
+            previewSummary = summary;
             summary.Dock = DockStyle.Fill;
-            summary.MinimumSize = new Size(0, 155);
-            summary.ColumnCount = 2;
-            summary.RowCount = 1;
-            summary.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120));
+            summary.MinimumSize = new Size(0, 250);
+            summary.ColumnCount = 1;
+            summary.RowCount = 2;
             summary.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            summary.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+            summary.RowStyles.Add(new RowStyle(SizeType.AutoSize));
             summary.BackColor = StudioTheme.Surface;
-            summary.Padding = new Padding(18, 20, 22, 18);
-            summary.Margin = new Padding(0, 0, 0, 18);
-            VideoMark mark = new VideoMark();
-            mark.Dock = DockStyle.Fill;
-            mark.Margin = new Padding(0, 0, 18, 0);
-            summary.Controls.Add(mark, 0, 0);
-            TableLayoutPanel summaryText = new TableLayoutPanel();
+            summary.Padding = new Padding(8);
+            summary.Margin = new Padding(0, 0, 0, 10);
+            Panel previewPanel = new Panel { Dock = DockStyle.Fill, MinimumSize = new Size(0, 170), Margin = new Padding(0), BackColor = Color.Black };
+            preview.Dock = DockStyle.Fill;
+            preview.SizeMode = PictureBoxSizeMode.Zoom;
+            preview.BackColor = Color.Black;
+            preview.AccessibleName = "Video frame preview";
+            previewTime.Dock = DockStyle.Bottom;
+            previewTime.Height = 26;
+            previewTime.TextAlign = ContentAlignment.MiddleCenter;
+            previewTime.Text = "Reading preview…";
+            previewTime.BackColor = StudioTheme.Raised;
+            previewTime.ForeColor = StudioTheme.Text;
+            previewPanel.Controls.Add(preview);
+            previewPanel.Controls.Add(previewTime);
+            summary.Controls.Add(previewPanel, 0, 0);
+            summaryText = new TableLayoutPanel();
             summaryText.Dock = DockStyle.Fill;
+            summaryText.AutoSize = true;
             summaryText.ColumnCount = 1;
             summaryText.RowCount = 3;
-            summaryText.RowStyles.Add(new RowStyle(SizeType.Percent, 45));
-            summaryText.RowStyles.Add(new RowStyle(SizeType.Percent, 35));
-            summaryText.RowStyles.Add(new RowStyle(SizeType.Percent, 20));
-            summaryText.Margin = new Padding(0);
+            summaryText.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+            summaryText.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            summaryText.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            summaryText.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+            summaryText.Margin = new Padding(0, 6, 0, 0);
             summaryText.BackColor = StudioTheme.Surface;
-            fileName.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
+            fileName.Font = new Font("Segoe UI", 10f, FontStyle.Bold);
             fileName.Dock = DockStyle.Fill;
+            fileName.MinimumSize = new Size(0, 22);
             fileName.AutoEllipsis = true;
             fileName.TextAlign = ContentAlignment.MiddleLeft;
             fileName.Margin = new Padding(0);
             summaryText.Controls.Add(fileName, 0, 0);
             details.Dock = DockStyle.Fill;
+            details.AutoSize = true;
             details.TextAlign = ContentAlignment.MiddleLeft;
             details.ForeColor = StudioTheme.Muted;
             details.Margin = new Padding(0);
             summaryText.Controls.Add(details, 0, 1);
             fileState.Dock = DockStyle.Fill;
+            fileState.AutoSize = true;
             fileState.ForeColor = StudioTheme.Accent;
             fileState.TextAlign = ContentAlignment.MiddleLeft;
             fileState.Margin = new Padding(0);
             summaryText.Controls.Add(fileState, 0, 2);
-            summary.Controls.Add(summaryText, 1, 0);
+            summary.Controls.Add(summaryText, 0, 1);
             layout.Controls.Add(summary, 0, 2);
 
             TableLayoutPanel trim = new TableLayoutPanel();
             trim.Dock = DockStyle.Fill;
             trim.AutoSize = true;
             trim.ColumnCount = 1;
-            trim.RowCount = 4;
-            trim.Padding = new Padding(18, 16, 18, 16);
+            trim.RowCount = 5;
+            trim.Padding = new Padding(12, 10, 12, 10);
             trim.BackColor = StudioTheme.Surface;
-            trim.Margin = new Padding(0, 0, 0, 16);
+            trim.Margin = new Padding(0, 0, 0, 10);
             Label trimTitle = new Label();
-            trimTitle.Text = "Trim a copy";
+            trimTitle.Text = "Filmstrip · trim a copy";
             trimTitle.Font = new Font(Font, FontStyle.Bold);
             trimTitle.AutoSize = true;
             trimTitle.Margin = new Padding(0, 0, 0, 6);
             trim.Controls.Add(trimTitle, 0, 0);
-            trimExplanation.Text = "Set the start and end in seconds. Apply trim creates a new H.264/AAC MP4; the source recording stays unchanged.";
+            trimExplanation.Text = "Click to preview a frame. Drag the blue start/end handles, or enter exact seconds below. Arrow keys step the preview.";
             trimExplanation.AutoSize = true;
             trimExplanation.ForeColor = StudioTheme.Muted;
-            trimExplanation.Margin = new Padding(0, 0, 0, 13);
+            trimExplanation.Margin = new Padding(0, 0, 0, 5);
             trim.Controls.Add(trimExplanation, 0, 1);
+            filmstrip.Dock = DockStyle.Fill;
+            filmstrip.Margin = new Padding(0, 0, 0, 4);
+            filmstrip.SelectionChanged += FilmstripSelectionChanged;
+            filmstrip.PositionChanged += delegate { QueuePreview(); };
+            tips.SetToolTip(filmstrip, "Click a frame to scrub. Drag the blue handles to set the trim range. Left/Right steps one frame; Home/End jumps to an edge. Preview uses the nearest decoded frame. Play video opens normal playback with audio.");
+            trim.Controls.Add(filmstrip, 0, 2);
             FlowLayoutPanel range = new FlowLayoutPanel();
             range.AutoSize = true;
             range.Dock = DockStyle.Fill;
@@ -195,16 +244,24 @@ namespace SnipStudio
             range.Controls.Add(RangeLabel("End (s)"));
             ConfigureSeconds(endSeconds, "Trim end in seconds");
             range.Controls.Add(endSeconds);
+            ConfigureButton(setStart, "Set start", "", 96);
+            setStart.Click += delegate { SetRangeFromPreview(true); };
+            tips.SetToolTip(setStart, "Set the trim start to the current preview position.");
+            range.Controls.Add(setStart);
+            ConfigureButton(setEnd, "Set end", "", 92);
+            setEnd.Click += delegate { SetRangeFromPreview(false); };
+            tips.SetToolTip(setEnd, "Set the trim end to the current preview position.");
+            range.Controls.Add(setEnd);
             ConfigureButton(applyTrim, "Apply trim", "crop", 130);
             applyTrim.Primary = true;
             applyTrim.Margin = new Padding(4, 0, 0, 5);
             applyTrim.Click += ApplyTrim;
             range.Controls.Add(applyTrim);
-            trim.Controls.Add(range, 0, 2);
+            trim.Controls.Add(range, 0, 3);
             rangeInfo.AutoSize = true;
             rangeInfo.ForeColor = StudioTheme.Muted;
             rangeInfo.Margin = new Padding(0, 7, 0, 0);
-            trim.Controls.Add(rangeInfo, 0, 3);
+            trim.Controls.Add(rangeInfo, 0, 4);
             layout.Controls.Add(trim, 0, 3);
 
             pathBox.ReadOnly = true;
@@ -245,6 +302,10 @@ namespace SnipStudio
             play.Click += delegate { PlayCurrentFile(); };
             tips.SetToolTip(play, "Open this file in your default video application.");
             actions.Controls.Add(play);
+            ConfigureButton(editInClipchamp, "Edit in Clipchamp", "pen", 186);
+            editInClipchamp.Click += delegate { EditCurrentFileInClipchamp(); };
+            tips.SetToolTip(editInClipchamp, "Open this recording in installed Microsoft Clipchamp. If Windows has no file association, Clipchamp opens with instructions to import the current file.");
+            actions.Controls.Add(editInClipchamp);
             ConfigureButton(copy, "Copy video", "copy", 138);
             copy.Click += delegate { CopyCurrentFile(false); };
             tips.SetToolTip(copy, "Copy the video file. Paste it into a folder, email, or chat that accepts files.");
@@ -271,6 +332,7 @@ namespace SnipStudio
             actions.Controls.Add(close);
             layout.Controls.Add(actions, 0, 6);
             CancelButton = close;
+            layout.Layout += delegate { UpdatePreviewLayout(); };
             Resize += delegate { UpdateWrapping(); };
             UpdateWrapping();
         }
@@ -297,7 +359,11 @@ namespace SnipStudio
             value.BorderStyle = BorderStyle.FixedSingle;
             value.Margin = new Padding(0, 5, 16, 5);
             value.AccessibleName = accessibleName;
-            value.ValueChanged += delegate { UpdateRange(); };
+            value.ValueChanged += delegate {
+                UpdateRange();
+                if (!updatingTimeline && metadata != null)
+                { filmstrip.PositionSeconds = (double)value.Value; QueuePreview(); }
+            };
         }
 
         private static void ConfigureButton(StudioButton button, string label, string glyph, int width)
@@ -316,6 +382,31 @@ namespace SnipStudio
             description.MaximumSize = new Size(width, 0);
             status.MaximumSize = new Size(width, 0);
             trimExplanation.MaximumSize = new Size(Math.Max(250, width - 36), 0);
+            UpdatePreviewLayout();
+        }
+
+        private void UpdatePreviewLayout()
+        {
+            if (updatingReviewLayout || reviewLayout == null || reviewScroll == null || summaryText == null || IsDisposed) return;
+            updatingReviewLayout = true;
+            try
+            {
+                int contentWidth = Math.Max(250, reviewScroll.ClientSize.Width - reviewLayout.Padding.Horizontal);
+                int metadataHeight = summaryText.GetPreferredSize(new Size(Math.Max(220, contentWidth - previewSummary.Padding.Horizontal), 0)).Height + summaryText.Margin.Vertical;
+                int minimumPreviewHeight = Math.Max(170, (int)Math.Round(170 * Font.SizeInPoints / 10f));
+                int summaryHeight = minimumPreviewHeight + metadataHeight + previewSummary.Padding.Vertical;
+                previewSummary.MinimumSize = new Size(0, summaryHeight);
+                int minimumHeight = reviewLayout.Padding.Vertical + summaryHeight + previewSummary.Margin.Vertical;
+                foreach (Control control in reviewLayout.Controls)
+                {
+                    if (Object.ReferenceEquals(control, previewSummary)) continue;
+                    Size preferred = control.GetPreferredSize(new Size(Math.Max(220, contentWidth - control.Margin.Horizontal), 0));
+                    minimumHeight += Math.Max(control.MinimumSize.Height, preferred.Height) + control.Margin.Vertical;
+                }
+                int height = Math.Max(reviewScroll.ClientSize.Height, minimumHeight);
+                if (reviewLayout.Height != height) reviewLayout.Height = height;
+            }
+            finally { updatingReviewLayout = false; }
         }
 
         private async void ReadMetadata(object sender, EventArgs e)
@@ -332,6 +423,8 @@ namespace SnipStudio
             catch (Exception error)
             {
                 if (IsDisposed || Disposing) return;
+                filmstrip.EmptyMessage = "Video details unavailable — numeric trim cannot be prepared.";
+                previewTime.Text = "Preview unavailable";
                 SetStatus("Video details could not be read. You can still play, copy or save the file. " + error.Message, true);
             }
             finally
@@ -351,12 +444,20 @@ namespace SnipStudio
             if (metadata == null || metadata.Duration <= TimeSpan.Zero) return;
             decimal maximum = Decimal.Ceiling((decimal)metadata.Duration.TotalSeconds * 1000m) / 1000m;
             maximum = Math.Max(.001m, Math.Min(999999999999m, maximum));
-            startSeconds.Value = 0;
-            endSeconds.Value = 0;
-            startSeconds.Maximum = maximum;
-            endSeconds.Maximum = maximum;
-            endSeconds.Value = maximum;
+            updatingTimeline = true;
+            try
+            {
+                startSeconds.Value = 0;
+                endSeconds.Value = 0;
+                startSeconds.Maximum = maximum;
+                endSeconds.Maximum = maximum;
+                endSeconds.Value = maximum;
+                filmstrip.SetDuration(metadata.Duration);
+                filmstrip.FrameStepSeconds = 1.0 / Math.Max(1, metadata.FramesPerSecond);
+            }
+            finally { updatingTimeline = false; }
             UpdateRange();
+            BeginVideoVisuals();
         }
 
         private bool ValidRange()
@@ -371,6 +472,120 @@ namespace SnipStudio
             else if (!ValidRange()) rangeInfo.Text = "Choose an end time after the start time, within the video duration.";
             else rangeInfo.Text = "Selected length: " + (endSeconds.Value - startSeconds.Value).ToString("0.000") + " seconds. Trimming re-encodes the selected range.";
             applyTrim.Enabled = !loading && !working && ValidRange();
+            if (!updatingTimeline && ValidRange())
+                filmstrip.SetSelection((double)startSeconds.Value, Math.Min(metadata.Duration.TotalSeconds, (double)endSeconds.Value));
+        }
+
+        private void FilmstripSelectionChanged(object sender, EventArgs e)
+        {
+            if (updatingTimeline || metadata == null || loading || working) return;
+            updatingTimeline = true;
+            try
+            {
+                startSeconds.Value = Math.Max(startSeconds.Minimum, Math.Min(startSeconds.Maximum, Decimal.Round((decimal)filmstrip.SelectionStartSeconds, 3)));
+                endSeconds.Value = Math.Max(endSeconds.Minimum, Math.Min(endSeconds.Maximum, Decimal.Round((decimal)filmstrip.SelectionEndSeconds, 3)));
+            }
+            finally { updatingTimeline = false; }
+            UpdateRange();
+        }
+
+        private void SetRangeFromPreview(bool start)
+        {
+            if (metadata == null || loading || working) return;
+            decimal value = Decimal.Round((decimal)filmstrip.PositionSeconds, 3);
+            if (start) startSeconds.Value = Math.Max(startSeconds.Minimum, Math.Min(startSeconds.Maximum, value));
+            else endSeconds.Value = Math.Max(endSeconds.Minimum, Math.Min(endSeconds.Maximum, value));
+        }
+
+        private void BeginVideoVisuals()
+        {
+            CancelVideoVisuals();
+            if (metadata == null || IsDisposed || Disposing) return;
+            if (working) { visualReloadPending = true; return; }
+            visualReloadPending = false;
+            visualCancellation = new CancellationTokenSource();
+            int generation = visualGeneration;
+            string path = currentPath;
+            filmstrip.SetFrames(new Bitmap[0]);
+            filmstrip.EmptyMessage = "Reading filmstrip frames…";
+            Image previous = preview.Image; preview.Image = null;
+            if (previous != null) previous.Dispose();
+            previewTime.Text = "Reading preview…";
+            LoadFilmstripAsync(path, generation, visualCancellation.Token);
+            QueuePreview();
+        }
+
+        private async void LoadFilmstripAsync(string path, int generation, CancellationToken token)
+        {
+            Bitmap[] images = null;
+            try
+            {
+                images = await VideoTrimService.ReadFilmstripAsync(path, 12, new Size(176, 100), token);
+                if (token.IsCancellationRequested || IsDisposed || Disposing || generation != visualGeneration || path != currentPath) return;
+                filmstrip.SetFrames(images);
+                images = null;
+                filmstrip.EmptyMessage = "";
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error)
+            {
+                if (!IsDisposed && !Disposing && generation == visualGeneration)
+                {
+                    filmstrip.EmptyMessage = "Frames unavailable — numeric trim is still available.";
+                    tips.SetToolTip(filmstrip, "Video preview could not decode this recording. " + error.Message + " You can use the time fields to trim, or Play video to open your normal player.");
+                }
+            }
+            finally { if (images != null) foreach (Bitmap image in images) if (image != null) image.Dispose(); }
+        }
+
+        private void QueuePreview()
+        {
+            if (IsDisposed || Disposing || metadata == null || visualCancellation == null) return;
+            previewGeneration++;
+            if (previewCancellation != null) previewCancellation.Cancel();
+            previewTimer.Stop();
+            if (!working) previewTimer.Start();
+        }
+
+        private async Task ReadPreviewAsync()
+        {
+            if (metadata == null || visualCancellation == null || visualCancellation.IsCancellationRequested || working || IsDisposed || Disposing) return;
+            int generation = visualGeneration, request = previewGeneration;
+            string path = currentPath;
+            TimeSpan position = TimeSpan.FromSeconds(filmstrip.PositionSeconds);
+            CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(visualCancellation.Token);
+            previewCancellation = cancellation;
+            VideoPreviewFrame frame = null;
+            try
+            {
+                frame = await VideoTrimService.ReadPreviewFrameInfoAsync(path, position, new Size(960, 540), cancellation.Token);
+                if (cancellation.IsCancellationRequested || IsDisposed || Disposing || generation != visualGeneration || request != previewGeneration || path != currentPath) return;
+                Image previous = preview.Image;
+                preview.Image = frame.DetachImage();
+                if (previous != null) previous.Dispose();
+                previewTime.Text = FormatDuration(frame.Timestamp);
+                tips.SetToolTip(previewTime, "Decoded frame timestamp. The white filmstrip marker is your requested preview position; Windows seeks from an earlier keyframe and decodes forward.");
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception error)
+            {
+                if (!IsDisposed && !Disposing && generation == visualGeneration && request == previewGeneration)
+                { previewTime.Text = "Frame preview unavailable"; tips.SetToolTip(previewTime, error.Message); }
+            }
+            finally
+            {
+                if (frame != null) frame.Dispose();
+                if (previewCancellation == cancellation) previewCancellation = null;
+                cancellation.Dispose();
+            }
+        }
+
+        private void CancelVideoVisuals()
+        {
+            visualGeneration++; previewGeneration++;
+            previewTimer.Stop();
+            if (visualCancellation != null) { visualCancellation.Cancel(); visualCancellation.Dispose(); visualCancellation = null; }
+            if (previewCancellation != null) { previewCancellation.Cancel(); previewCancellation = null; }
         }
 
         private async void ApplyTrim(object sender, EventArgs e)
@@ -433,6 +648,18 @@ namespace SnipStudio
                 SetStatus("Opened in your default video app.", false);
             }
             catch (Exception error) { SetStatus("The video could not be opened. " + error.Message, true); }
+        }
+
+        private void EditCurrentFileInClipchamp()
+        {
+            if (loading || working) return;
+            try
+            {
+                bool fileSubmitted = ClipchampLauncher.Open(currentPath, Handle);
+                SetStatus(fileSubmitted ? "Sent this recording to Clipchamp. Your original recording is unchanged." :
+                    "Clipchamp opened. Choose Import media and select the current recording shown above.", false);
+            }
+            catch (Exception error) { SetStatus("Clipchamp could not be opened. " + error.Message, true); }
         }
 
         private async void MakeSmaller(object sender, EventArgs e)
@@ -609,6 +836,12 @@ namespace SnipStudio
         private void SetWorking(bool value, string message)
         {
             working = value;
+            if (value) { CancelVideoVisuals(); visualReloadPending = metadata != null; }
+            else if (metadata != null)
+            {
+                if (visualReloadPending || visualCancellation == null) BeginVideoVisuals();
+                else QueuePreview();
+            }
             if (message != null) SetStatus(message, false);
             UpdateControls();
         }
@@ -618,6 +851,7 @@ namespace SnipStudio
             if (IsDisposed || Disposing) return;
             bool ready = !loading && !working;
             play.Enabled = ready;
+            editInClipchamp.Enabled = ready;
             copy.Enabled = ready;
             saveAs.Enabled = ready;
             smaller.Enabled = ready && metadata != null;
@@ -625,6 +859,8 @@ namespace SnipStudio
             cancelExport.Enabled = exportCancellation != null && !exportCancellation.IsCancellationRequested;
             startSeconds.Enabled = ready && metadata != null;
             endSeconds.Enabled = ready && metadata != null;
+            filmstrip.Enabled = ready && metadata != null;
+            setStart.Enabled = setEnd.Enabled = ready && metadata != null;
             close.Enabled = !working;
             progress.Visible = loading || working;
             UseWaitCursor = loading || working;
@@ -646,10 +882,11 @@ namespace SnipStudio
             else
             {
                 string frames = metadata.FramesPerSecond > 0 ? metadata.FramesPerSecond + " fps" : "Frame rate unavailable";
-                details.Text = FormatDuration(metadata.Duration) + "  ·  " + metadata.Width + " × " + metadata.Height + " px\r\n" +
+                details.Text = FormatDuration(metadata.Duration) + "  ·  " + metadata.Width + " × " + metadata.Height + " px  ·  " +
                     frames + "  ·  " + (metadata.HasAudio ? "Audio included" : "No audio") + "  ·  " + FileSize(currentPath);
             }
             Text = (dirty ? "• " : "") + "Recording — Snip Studio";
+            UpdatePreviewLayout();
         }
 
         private static string FormatDuration(TimeSpan duration)
@@ -723,7 +960,14 @@ namespace SnipStudio
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) tips.Dispose();
+            if (disposing)
+            {
+                CancelVideoVisuals();
+                previewTimer.Dispose();
+                Image previous = preview.Image; preview.Image = null;
+                if (previous != null) previous.Dispose();
+                tips.Dispose();
+            }
             // Do not delete working video files: the clipboard or another video app
             // may still reference them after this form has closed.
             base.Dispose(disposing);

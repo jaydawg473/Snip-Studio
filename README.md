@@ -1,11 +1,23 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.6
+# Snip Studio 0.6.21
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
 
+## Current test build: 0.6.21
+
+- Refines editable text regions around strong graphic prefixes and keeps recognized columns separate when entering or returning to inline editing.
+- Applies the selected text color from the first typed character. Text controls follow the active caret/selection and identify mixed colors; drawing ink stays separate.
+- Keeps window bounds steady while palettes open and close. Fit adapts to the available image area; manual zoom/pan retains its view within the checked render quantization.
+- Retains the 0.6.20 recording choices (**Draw area** or **Window**), desktop recording outline, MP4 filmstrip/trim editor, larger recording preview and **Edit in Clipchamp** action. Clipchamp is a separate installed application; a launch request does not establish completed import.
+
+Download the signed [0.6.21 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-signed-portable.zip).
+
+The exact timestamp-signed 0.6.21 application passed 7,132 assertion executions across 11 accepted current jobs on November 17, 2026. Four synthetic/actual-control images were inspected. These checks do not establish physical desktop/focus behavior, live recording exclusion, Clipchamp import, installed upgrades or exact source-font recovery. OCR and raster typography remain approximate; pixel-perfect reconstruction is not established. See [VALIDATION.txt](VALIDATION.txt) for exact identities, execution provenance and limits.
+
+The following sections describe historical releases. Their test counts and acceptance scope are not current 0.6.21 results.
 ## Eyedropper and Print Screen setup in 0.6.6
 
 - **Eyedropper** is available in the shared color palette. Click a visible color anywhere on the connected desktop, including the snip, then choose **Use color** or **Apply** to commit the palette draft. Sampling preserves shape opacity; Escape or right-click cancels.

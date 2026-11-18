@@ -106,6 +106,7 @@ namespace SnipStudio
             if (paletteDockHost != null && !paletteDockHost.IsDisposed)
             {
                 paletteDockHost.Visible = false;
+                paletteDockHost.AutoScrollPosition = Point.Empty;
                 paletteDockHost.AutoScrollMinSize = Size.Empty;
             }
             if (panel != null && !panel.IsDisposed)
@@ -125,7 +126,7 @@ namespace SnipStudio
             Func<bool> current = InlinePaletteContextGuard();
             Panel panel = new Panel { BackColor = StudioTheme.Surface, ForeColor = StudioTheme.Text,
                 Width = Ui(320), Margin = Padding.Empty, Padding = Padding.Empty };
-            ColorPickerPanel picker = new ColorPickerPanel(canvas.InkColor, RecentToolColors(), false, Ui(1000) / 1000f)
+            ColorPickerPanel picker = new ColorPickerPanel(CurrentDisplayedInkColor, RecentToolColors(), false, Ui(1000) / 1000f)
             { Location = new Point(Ui(12), Ui(12)), Width = Ui(296) };
             panel.Controls.Add(picker);
             StudioButton cancel = new StudioButton { Text = "Cancel", AccessibleName = "Cancel color changes" };

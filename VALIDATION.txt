@@ -1,52 +1,97 @@
-SNIP STUDIO 0.6.6 - AUTOMATION FORGE, 2026-11-16
+SNIP STUDIO 0.6.21 - AUTOMATION FORGE
 https://automation-forge.com/
 
-FINAL APPLICATION
-C#5/.NET Framework 4.8 compiled without warnings. Automation Forge Authenticode
-signature verified Valid with a Microsoft timestamp. Exact application SHA256:
-9AAEC6E419D451335199B0C71DBF03CDB7E78F3AEDE28DD53F7F74DAB0F6B900
-All 102 application source hashes match the recorded pre-build freeze.
+RECOGNIZED REGIONS AND COLUMN NAVIGATION
+Strong graphic prefixes are separated from an OCR edit run before font/color
+estimation and background erasure. Conservative graphic/column anchors help
+keep icons separate from editable words. Ambiguous source symbols are retained.
+Fresh clicks and reentry into previously edited notes keep neighboring columns
+separate, including older notes whose original frame extends over another cell.
 
-FOCUSED SIGNED-LIBRARY CHECKS
-- Eyedropper pixels, coordinates, cancellation, ownership and palette: 400.
-- Eyedropper preview text metrics and rendering: 953, across 66 states and
-  18 generated-pixel PNGs at 100/150/200 percent scale and constrained widths.
-- Print Screen policy and unshown integration: 68.
-- Actual Settings Shortcuts-card geometry/rendering: 109, with four PNGs.
-- Shared color dialogs and draft behavior: 97.
-- Full-screen geometry: 81.
-- Capture-window policy and call graph: 25.
-Total focused checks passed: 1733. Final toolbar/options regression results,
-installer integrity, signatures and payload reconciliation are recorded in the
-separate release receipt after packaging.
+The region processor and hit testing changed; the global font matcher and
+Windows OCR engine were not replaced. OCR spelling, source-font identity,
+mixed formatting and raster reconstruction remain approximate. Untouched source
+pixels and existing edit/Undo safeguards remain important when reviewing edits.
 
-SCOPE AND LIMITATIONS
-Tests use generated images, pure typed values, fake providers, metadata/call
-inspection and unshown controls. They do not run the app entrypoint, capture
-the user's desktop, inject input, read or change Windows settings, register
-native hotkeys, or load/save personal preferences. Rendering can create hidden
-child-control handles; the form itself is not shown. Actual screen sampling,
-physical/mixed-DPI transitions, keyboard priority, displayed native focus and
-installed upgrades remain unverified.
+TEXT COLOR AND PALETTE VIEW
+Chosen text color applies from the first character of a new point/drawn note.
+The text swatch follows the active rich-text selection or caret, describes mixed
+colors, and updates when a color is applied. Source-text editing retains its
+current formatting until explicitly changed. Drawing ink remains a separate
+choice. These tests do not prove the accuracy of sampled source-color estimates.
 
-The temporary screen sampler is owned/modal, undimmed and pixel-based. Its
-snapshot stays in memory, bypasses capture policies/auto-save/OCR/clipboard,
-and is disposed on completion or cancellation. Gaps between monitors reject
-sampling. Shape opacity and the document remain unchanged until Apply.
+Palette transitions keep window/client bounds fixed. Fit recalculates for the
+available image viewport, keeps the full snip centered/contained, and clears
+stale native scroll extents on open/close. Manual zoom remains fixed and its
+center anchor is checked within one rendered viewport pixel while open; closing
+restores the original zoom, absolute origin and scroll extent. The palette keeps
+its own preferred content size and scrolling. This is view stability within the
+existing window, not a new automatic window-resizing policy.
 
-PRINT SCREEN
-Microsoft documents that overriding Windows' default Print Screen assignment
-can depend on the application being in the foreground. Registration alone is
-therefore not treated as a guarantee of background capture. The program reads
-Windows' assignment state only after showing/refreshing the UI, handles absent
-and unreadable values honestly, opens the supported Windows Settings page,
-and retries registration after return or Retry. It does not write Windows
-preferences or install a low-level keyboard hook. The Windows capture option
-must be turned off by the user for the intended background shortcut setup.
-https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-registerhotkey
+CURRENT SIGNED APPLICATION
+Version 0.6.21.0. Automation Forge Authenticode Valid with a timestamp.
+Application SHA256:
+291BFEBCA716AC8811D2CBE09F0FEBC7D3531C4303F0E3B797108E110001B81E
+All 114 C# inputs match the final source freeze. Freeze-file SHA256:
+C276540BBEB4814067E4102BAD2DE0EA485F73EBCBA66AF0D08BDAF1AB30BEEA
+The 12 changed files include one added recognized-region helper. No new artwork,
+translation model/runtime file or third-party binary is part of this scope.
 
-DELIVERY
-The existing preference schema, capture/recording behavior, 163 artwork files,
-and complete 114-file translation runtime/models remain unchanged. App and
-installer signatures and static package checks are verified before handoff;
-this is not an installed-upgrade or endpoint-security acceptance test.
+CURRENT CHECKS AND EXECUTION PROVENANCE
+Eleven accepted current jobs total 7,132 passing assertion executions:
+  Palette view: 5,742; column navigation: 159; icon-region/style: 145;
+  text color: 197; reentry: 189; rendered caret: 383; recognized inline: 123;
+  proxy host: 28; tool reentry: 49; edit transition: 63; automatic snapshot: 54.
+
+Ten zero-exit jobs are retained unchanged from the original current-assembly
+run. The original text-color attempt stopped at a fixture reflection error;
+its failed execution remains preserved. A corrected-fixture actual rerun passed
+197 assertions, zero failures, ObserveOnly false, on the same unchanged signed
+application. The composite result binds original and rerun hashes separately.
+The failed attempt is not counted as a pass. An older observe-only baseline
+with 48 failures and released 0.6.20's 998 assertions are also excluded.
+
+The checks invoke production mouse-down/up routes on unshown controls, including
+column changes, prior broad-frame notes, panned/zoomed views, commits and Undo.
+Synthetic icon/column fixtures check exact icon and neighboring pixel retention.
+Known rich text is deliberately seeded for formatting/color preservation; this
+is not original-font accuracy proof. Native RichEdit insertion checks cover
+per-character colors in new and known-format source notes and text color UI.
+
+Eight palette cases combine four toolbar sides with fitted/manual views, each
+repeating 20 open/close, exact-spectrum, scroll and Apply/Cancel cycles. Shape
+outline and emoji exercise the shared host. Synthetic source/export pixels stay
+exact. Four images were visually inspected: two actual-control palette renders
+(normal/exact) and synthetic icon/column images before/after an edit. The snip
+was contained/centered and palette controls remained separately scrollable.
+These renders do not prove native combo-box display or physical desktop focus.
+
+Each current report and the accepted composite/original/rerun result has a
+separate private hash binding in the current-check manifest and release receipt.
+Supplied-image native OCR diagnostics are separate observations, not assertion
+jobs, and do not establish original font identity or universal icon detection.
+
+RETAINED FEATURES AND NOTICES
+Recording-area choices, desktop boundary, MP4 filmstrip/trim and the external
+Clipchamp action remain. Window recording uses a fixed visible screen rectangle,
+including other covering windows; it does not follow a moving target or recover
+hidden content. Inset boundary segments require supported Windows exclusion.
+Prior hidden-native readback did not establish saved-video pixel exclusion.
+
+The original filmstrip implementation uses Windows Media Foundation. Microsoft's
+VideoThumbnail sample was a technical reference; its full pinned MIT credit
+remains in licenses/NOTICES.txt. Existing notices, artwork and translation files
+are retained and reconciled by the package audit.
+
+LIMITATIONS AND DELIVERY
+Unshown controls, synthetic recognition/seeded formatting and managed gestures
+are not physical mouse/focus/DPI tests or pixel-perfect font recovery. Private
+supplied images and diagnostic reports are excluded from public source, assets
+and release payloads. No live recording/exclusion, external Clipchamp import or
+installed upgrade is established by these text-region checks.
+
+Exact Setup/ZIP hashes, fresh signatures/timestamps, extracted payload identity,
+NSIS CRC/protected-byte checks and privacy-marker results belong to the separate
+local release receipt. Container hashes are not embedded in this payload file.
+Known-marker checks are not a universal privacy guarantee. Installation and Git
+publication are not performed by this validation; publication remains paused.

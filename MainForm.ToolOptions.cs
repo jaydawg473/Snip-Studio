@@ -20,12 +20,16 @@ namespace SnipStudio
         private bool toolOptionsOpen;
         private Rectangle toolOptionsDockBounds;
         private int queuedToolPopup;
+        private object toolOptionsObservedImage;
+        private bool toolOptionsDocumentReady;
+        private bool toolOptionsOpenedAutomatically, openingToolOptionsAutomatically;
 
         // Control.Visible is inherited from the form, so it cannot describe an
         // open options row while a layout-only check keeps the form unshown.
         private bool IsToolOptionsOpen { get { return toolOptionsOpen && toolOptionsPopup != null && !toolOptionsPopup.IsDisposed; } }
 
-        private bool HasInlineTextWorkflow { get { return canvas.HasImage && !canvas.TextActionsMode && canvas.InlineTextEditing; } }
+        private bool HasInlineTextWorkflow { get { return canvas.HasImage && !canvas.TextActionsMode &&
+            (canvas.InlineTextEditing || canvas.RecognizedTextTransitionActive); } }
 
         private void InitializeToolOptionsIntegration()
         {
@@ -48,7 +52,8 @@ namespace SnipStudio
             textSize.ItemPreviewRenderer = DrawTextSizeOption;
             width.SelectedIndexChanged += delegate { UpdateToolSizePreview(); };
             textSize.SelectedIndexChanged += delegate { UpdateToolSizePreview(); };
-            canvas.TextStyleChanged += delegate { UpdateToolSizePreview(); };
+            canvas.TextStyleChanged += delegate { UpdateColorButton(); UpdateToolSizePreview(); };
+            canvas.InlineTextStateChanged += delegate { UpdateColorButton(); };
             colorButton.Invalidated += delegate { UpdateToolSizePreview(); };
             chromeRoot.SizeChanged += delegate { RefreshToolOptionsContents(); };
             annotationToolbar.LocationChanged += delegate { RefreshToolOptionsContents(); };
@@ -89,9 +94,12 @@ namespace SnipStudio
 
         private void ActivateAnnotationTool(EditorTool tool, StudioButton button, bool optionsRequested)
         {
+            CancelInitialImageFitForToolIntent();
             bool alreadySelected = !canvas.TextActionsMode && (canvas.Tool == tool || (tool == EditorTool.Text && IsInlineTextContext) ||
                 ((IsShapeToolKind(tool) || tool == EditorTool.Emoji) && IsShapeContext));
-            if (alreadySelected && IsToolOptionsOpen && toolOptionsKind == CurrentToolOptionsKind)
+            // The main icon selects its tool and exposes its controls. Only
+            // the explicit arrow (or the card's close button) toggles it shut.
+            if (optionsRequested && alreadySelected && IsToolOptionsOpen && toolOptionsKind == CurrentToolOptionsKind)
             {
                 queuedToolPopup++; CloseToolOptions(); return;
             }
@@ -100,7 +108,40 @@ namespace SnipStudio
                 SelectTool(tool);
                 if (canvas.Tool != tool) return;
             }
-            if (ToolHasOptions(tool) && (optionsRequested || alreadySelected)) ShowToolOptions(button);
+            if (ToolHasOptions(tool)) OpenSelectedToolOptions(true);
+        }
+
+        private void OpenSelectedToolOptions(bool allowSelectionContext)
+        {
+            if (toolOptionsParking == null || !CanChangeAnnotationAppearance || CurrentToolOptionsKind == AnnotationOptionsKind.None ||
+                (!allowSelectionContext && !ToolHasOptions(canvas.Tool)))
+            { CloseToolOptions(); return; }
+            if (IsToolOptionsOpen && toolOptionsKind == CurrentToolOptionsKind)
+            { toolOptionsOpenedAutomatically = openingToolOptionsAutomatically; RefreshToolOptionsContents(); return; }
+            // This is a docked control, not a native popup. Constructing it
+            // does not focus a control, dispatch input, select a tool or commit
+            // a draft. Nested/modal palettes retain their queued guards.
+            PrepareToolOptions(CurrentToolOptionsKind, Rectangle.Empty);
+        }
+
+        private void ObserveToolOptionsDocumentReadiness()
+        {
+            bool ready = canvas.HasImage && CanChangeAnnotationAppearance;
+            object image = canvas.HasImage ? canvas.ImageIdentity : null;
+            bool freshPresentation = image != null && !Object.ReferenceEquals(image, toolOptionsObservedImage) &&
+                !canvas.CanUndo && !canvas.CanRedo;
+            bool becameReady = ready && (!toolOptionsDocumentReady || freshPresentation);
+            toolOptionsObservedImage = image;
+            toolOptionsDocumentReady = ready;
+            if (!ready) { CloseToolOptions(); return; }
+            // Ordinary layout, style updates, annotation commits and history
+            // do not reopen a card that the user deliberately closed.
+            if (becameReady)
+            {
+                openingToolOptionsAutomatically = true;
+                try { OpenSelectedToolOptions(false); }
+                finally { openingToolOptionsAutomatically = false; }
+            }
         }
 
         private AnnotationOptionsKind CurrentToolOptionsKind
@@ -120,6 +161,7 @@ namespace SnipStudio
         private void ShowToolOptions(Control anchor)
         {
             if (!CanChangeAnnotationAppearance || CurrentToolOptionsKind == AnnotationOptionsKind.None || toolOptionsParking == null) return;
+            CancelInitialImageFitForToolIntent();
             QueueToolOptionsAction(anchor, delegate(Rectangle bounds) { OpenToolOptions(bounds); });
         }
 
@@ -141,8 +183,11 @@ namespace SnipStudio
             toolOptionsPopup = new ToolOptionsPopup(title, Ui(1000) / 1000f) { CompactMode = true, ShowCompactCaption = false };
             toolOptionsPopup.CardClosed += delegate
             {
+                if (toolOptionsOpen && !openingToolOptions && !openingToolOptionsAutomatically)
+                    CancelInitialImageFitForToolIntent();
                 queuedToolPopup++;
                 toolOptionsOpen = false;
+                toolOptionsOpenedAutomatically = false;
                 ClearInlineAnnotationPalette();
                 if (!openingToolOptions && !arrangingChrome && !closing && !IsDisposed) LayoutChrome();
             };
@@ -179,6 +224,7 @@ namespace SnipStudio
             {
                 chromeRoot.Controls.Add(toolOptionsPopup);
                 toolOptionsOpen = true;
+                toolOptionsOpenedAutomatically = openingToolOptionsAutomatically;
                 toolOptionsPopup.Visible = true;
                 UpdateAnnotationContextControls();
                 LayoutChrome();
@@ -281,6 +327,23 @@ namespace SnipStudio
                 return toolOptionsPopup.Height;
             }
             finally { arrangingToolOptions = false; }
+        }
+
+        private int MeasureReservedToolOptionsHeight(int availableWidth)
+        {
+            int row = Math.Max(Ui(32), Math.Max(Math.Max(width.PreferredSize.Height, textSize.PreferredSize.Height),
+                Math.Max(width.Height, textSize.Height)));
+            int gap = Ui(6), color = Ui(32);
+            int text = color + gap + ToolbarWidth(textSize, 104) + gap + ToolbarWidth(advancedTextButton, 130);
+            int highlight = color + gap + ToolbarWidth(width, 106) + gap + Math.Max(Ui(112), snapToText.GetPreferredSize(Size.Empty).Width);
+            int fill = TextRenderer.MeasureText("Fill · 100%", shapeFillButton.Font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width + Ui(62);
+            int outline = TextRenderer.MeasureText("Outline · 1024 px", shapeOutlineButton.Font, Size.Empty,
+                TextFormatFlags.SingleLine | TextFormatFlags.NoPadding | TextFormatFlags.NoPrefix).Width + Ui(62);
+            int shapes = Ui(28) * 5 + Ui(3) * 4 + gap + fill + gap + outline;
+            int needed = Math.Max(Math.Max(text, highlight), Math.Max(shapes, Ui(198 + 6 + 88)));
+            int scroll = needed > Math.Max(1, availableWidth - Ui(8 + 32)) ? Math.Max(SystemInformation.HorizontalScrollBarHeight, Ui(17)) : 0;
+            return row + scroll + Ui(8);
         }
 
         private void PlaceCompactOptionsControl(Control control, int span, ref int x, int rowHeight, int gap)
@@ -408,6 +471,7 @@ namespace SnipStudio
             queuedToolPopup++;
             bool wasOpen = IsToolOptionsOpen;
             toolOptionsOpen = false;
+            toolOptionsOpenedAutomatically = false;
             ClearInlineAnnotationPalette();
             if (toolOptionsPopup != null && !toolOptionsPopup.IsDisposed)
                 toolOptionsPopup.Close(ToolStripDropDownCloseReason.CloseCalled);
@@ -419,6 +483,9 @@ namespace SnipStudio
         {
             queuedToolPopup++;
             toolOptionsOpen = false;
+            toolOptionsOpenedAutomatically = false;
+            toolOptionsObservedImage = null;
+            toolOptionsDocumentReady = false;
             ClearInlineAnnotationPalette();
             if (toolOptionsPopup != null) { toolOptionsPopup.Dispose(); toolOptionsPopup = null; }
         }

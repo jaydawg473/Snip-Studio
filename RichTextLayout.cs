@@ -19,7 +19,7 @@ namespace SnipStudio
 
     // RichEdit does the paragraph/character layout once, at source-image scale.
     // Paint, zoom, and movement reuse a transparent bitmap, never a live editor.
-    internal static class RichTextLayout
+    internal static partial class RichTextLayout
     {
         private const int MaximumRtfLength = 1024 * 1024;
         private const int MaximumTextLength = 16000;
@@ -176,7 +176,7 @@ namespace SnipStudio
             {
                 using (Bitmap white = RenderMatte(box, layoutWidth, height, nativeWidth, nativeHeight, Color.White))
                 using (Bitmap black = RenderMatte(box, layoutWidth, height, nativeWidth, nativeHeight, Color.Black))
-                using (Bitmap nativeAlpha = RecoverAlpha(white, black))
+                using (Bitmap nativeAlpha = RecoverTextAlpha(white, black, UniformForeground(box)))
                 {
                     transparent = new Bitmap(renderWidth, height, PixelFormat.Format32bppArgb);
                     transparent.SetResolution(96, 96);
@@ -273,7 +273,19 @@ namespace SnipStudio
             finally { Marshal.FreeHGlobal(memory); }
         }
 
+        private static Color UniformForeground(RichTextBox box)
+        {
+            int start = box.SelectionStart, length = box.SelectionLength;
+            try { box.SelectAll(); return box.SelectionColor; }
+            finally { box.Select(start, length); }
+        }
+
         private static Bitmap RecoverAlpha(Bitmap white, Bitmap black)
+        {
+            return RecoverTextAlpha(white, black, Color.Empty);
+        }
+
+        private static Bitmap RecoverTextAlpha(Bitmap white, Bitmap black, Color foreground)
         {
             Bitmap result = new Bitmap(white.Width, white.Height, PixelFormat.Format32bppArgb);
             BitmapData light = null, dark = null, output = null;
@@ -292,10 +304,38 @@ namespace SnipStudio
                     Marshal.Copy(IntPtr.Add(dark.Scan0, y * dark.Stride), b, 0, bytes);
                     for (int x = 0; x < bytes; x += 4)
                     {
-                        int delta = Math.Max(0, Math.Max(a[x] - b[x], Math.Max(a[x + 1] - b[x + 1], a[x + 2] - b[x + 2])));
-                        int alpha = 255 - Math.Min(255, delta);
+                        int blue = 255 - Math.Max(0, Math.Min(255, a[x] - b[x]));
+                        int green = 255 - Math.Max(0, Math.Min(255, a[x + 1] - b[x + 1]));
+                        int red = 255 - Math.Max(0, Math.Min(255, a[x + 2] - b[x + 2]));
+                        // ClearType covers RGB subpixels independently. Taking
+                        // the least-covered channel erased entire stroke edges.
+                        // Recover grayscale coverage by perceived luminance.
+                        int alpha = (red * 54 + green * 183 + blue * 19 + 128) / 256;
                         row[x + 3] = (byte)alpha;
-                        for (int channel = 0; channel < 3; channel++) row[x + channel] = alpha == 0 ? (byte)0 : (byte)Math.Min(255, (b[x + channel] * 255 + alpha / 2) / alpha);
+                        for (int channel = 0; channel < 3; channel++)
+                        {
+                            if (alpha == 0) { row[x + channel] = 0; continue; }
+                            // Opaque pixels can be RTF highlight/backgrounds,
+                            // not the declared text color. Keep them exact.
+                            if (alpha == 255) { row[x + channel] = b[x + channel]; continue; }
+                            if (!foreground.IsEmpty)
+                            { row[x + channel] = channel == 0 ? foreground.B : channel == 1 ? foreground.G : foreground.R; continue; }
+                            int coverage = channel == 0 ? blue : channel == 1 ? green : red;
+                            int sample = x + channel;
+                            // Mixed-color runs have no single foreground hint.
+                            // Use each channel's own coverage; only borrow a
+                            // nearby stronger sample when that subpixel is blank.
+                            if (coverage == 0)
+                                for (int distance = 1; distance <= 2 && coverage == 0; distance++)
+                                    for (int side = -1; side <= 1; side += 2)
+                                    {
+                                        int next = x + side * distance * 4 + channel;
+                                        if (next < 0 || next >= bytes) continue;
+                                        int found = 255 - Math.Max(0, Math.Min(255, a[next] - b[next]));
+                                        if (found >= 64) { coverage = found; sample = next; break; }
+                                    }
+                            row[x + channel] = coverage == 0 ? (byte)0 : (byte)Math.Min(255, (b[sample] * 255 + coverage / 2) / coverage);
+                        }
                     }
                     Marshal.Copy(row, 0, IntPtr.Add(output.Scan0, y * output.Stride), bytes);
                 }

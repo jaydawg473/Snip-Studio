@@ -29,6 +29,7 @@ namespace SnipStudio
         private TextOverlaySelection textSelection = new TextOverlaySelection(null);
         private bool textActionsMode;
         private bool textSelectionDragging;
+        private bool textSelectionCaretPending;
         private int textSelectionAnchor = -1;
         private object recognizedBase;
         private CancellationTokenSource recognitionCancellation;
@@ -42,7 +43,7 @@ namespace SnipStudio
         private EditorDocument.Annotation preview;
         private bool cancelingGesture;
         private readonly ToolTip tooltip = new ToolTip();
-        private const int CanvasMargin = 32;
+        private const int CanvasMargin = 24;
 
         public event EventHandler DocumentChanged;
         public event EventHandler TextRecognitionStatusChanged;
@@ -54,14 +55,18 @@ namespace SnipStudio
             {
                 if (textActionsMode == value) return;
                 if (!CommitInlineText()) return;
+                ClearDeferredRecognizedTextClick();
+                if (recognizedSessionResult != null && !RecognizedTextSessionActive) EndRecognizedTextSession();
                 CancelEmojiPlacement();
                 CancelGesture();
                 textActionsMode = value;
+                textSelectionCaretPending = false;
                 ResetCropFrame();
                 if (value) BeginTextActionFeedback();
                 else { EndTextActionFeedback(); CancelSourceStyleMatching(); }
                 selectedIndex = -1;
                 if (!value) textSelection.Clear();
+                if (!value) EnsureRecognizedTextToolSession();
                 UpdateCursor();
                 RaiseTextSelectionChanged();
                 RaiseTextStyleChanged();
@@ -70,8 +75,8 @@ namespace SnipStudio
             }
         }
         public string AllRecognizedText { get { return textSelection.AllText; } }
-        public string SelectedRecognizedText { get { return textSelection.SelectedText; } }
-        public bool HasSelectedRecognizedText { get { return textSelection.HasSelection; } }
+        public string SelectedRecognizedText { get { return textSelectionCaretPending ? "" : textSelection.SelectedText; } }
+        public bool HasSelectedRecognizedText { get { return !textSelectionCaretPending && textSelection.HasSelection; } }
         public long DocumentRevision { get { return document.Revision; } }
         public object ImageIdentity { get { return document.BaseIdentity; } }
         public bool SnapHighlightToText { get { return snapHighlightToText; } set { snapHighlightToText = value; RefreshRecognitionIfNeeded(); } }
@@ -85,13 +90,20 @@ namespace SnipStudio
         public bool IsDirty { get { return document.IsDirty || HasPendingInlineTextChanges; } }
         public Size ImageSize { get { return document.ImageSize; } }
         public float Zoom { get { return zoom; } }
+        internal bool FitRequested { get { return fit || fitOnWindowResize; } }
         public EditorTool Tool
         {
             get { return tool; }
             set
             {
-                if (tool == value) return;
+                if (tool == value)
+                {
+                    if (value == EditorTool.Text) { EnsureRecognizedTextToolSession(); RefreshRecognitionIfNeeded(); }
+                    return;
+                }
                 if (!CommitInlineText()) return;
+                if (value != EditorTool.Text) { CancelSourceStyleMatching(); ClearDeferredRecognizedTextClick(); }
+                if (recognizedSessionResult != null && !RecognizedTextSessionActive) EndRecognizedTextSession();
                 CancelEmojiPlacement();
                 bool keepRemoval = !textActionsMode && HasSelectedRemovalArea &&
                     ((tool == EditorTool.RemoveArea && value == EditorTool.Select) ||
@@ -99,6 +111,7 @@ namespace SnipStudio
                 CancelGesture(keepRemoval);
                 selectedIndex = -1;
                 tool = value;
+                if (value == EditorTool.Text) EnsureRecognizedTextToolSession();
                 ResetCropFrame();
                 UpdateCursor();
                 RaiseTextStyleChanged();
@@ -148,6 +161,8 @@ namespace SnipStudio
 
         public void SetImage(Bitmap image)
         {
+            recognizedTextToolHistory = false;
+            EndRecognizedTextSession();
             CancelInlineText();
             CancelEmojiPlacement();
             ChangeViewIntent();
@@ -167,6 +182,12 @@ namespace SnipStudio
         public Bitmap RenderImage()
         {
             if (!CommitInlineText()) throw new InvalidOperationException("Finish editing the text or cancel it before exporting the snip.");
+            return document.RenderImage();
+        }
+        internal Bitmap RenderCommittedImage()
+        {
+            // Background publication reads the last completed transaction. It
+            // must not finish a clean or dirty editor the user just opened.
             return document.RenderImage();
         }
         public void MarkSaved() { document.MarkSaved(); RaiseChanged(); }
@@ -202,6 +223,7 @@ namespace SnipStudio
             RaiseViewChanged();
         }
         public void ActualSize() { SetZoom(1f); }
+        internal Size FitPadding { get { return new Size(CanvasMargin * 2, CanvasMargin * 2); } }
         public void ZoomIn() { ZoomBy(1.25f, new Point(ClientSize.Width / 2, ClientSize.Height / 2)); }
         public void ZoomOut() { ZoomBy(0.8f, new Point(ClientSize.Width / 2, ClientSize.Height / 2)); }
 
@@ -224,7 +246,12 @@ namespace SnipStudio
                 float width = ImageSize.Width * zoom, height = ImageSize.Height * zoom;
                 float x = fit ? (ClientSize.Width - width) / 2f : CanvasMargin + AutoScrollPosition.X + zoomOriginOffset.X;
                 float y = fit ? (ClientSize.Height - height) / 2f : CanvasMargin + AutoScrollPosition.Y + zoomOriginOffset.Y;
-                return new PointF(x, y);
+                // Translate a cached raster by whole device pixels. Retaining a
+                // subpixel remainder in the motion model is useful, but drawing
+                // it makes text resample on every scroll frame. All drawing,
+                // hit testing and native caret placement use this same origin.
+                // Active zoom keeps its continuous pointer anchor above.
+                return new PointF((float)Math.Round(x), (float)Math.Round(y));
             }
         }
 
@@ -277,7 +304,7 @@ namespace SnipStudio
                 // Whole-pixel enlargement stays crisp. Fractional zoom needs
                 // interpolation so text strokes do not acquire uneven widths.
                 bool wholePixelScale = zoom >= 1 && Math.Abs(zoom - (float)Math.Round(zoom)) < 0.001f;
-                graphics.InterpolationMode = ViewAnimationActive || panning ? InterpolationMode.Bilinear : wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
+                graphics.InterpolationMode = ZoomAnimationActive ? InterpolationMode.Bilinear : wholePixelScale ? InterpolationMode.NearestNeighbor : InterpolationMode.HighQualityBicubic;
                 graphics.PixelOffsetMode = PixelOffsetMode.Half;
                 document.Draw(graphics, moving ? selectedIndex : -1, moveDelta,
                     InlineTextPreviewIndex >= 0 ? InlineTextPreviewIndex :
@@ -285,6 +312,7 @@ namespace SnipStudio
                     ClosedShapePreviewIndex >= 0 ? ClosedShapePreviewIndex : AnnotationPreviewIndex);
                 if (preview != null) preview.Draw(graphics);
                 DrawTextBoxPreview(graphics);
+                DrawInlineTextFrame(graphics);
                 if (!InlineTextEditing && selectedIndex >= 0 && selectedIndex < document.AnnotationCount)
                 {
                     GraphicsState selectionState = graphics.Save();
@@ -326,7 +354,7 @@ namespace SnipStudio
 
         private void DrawTextOverlay(Graphics graphics)
         {
-            if (!textSelection.HasSelection) return;
+            if (textSelectionCaretPending || !textSelection.HasSelection) return;
             // Preserve the screenshot's contrast and original type. Only selected
             // text receives an adorner; OCR boxes never outline or clip glyphs.
             // Join words by their OCR line so spaces do not become separate tiles.
@@ -370,6 +398,8 @@ namespace SnipStudio
             StopViewAnimations();
             Focus();
             if (!HasImage) return;
+            if (HandleTextAnnotationNavigation(e)) return;
+            if (HandleRecognizedTextRefreshClick(e)) return;
             if (HandleInlineTextMouseDown(e)) return;
             if (CropModeActive && e.Button == MouseButtons.Right) { CancelCrop(); return; }
             if (BeginCropDrag(e)) return;
@@ -377,20 +407,26 @@ namespace SnipStudio
             if (BeginSourceRemoval(e)) return;
             if (TryBeginEmojiHandleDrag(e)) return;
             if (TryBeginClosedShapeResize(e)) return;
-            if (TryBeginAnnotationHandleDrag(e)) return;
+            if (tool != EditorTool.Text && TryBeginAnnotationHandleDrag(e)) return;
             if (HandleEmojiMouseDown(e)) return;
             if (textActionsMode && e.Button == MouseButtons.Left)
             {
+                CancelSourceStyleMatching();
                 int hit = IsOnImage(e.Location) ? textSelection.HitTest(ToImage(e.Location, false), Math.Min(8, 3 / zoom)) : -1;
                 if (hit >= 0)
                 {
+                    textClickStart = e.Location;
+                    textClickMoved = false;
+                    // Keep the word only as the edit target. A normal click is
+                    // a caret request, not a visible/copyable OCR selection.
+                    textSelectionCaretPending = e.Clicks < 2;
                     textSelectionAnchor = hit;
                     textSelection.Select(hit, hit);
                     textSelectionDragging = true;
                     Capture = true;
                     Cursor = Cursors.IBeam;
                 }
-                else { textSelection.Clear(); textSelectionAnchor = -1; }
+                else { textSelection.Clear(); textSelectionAnchor = -1; textSelectionCaretPending = false; }
                 RaiseTextSelectionChanged();
                 Invalidate();
                 return;
@@ -452,12 +488,18 @@ namespace SnipStudio
         protected override void OnMouseMove(MouseEventArgs e)
         {
             base.OnMouseMove(e);
+            if (HandleRecognizedInlineMouseMove(e)) return;
             if (textActionsMode && !panning)
             {
                 if (textSelectionDragging)
                 {
+                    if (Math.Abs(e.X - textClickStart.X) > 3 || Math.Abs(e.Y - textClickStart.Y) > 3) textClickMoved = true;
                     int nearest = textSelection.Nearest(ToImage(e.Location, false));
-                    if (nearest >= 0) textSelection.Select(textSelectionAnchor, nearest);
+                    if (textClickMoved)
+                    {
+                        textSelectionCaretPending = false;
+                        if (nearest >= 0) textSelection.Select(textSelectionAnchor, nearest);
+                    }
                     RaiseTextSelectionChanged();
                     Invalidate();
                 }
@@ -510,18 +552,25 @@ namespace SnipStudio
         protected override void OnMouseUp(MouseEventArgs e)
         {
             base.OnMouseUp(e);
+            if (HandleRecognizedInlineMouseUp(e)) return;
             if (TextBoxDrawingActive && e.Button == MouseButtons.Left) { CompleteTextBoxDrawing(ToImage(e.Location, true)); return; }
             if (EndCropDrag(e)) return;
             if (CompleteSourceRemoval(e)) return;
             if (textSelectionDragging && e.Button == MouseButtons.Left)
             {
+                if (Math.Abs(e.X - textClickStart.X) > 3 || Math.Abs(e.Y - textClickStart.Y) > 3) textClickMoved = true;
                 int nearest = textSelection.Nearest(ToImage(e.Location, false));
-                if (nearest >= 0) textSelection.Select(textSelectionAnchor, nearest);
+                if (textClickMoved)
+                {
+                    textSelectionCaretPending = false;
+                    if (nearest >= 0) textSelection.Select(textSelectionAnchor, nearest);
+                }
                 textSelectionDragging = false;
                 Capture = false;
                 UpdateCursor();
                 RaiseTextSelectionChanged();
                 Invalidate();
+                if (!textClickMoved && CanEditRecognizedLine) EditRecognizedLineAt(ToImage(e.Location, false));
                 return;
             }
             if (CompleteEmojiHandleDrag(e)) return;
@@ -590,6 +639,7 @@ namespace SnipStudio
         {
             base.OnMouseCaptureChanged(e);
             if (!Capture && textSelectionDragging) { textSelectionDragging = false; UpdateCursor(); }
+            if (!Capture && inlineRecognizedSelecting) { inlineRecognizedSelecting = false; RecognizedInlineSelectionChanged(); }
             if (!Capture && (drawing || panning || erasing || moving || removalDragging || removalMoving || AnnotationHandleDragging ||
                 TextBoxDrawingActive || EmojiHandleDragging || ClosedShapeHandleDragging || CropDragging)) CancelGesture();
         }
@@ -614,6 +664,7 @@ namespace SnipStudio
                 CancelSourceRemoval(preserveRemovalSelection);
                 drawing = false; panning = false; erasing = false; moving = false; snapping = false; moveDelta = PointF.Empty; preview = null;
                 textSelectionDragging = false;
+                inlineRecognizedSelecting = false;
                 points.Clear();
                 if (Capture) Capture = false;
                 UpdateCursor();
@@ -629,6 +680,8 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (keyData == Keys.Escape && deferredRecognizedTextPoint.HasValue)
+            { ClearDeferredRecognizedTextClick(); return true; }
             if (keyData == Keys.Escape && (TextBoxDrawingActive || EmojiHandleDragging || ClosedShapeHandleDragging)) { CancelGesture(); return true; }
             if (EmojiPlacementPending && keyData == Keys.Escape) { CancelEmojiPlacement(); UpdateCursor(); return true; }
             if (HandleCropKey(keyData)) return true;
@@ -646,6 +699,7 @@ namespace SnipStudio
             }
             if (textActionsMode && keyData == (Keys.Control | Keys.A))
             {
+                textSelectionCaretPending = false;
                 if (textSelection.Count > 0) textSelection.Select(0, textSelection.Count - 1);
                 RaiseTextSelectionChanged(); Invalidate(); return true;
             }
@@ -752,6 +806,9 @@ namespace SnipStudio
 
         private void RaiseChanged()
         {
+            if (deferredRecognizedTextPoint.HasValue && (!Object.ReferenceEquals(deferredRecognizedTextImage, ImageIdentity) ||
+                deferredRecognizedTextRevision != DocumentRevision)) ClearDeferredRecognizedTextClick();
+            if (recognizedSessionResult != null && !RecognizedTextSessionActive) EndRecognizedTextSession();
             NotifyShapeSelectionChanged();
             if (CropModeActive) { EnsureCropFrame(); RaiseCropSelectionChanged(); }
             RefreshRecognitionIfNeeded();
@@ -792,9 +849,10 @@ namespace SnipStudio
                 else if (result.Lines.Count == 0) SetRecognitionStatus("No text detected. Freehand highlighting is ready.");
                 else SetRecognitionStatus("Text snap ready. Drag across words; Shift draws freehand.");
             }
-            catch (OperationCanceledException) { }
+            catch (OperationCanceledException) { ClearFailedRecognizedTextClick(generation, cancellation); }
             catch (Exception)
             {
+                ClearFailedRecognizedTextClick(generation, cancellation);
                 if (!disposingCanvas && generation == recognitionGeneration) SetRecognitionStatus("Text snap unavailable. Freehand highlighting is ready.");
             }
             finally
@@ -803,6 +861,14 @@ namespace SnipStudio
                 if (generation == recognitionGeneration) SetTextRecognitionBusy(false);
                 cancellation.Dispose();
             }
+        }
+
+        private void ClearFailedRecognizedTextClick(int generation, CancellationTokenSource request)
+        {
+            // A terminal failure cancels its click intent, but an older request
+            // must not clear a newer click waiting on a replacement request.
+            if (generation == recognitionGeneration && Object.ReferenceEquals(recognitionCancellation, request) &&
+                deferredRecognizedTextGeneration == generation) ClearDeferredRecognizedTextClick();
         }
 
         private void SetRecognitionStatus(string value)
@@ -815,9 +881,21 @@ namespace SnipStudio
 
         private void ResetTextSelection(TextRecognitionResult result)
         {
+            textSelectionCaretPending = false;
             textSelectionDragging = false;
             textSelectionAnchor = -1;
             textSelection = new TextOverlaySelection(result != null && result.Available ? result.Lines : null);
+            if (result != null && result.Available && textSelection.Count > 0 && CurrentRecognizedTextResult &&
+                Object.ReferenceEquals(result, recognizedText))
+            {
+                recognizedTextToolHistory = true;
+                if (tool == EditorTool.Text && !textActionsMode)
+                {
+                    EnsureRecognizedTextToolSession();
+                    ActivateDeferredRecognizedTextClick();
+                }
+            }
+            else if (result != null && CurrentRecognizedTextResult) ClearDeferredRecognizedTextClick();
             RaiseTextSelectionChanged();
             Invalidate();
         }
@@ -833,6 +911,7 @@ namespace SnipStudio
             if (disposing)
             {
                 disposingCanvas = true;
+                EndRecognizedTextSession();
                 DisposeInlineText();
                 DisposeViewResources();
                 DisposeTextScanFeedback();

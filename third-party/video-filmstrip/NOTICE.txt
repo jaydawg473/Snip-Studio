@@ -1,0 +1,47 @@
+Snip Studio video filmstrip - technical reference credit
+
+The WinForms filmstrip UI and the extension of Snip Studio's existing Windows
+Media Foundation backend are original Snip Studio implementation. Microsoft's
+VideoThumbnail sample was consulted as a technical reference for thumbnail
+seeking and decoding; this credit does not describe copied or adapted code.
+
+Reference: Microsoft Windows classic samples - VideoThumbnail
+Copyright (c) Microsoft Corporation
+Repository: https://github.com/microsoft/Windows-classic-samples
+Pinned commit: 1ed30259468dad6c637020c6d4567c0ff572d9fb
+Source:
+https://github.com/microsoft/Windows-classic-samples/blob/1ed30259468dad6c637020c6d4567c0ff572d9fb/Samples/Win7Samples/multimedia/mediafoundation/VideoThumbnail/Thumbnail.cpp
+Documentation:
+https://learn.microsoft.com/en-us/windows/win32/medfound/videothumbnail-sample
+Upstream license:
+https://github.com/microsoft/Windows-classic-samples/blob/1ed30259468dad6c637020c6d4567c0ff572d9fb/LICENSE
+Source and complete license retrieved: 2026-11-17
+
+The complete upstream repository LICENSE follows unchanged. Its final note
+about font assets applies to other repository samples; this reference adds
+no font assets to Snip Studio.
+
+The MIT License (MIT)
+
+Copyright (c) Microsoft Corporation
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+
+Portions of this repo are provided under the SIL Open Font License.
+See the LICENSE file in individual samples for additional details.

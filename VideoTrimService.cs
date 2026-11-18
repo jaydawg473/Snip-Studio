@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
@@ -17,6 +18,19 @@ namespace SnipStudio
         public int Height { get; internal set; }
         public int FramesPerSecond { get; internal set; }
         public bool HasAudio { get; internal set; }
+    }
+
+    // Owns one decoded preview. Timestamp is the actual source sample time,
+    // which may differ from the requested scrub time between video frames.
+    public sealed class VideoPreviewFrame : IDisposable
+    {
+        private Bitmap image;
+        public Bitmap Image { get { return image; } }
+        public TimeSpan Timestamp { get; private set; }
+        internal VideoPreviewFrame(Bitmap bitmap, long timestamp)
+        { image = bitmap; Timestamp = TimeSpan.FromTicks(timestamp); }
+        public Bitmap DetachImage() { Bitmap value = image; image = null; return value; }
+        public void Dispose() { Bitmap value = image; image = null; if (value != null) value.Dispose(); }
     }
 
     public enum VideoExportPreset { Balanced720p, Small480p, TargetAttachmentSize }
@@ -49,6 +63,183 @@ namespace SnipStudio
     // silently moving the selection to a preceding H.264 keyframe.
     public static class VideoTrimService
     {
+        // Filmstrip and scrub requests have independent bounded workers so a
+        // strip does not occupy the only decoder while the user seeks. Native
+        // Source Reader calls are synchronous: cancellation is cooperative at
+        // their boundaries, rather than a promise to interrupt a blocked codec.
+        private static readonly SemaphoreSlim previewFrameSlot = new SemaphoreSlim(1, 1);
+        private static readonly SemaphoreSlim filmstripFrameSlot = new SemaphoreSlim(1, 1);
+        private const long MaximumPreviewPixels = 16000000;
+        private const int MaximumPreviewBufferBytes = 80 * 1024 * 1024;
+
+        /// <summary>Read a decoded visual frame without changing the source. The caller owns the returned bitmap.</summary>
+        public static async Task<Bitmap> ReadPreviewFrameAsync(string path, TimeSpan position, Size maximumSize,
+            CancellationToken cancellationToken)
+        {
+            using (VideoPreviewFrame frame = await ReadPreviewFrameInfoAsync(path, position, maximumSize, cancellationToken).ConfigureAwait(false))
+                return frame.DetachImage();
+        }
+
+        /// <summary>Read an owned preview and its actual decoded source timestamp.</summary>
+        public static async Task<VideoPreviewFrame> ReadPreviewFrameInfoAsync(string path, TimeSpan position, Size maximumSize,
+            CancellationToken cancellationToken)
+        {
+            string source = ValidateSource(path);
+            ValidatePreviewSize(maximumSize);
+            if (position < TimeSpan.Zero) throw new ArgumentOutOfRangeException("position");
+            cancellationToken.ThrowIfCancellationRequested();
+            await previewFrameSlot.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await Task.Run(delegate
+                {
+                    VideoPreviewFrame result = null;
+                    bool complete = false;
+                    try
+                    {
+                        Stopwatch clock = Stopwatch.StartNew();
+                        cancellationToken.ThrowIfCancellationRequested();
+                        using (NativeReader reader = new NativeReader(source, true, false))
+                            result = ReadPreviewFrame(reader, position.Ticks, maximumSize, cancellationToken, clock);
+                        CheckPreviewRequest(cancellationToken, clock);
+                        complete = true;
+                        return result;
+                    }
+                    finally { if (!complete && result != null) result.Dispose(); }
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally { previewFrameSlot.Release(); }
+        }
+
+        /// <summary>Read evenly spaced frame centers. The caller owns every bitmap in the returned array.</summary>
+        public static async Task<Bitmap[]> ReadFilmstripAsync(string path, int count, Size maximumSize,
+            CancellationToken cancellationToken)
+        {
+            string source = ValidateSource(path);
+            ValidatePreviewSize(maximumSize);
+            if (count < 1 || count > 24) throw new ArgumentOutOfRangeException("count");
+            cancellationToken.ThrowIfCancellationRequested();
+            await filmstripFrameSlot.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                return await Task.Run(delegate
+                {
+                    List<Bitmap> frames = new List<Bitmap>(count);
+                    bool complete = false;
+                    try
+                    {
+                        Stopwatch clock = Stopwatch.StartNew();
+                        cancellationToken.ThrowIfCancellationRequested();
+                        using (NativeReader reader = new NativeReader(source, true, false))
+                        {
+                            for (int index = 0; index < count; index++)
+                            {
+                                // Decimal arithmetic avoids overflowing ticks
+                                // when locating centers in unusually long files.
+                                long time = (long)((decimal)reader.Metadata.Duration.Ticks * (index * 2 + 1) / (count * 2));
+                                using (VideoPreviewFrame frame = ReadPreviewFrame(reader, time, maximumSize, cancellationToken, clock))
+                                    frames.Add(frame.DetachImage());
+                            }
+                        }
+                        cancellationToken.ThrowIfCancellationRequested();
+                        Bitmap[] result = frames.ToArray();
+                        complete = true;
+                        return result;
+                    }
+                    finally { if (!complete) foreach (Bitmap frame in frames) frame.Dispose(); }
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally { filmstripFrameSlot.Release(); }
+        }
+
+        private static void ValidatePreviewSize(Size maximumSize)
+        {
+            if (maximumSize.Width < 1 || maximumSize.Height < 1 || maximumSize.Width > 1280 || maximumSize.Height > 720)
+                throw new ArgumentOutOfRangeException("maximumSize", "Choose a preview up to 1280 by 720 pixels.");
+        }
+
+        private static void ValidatePreviewSource(VideoMetadata metadata)
+        {
+            if (metadata.Width < 2 || metadata.Height < 2 || metadata.Width > 8192 || metadata.Height > 8192 ||
+                (long)metadata.Width * metadata.Height > MaximumPreviewPixels)
+                throw new InvalidOperationException("This recording is too large for the filmstrip preview. The original can still be played or saved.");
+        }
+
+        private static void CheckPreviewRequest(CancellationToken cancellationToken, Stopwatch clock)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (clock.Elapsed > TimeSpan.FromSeconds(20))
+                throw new TimeoutException("Windows took too long to decode the preview. The recording remains unchanged.");
+        }
+
+        private static VideoPreviewFrame ReadPreviewFrame(NativeReader reader, long requestedTime, Size maximumSize,
+            CancellationToken cancellationToken, Stopwatch clock)
+        {
+            ValidatePreviewSource(reader.Metadata);
+            long frameDuration = Math.Max(1, TimeSpan.TicksPerSecond / reader.Metadata.FramesPerSecond);
+            long target = Math.Max(0, Math.Min(requestedTime, reader.Metadata.Duration.Ticks - 1));
+            CheckPreviewRequest(cancellationToken, clock);
+            reader.Seek(target);
+            IntPtr previous = IntPtr.Zero;
+            long previousTimestamp = 0;
+            try
+            {
+                for (int read = 0; read < 5000; read++)
+                {
+                    CheckPreviewRequest(cancellationToken, clock);
+                    IntPtr sample = IntPtr.Zero;
+                    int flags;
+                    long timestamp;
+                    try
+                    {
+                        reader.ReadVideo(out flags, out timestamp, out sample);
+                        CheckPreviewRequest(cancellationToken, clock);
+                        if ((flags & 1) != 0) throw new InvalidOperationException("Windows reported an error while decoding the preview.");
+                        if ((flags & (0x10 | 0x20)) != 0) reader.ValidateVideoFormat();
+                        if (sample != IntPtr.Zero)
+                        {
+                            long duration = reader.SampleDuration(sample, frameDuration);
+                            // A seek can start on a preceding keyframe. Decode
+                            // through preroll to the containing/first later
+                            // frame, rather than showing that keyframe as the
+                            // requested image. A timeline gap uses its next frame.
+                            if (timestamp >= target || (timestamp <= target && timestamp > target - duration))
+                                return CopyPreviewFrame(reader, sample, timestamp, maximumSize, cancellationToken, clock);
+                            Release(ref previous);
+                            previous = sample;
+                            previousTimestamp = timestamp;
+                            sample = IntPtr.Zero;
+                        }
+                        // Audio can extend slightly past the final video frame.
+                        // Only after decoding through actual EOS may the final
+                        // decoded frame stand for that endpoint.
+                        if ((flags & 2) != 0)
+                        {
+                            if (previous != IntPtr.Zero) return CopyPreviewFrame(reader, previous, previousTimestamp, maximumSize, cancellationToken, clock);
+                            throw new InvalidOperationException("The requested position contains no decodable video frame.");
+                        }
+                    }
+                    finally { Release(ref sample); }
+                }
+                throw new InvalidOperationException("Windows returned too many empty or earlier frames for this preview.");
+            }
+            finally { Release(ref previous); }
+        }
+
+        private static VideoPreviewFrame CopyPreviewFrame(NativeReader reader, IntPtr sample, long timestamp,
+            Size maximumSize, CancellationToken cancellationToken, Stopwatch clock)
+        {
+            Bitmap image = reader.CopyPreviewVideo(sample, maximumSize);
+            try
+            {
+                CheckPreviewRequest(cancellationToken, clock);
+                VideoPreviewFrame result = new VideoPreviewFrame(image, timestamp);
+                image = null;
+                return result;
+            }
+            finally { if (image != null) image.Dispose(); }
+        }
+
         public static Task<VideoMetadata> InspectAsync(string path)
         {
             string fullPath = ValidateSource(path);
@@ -298,7 +489,9 @@ namespace SnipStudio
             private int decodedHeight;
             public VideoMetadata Metadata { get; private set; }
 
-            internal NativeReader(string path, bool decode)
+            internal NativeReader(string path, bool decode) : this(path, decode, true) { }
+
+            internal NativeReader(string path, bool decode, bool decodeAudio)
             {
                 IntPtr attributes = IntPtr.Zero, video = IntPtr.Zero, audio = IntPtr.Zero;
                 try
@@ -338,10 +531,11 @@ namespace SnipStudio
                     if (Metadata.Width < 2 || Metadata.Height < 2 || ticks <= 0) throw new InvalidOperationException("The recording has no usable video timeline.");
                     if (decode)
                     {
+                        if (!decodeAudio) ValidatePreviewSource(Metadata);
                         Check(Call<SelectStreamCall>(reader, 4)(reader, AnyStream, false), "Select recording streams");
                         ConfigureVideo();
                         Check(Call<SelectStreamCall>(reader, 4)(reader, FirstVideo, true), "Select video stream");
-                        if (hasAudio)
+                        if (hasAudio && decodeAudio)
                         {
                             ConfigureAudio();
                             Check(Call<SelectStreamCall>(reader, 4)(reader, FirstAudio, true), "Select audio stream");
@@ -401,6 +595,64 @@ namespace SnipStudio
             internal void Read(out int actual, out int flags, out long time, out IntPtr sample)
             {
                 Check(Call<ReadCall>(reader, 9)(reader, AnyStream, 0, out actual, out flags, out time, out sample), "Read recording samples");
+            }
+
+            internal void ReadVideo(out int flags, out long time, out IntPtr sample)
+            {
+                int actual;
+                Check(Call<ReadCall>(reader, 9)(reader, FirstVideo, 0, out actual, out flags, out time, out sample), "Read a video preview frame");
+            }
+
+            internal void ValidateVideoFormat() { ValidateFormat(FirstVideo, true); }
+
+            internal Bitmap CopyPreviewVideo(IntPtr sample, Size maximumSize)
+            {
+                IntPtr buffer = IntPtr.Zero;
+                Bitmap output = null;
+                try
+                {
+                    Check(Call<ContiguousCall>(sample, 41)(sample, out buffer), "Read preview pixels");
+                    IntPtr pixels;
+                    int maximum, length;
+                    Check(Call<LockCall>(buffer, 3)(buffer, out pixels, out maximum, out length), "Lock preview pixels");
+                    try
+                    {
+                        long rowBytes = Math.Abs((long)stride);
+                        long required = rowBytes * decodedHeight;
+                        if (pixels == IntPtr.Zero || decodedHeight < Metadata.Height || decodedHeight > ((Metadata.Height + 15) & ~15) ||
+                            rowBytes < (long)Metadata.Width * 4 || rowBytes > (long)Metadata.Width * 4 + 4096 ||
+                            required < 1 || required > MaximumPreviewBufferBytes || maximum < required || length < required ||
+                            length > maximum || length > MaximumPreviewBufferBytes)
+                            throw new InvalidOperationException("The preview decoder returned an unsupported pixel buffer.");
+                        int first = stride < 0 ? checked((int)((decodedHeight - 1) * rowBytes)) : 0;
+                        double scale = Math.Min(1, Math.Min((double)maximumSize.Width / Metadata.Width, (double)maximumSize.Height / Metadata.Height));
+                        int width = Math.Max(1, (int)Math.Floor(Metadata.Width * scale));
+                        int height = Math.Max(1, (int)Math.Floor(Metadata.Height * scale));
+                        // The locked native buffer stays alive until this
+                        // synchronous draw and its source wrapper are disposed.
+                        // No byte[length] allocation is made from codec data.
+                        using (Bitmap source = new Bitmap(Metadata.Width, Metadata.Height, stride, PixelFormat.Format32bppRgb, IntPtr.Add(pixels, first)))
+                        {
+                            output = new Bitmap(width, height, PixelFormat.Format32bppRgb);
+                            using (Graphics graphics = Graphics.FromImage(output))
+                            {
+                                graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                                graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                                graphics.DrawImage(source, new Rectangle(0, 0, width, height), 0, 0, source.Width, source.Height, GraphicsUnit.Pixel);
+                                graphics.Flush(FlushIntention.Sync);
+                            }
+                        }
+                    }
+                    finally { Check(Call<MediaFoundationVideoWriter.NoArgumentCall>(buffer, 4)(buffer), "Unlock preview pixels"); }
+                    Bitmap result = output;
+                    output = null;
+                    return result;
+                }
+                finally
+                {
+                    if (output != null) output.Dispose();
+                    Release(ref buffer);
+                }
             }
 
             internal bool IsVideoStream(int stream)

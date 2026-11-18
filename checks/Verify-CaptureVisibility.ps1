@@ -135,7 +135,7 @@ Confirm-Visibility (@($startInstructions|Where-Object {$_.Opcode -in @('stfld','
 $hideCalls=@($startCalls|Where-Object {$_.Target -eq $selective})
 $waitNoToken=$scopeType.GetMethod('WaitUntilHiddenAsync',$instance,$null,[type[]]@(),$null)
 $waitCalls=@($startCalls|Where-Object {$_.Target -eq $waitNoToken})
-$screenCalls=@($startCalls|Where-Object {$_.Target.Name -ceq 'Capture' -and $_.Target.DeclaringType.FullName -ceq 'SnipStudio.CaptureService'})
+$screenCalls=@($startCalls|Where-Object {$_.Target.Name -in @('Capture','CaptureWithWarnings') -and $_.Target.DeclaringType.FullName -ceq 'SnipStudio.CaptureService'})
 Confirm-Visibility ($hideCalls.Count -eq 1 -and $waitCalls.Count -eq 1 -and $screenCalls.Count -eq 1 -and
     $hideCalls[0].Offset -lt $waitCalls[0].Offset -and $waitCalls[0].Offset -lt $screenCalls[0].Offset) 'Still capture prepares its selected windows and invokes the compositor wait before reading screen pixels'
 $waitWithToken=$scopeType.GetMethod('WaitUntilHiddenAsync',$instance,$null,[type[]]@([Threading.CancellationToken]),$null)

@@ -6,8 +6,21 @@ namespace SnipStudio
 {
     public sealed partial class MainForm
     {
+        private TranslationDialog translationDialog;
+
         private void ShowTranslation()
         {
+            if (IsDisposed || Disposing) return;
+            if (translationDialog != null && !translationDialog.IsDisposed)
+            {
+                if (!layoutTestMode)
+                {
+                    if (translationDialog.WindowState == FormWindowState.Minimized) translationDialog.WindowState = FormWindowState.Normal;
+                    translationDialog.Show();
+                    translationDialog.Activate();
+                }
+                return;
+            }
             if (!canvas.HasImage || canvas.IsRecognizingText || capturePending) return;
             bool selected = canvas.HasSelectedRecognizedText;
             string source = selected ? canvas.SelectedRecognizedText : canvas.AllRecognizedText;
@@ -20,51 +33,83 @@ namespace SnipStudio
             try { snapshot = canvas.CaptureTranslationSource(selected); }
             catch (InvalidOperationException error)
             {
-                MessageBox.Show(this, error.Message, "Translate text", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                SetStatus(error.Message);
                 return;
             }
             List<string> segments = new List<string>();
             foreach (TranslationSourceBlock block in snapshot.Blocks) segments.Add(block.SourceText);
-            using (TranslationDialog dialog = new TranslationDialog(snapshot.Text, snapshot.SelectedOnly,
+            TranslationDialog dialog = new TranslationDialog(snapshot.Text, snapshot.SelectedOnly,
                 preferences.TranslationServerUrl, preferences.TranslationTargetLanguage,
-                preferences.TranslationProvider, preferences.TranslationSourceLanguage))
+                preferences.TranslationProvider, preferences.TranslationSourceLanguage);
+            translationDialog = dialog;
+            bool choicesSaved = false;
+            Action saveChoices = delegate
             {
-                dialog.SourceSegments = segments;
-                dialog.ReplaceInSnip = async delegate(IList<string> translated, IWin32Window owner)
+                if (choicesSaved) return;
+                choicesSaved = true;
+                SaveTranslationChoices(dialog);
+            };
+            EventHandler ownerDisposed = delegate
+            {
+                saveChoices();
+                if (!dialog.IsDisposed) dialog.Dispose();
+            };
+            Disposed += ownerDisposed;
+            dialog.FormClosed += delegate { saveChoices(); };
+            dialog.ChoicesClosing += delegate { saveChoices(); };
+            dialog.Disposed += delegate
+            {
+                Disposed -= ownerDisposed;
+                if (Object.ReferenceEquals(translationDialog, dialog)) translationDialog = null;
+            };
+            dialog.SourceSegments = segments;
+            dialog.ReplaceInSnip = async delegate(IList<string> translated, IWin32Window owner)
+            {
+                if (IsDisposed || Disposing || !canvas.HasImage || !Object.ReferenceEquals(snapshot.ImageIdentity, canvas.ImageIdentity) || canvas.DocumentRevision != snapshot.Revision)
                 {
-                    if (IsDisposed || Disposing || !canvas.HasImage || !Object.ReferenceEquals(snapshot.ImageIdentity, canvas.ImageIdentity) || canvas.DocumentRevision != snapshot.Revision)
-                    {
-                        MessageBox.Show(owner, "The snip changed while the translation was open. Copy the translation, then reopen Text actions for the current snip.",
-                            "Snip changed", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        return false;
-                    }
-                    System.Threading.CancellationToken replacementToken = dialog.ReplacementCancellationToken;
-                    TranslationReplaceResult result = await canvas.ReplaceTranslatedTextAsync(snapshot, translated, replacementToken);
-                    if (!result.Applied)
-                    {
-                        if (!replacementToken.IsCancellationRequested)
-                            MessageBox.Show(owner, result.Message, "Translation kept", MessageBoxButtons.OK, MessageBoxIcon.Information);
-                        return false;
-                    }
-                    SetStatus("Original text replaced with translation. Review the result; Undo restores every original line.");
-                    return true;
-                };
-                dialog.ShowDialog(this);
-                preferences.TranslationServerUrl = dialog.SelectedEndpoint;
-                preferences.TranslationTargetLanguage = dialog.SelectedTargetCode;
-                preferences.TranslationProvider = dialog.SelectedProvider;
-                preferences.TranslationSourceLanguage = dialog.SelectedSourceCode;
-                foreach (Form form in Application.OpenForms)
-                {
-                    MainForm other = form as MainForm;
-                    if (other == null || other.IsDisposed) continue;
-                    other.preferences.TranslationServerUrl = preferences.TranslationServerUrl;
-                    other.preferences.TranslationTargetLanguage = preferences.TranslationTargetLanguage;
-                    other.preferences.TranslationProvider = preferences.TranslationProvider;
-                    other.preferences.TranslationSourceLanguage = preferences.TranslationSourceLanguage;
+                    dialog.ShowReplacementFeedback("The snip changed while translation was open. Your translation is kept; copy it, or close this window and reopen Translate for the current snip.", true);
+                    return false;
                 }
-                try { preferences.Save(); }
-                catch (Exception error) { ShowFailure("Your translation choices could not be saved. The snip is still open", error); }
+                System.Threading.CancellationToken replacementToken = dialog.ReplacementCancellationToken;
+                if (replacementToken.IsCancellationRequested) return false;
+                TranslationReplaceResult result = await canvas.ReplaceTranslatedTextAsync(snapshot, translated, replacementToken);
+                if (!result.Applied)
+                {
+                    dialog.ShowReplacementFeedback(replacementToken.IsCancellationRequested
+                        ? "Text replacement canceled. Your translation is kept." : result.Message, !replacementToken.IsCancellationRequested);
+                    return false;
+                }
+                if (!IsDisposed && !Disposing) SetStatus(result.Message);
+                return true;
+            };
+            if (layoutTestMode) dialog.Owner = this;
+            else
+            {
+                try { dialog.Show(this); }
+                catch { dialog.Dispose(); throw; }
+            }
+        }
+
+        private void SaveTranslationChoices(TranslationDialog dialog)
+        {
+            preferences.TranslationServerUrl = dialog.SelectedEndpoint;
+            preferences.TranslationTargetLanguage = dialog.SelectedTargetCode;
+            preferences.TranslationProvider = dialog.SelectedProvider;
+            preferences.TranslationSourceLanguage = dialog.SelectedSourceCode;
+            foreach (Form form in Application.OpenForms)
+            {
+                MainForm other = form as MainForm;
+                if (other == null || other.IsDisposed) continue;
+                other.preferences.TranslationServerUrl = preferences.TranslationServerUrl;
+                other.preferences.TranslationTargetLanguage = preferences.TranslationTargetLanguage;
+                other.preferences.TranslationProvider = preferences.TranslationProvider;
+                other.preferences.TranslationSourceLanguage = preferences.TranslationSourceLanguage;
+            }
+            if (layoutTestMode) return;
+            try { preferences.Save(); }
+            catch (Exception)
+            {
+                if (!IsDisposed && !Disposing) SetStatus("Your translation choices could not be saved. Your snip is still open.");
             }
         }
     }

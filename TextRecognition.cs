@@ -33,6 +33,9 @@ namespace SnipStudio
         public bool Available { get; set; }
         public string Message { get; set; }
         public string Text { get; set; }
+        // Native OCR output is retained even when a proven graphical icon is
+        // excluded from editable text regions. This is not corrected spelling.
+        public string RawText { get; set; }
         public string Language { get; set; }
         public double? TextAngle { get; set; }
         public bool WasResized { get; set; }
@@ -117,9 +120,10 @@ namespace SnipStudio
 
             int maxDimension = (int)OcrEngine.MaxImageDimension;
             if (maxDimension < 1) return Unavailable("Windows reported no supported OCR image size. Freehand highlighting remains available.");
-            double scale = Math.Min(1.0, Math.Min((double)maxDimension / snapshot.Width, (double)maxDimension / snapshot.Height));
-            int targetWidth = Math.Max(1, (int)Math.Floor(snapshot.Width * scale));
-            int targetHeight = Math.Max(1, (int)Math.Floor(snapshot.Height * scale));
+            System.Drawing.Size target = PreparedSize(snapshot.Size, maxDimension);
+            int targetWidth = target.Width;
+            int targetHeight = target.Height;
+            bool resized = target != snapshot.Size;
             double scaleX = (double)snapshot.Width / targetWidth;
             double scaleY = (double)snapshot.Height / targetHeight;
 
@@ -130,7 +134,7 @@ namespace SnipStudio
                     // Transparent freeform areas become white for recognition only;
                     // no OCR preprocessing is written back to the screenshot.
                     graphics.Clear(Color.White);
-                    graphics.InterpolationMode = scale < 1 ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
+                    graphics.InterpolationMode = resized ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
                     graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     graphics.DrawImage(snapshot, new Rectangle(0, 0, targetWidth, targetHeight),
                         new Rectangle(0, 0, snapshot.Width, snapshot.Height), GraphicsUnit.Pixel);
@@ -164,6 +168,7 @@ namespace SnipStudio
                         // Preserve recognized text verbatim; OCR is not a rewrite or
                         // verification of business identifiers or numeric values.
                         recognition.Text = result.Text ?? "";
+                        recognition.RawText = recognition.Text;
                         foreach (OcrLine sourceLine in result.Lines)
                         {
                             TextLineRegion line = new TextLineRegion();
@@ -182,6 +187,7 @@ namespace SnipStudio
                             }
                             if (line.Words.Count > 0) recognition.Lines.Add(line);
                         }
+                        RecognizedTextRegions.Refine(recognition, snapshot);
                         recognition.Message = recognition.Lines.Count == 0 ? "No text was detected. Freehand highlighting is available."
                             : "Text ready — " + recognition.Language + ".";
                         if (recognition.TextAngle.HasValue && Math.Abs(recognition.TextAngle.Value) > 2)
@@ -190,6 +196,21 @@ namespace SnipStudio
                     }
                 }
             }
+        }
+
+        internal static System.Drawing.Size PreparedSize(System.Drawing.Size source, int maximumDimension)
+        {
+            if (source.Width < 1 || source.Height < 1) throw new ArgumentOutOfRangeException("source");
+            if (maximumDimension < 1) throw new ArgumentOutOfRangeException("maximumDimension");
+            // Small screenshots often contain glyphs too short for Windows OCR.
+            // Enlarge only the recognition copy, in one bounded pass; never
+            // rewrite a guessed identifier or resize captured/exported pixels.
+            bool small = source.Width <= 1024 && source.Height <= 512 &&
+                (long)source.Width * source.Height <= 524288;
+            double scale = Math.Min(small ? 2.0 : 1.0,
+                Math.Min((double)maximumDimension / source.Width, (double)maximumDimension / source.Height));
+            return new System.Drawing.Size(Math.Max(1, (int)Math.Floor(source.Width * scale)),
+                Math.Max(1, (int)Math.Floor(source.Height * scale)));
         }
 
         private static byte[] ReadPixels(Bitmap bitmap)

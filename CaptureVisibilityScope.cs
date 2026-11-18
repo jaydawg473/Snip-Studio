@@ -65,7 +65,8 @@ namespace SnipStudio
                     SettingsForm settings = form as SettingsForm;
                     if ((snip == null && settings == null) || form.IsDisposed || form.Disposing) continue;
                     foreach (Form owned in form.OwnedForms)
-                        if (!owned.IsDisposed && owned.Visible && !(owned is MainForm) && !(owned is SettingsForm))
+                        if (!owned.IsDisposed && owned.Visible && !(owned is MainForm) && !(owned is SettingsForm) &&
+                            !IsNonblockingTranslationWindow(owned))
                             throw new InvalidOperationException("Close the open Snip Studio dialog before starting a capture.");
                     if (form.Modal && form.Visible)
                         throw new InvalidOperationException("Close the open Snip Studio dialog before starting a capture.");
@@ -74,7 +75,16 @@ namespace SnipStudio
                         bool hide = ShouldHideWindowForCapture(snip != null, settings != null,
                             Object.ReferenceEquals(form, owner), includeOpenSnips);
                         if (hide)
+                        {
                             scope.windows.Add(new WindowState { Form = form, Handle = form.Handle, OriginalWindowState = form.WindowState });
+                            foreach (Form owned in form.OwnedForms)
+                                if (!owned.IsDisposed && !owned.Disposing && owned.Visible && owned.IsHandleCreated &&
+                                    owned.WindowState != FormWindowState.Minimized && IsNonblockingTranslationWindow(owned))
+                                {
+                                    scope.windows.Add(new WindowState { Form = owned, Handle = owned.Handle, OriginalWindowState = owned.WindowState });
+                                    popupWindows.Add(owned);
+                                }
+                        }
                         if (hide || Object.ReferenceEquals(form, owner)) popupWindows.Add(form);
                     }
                 }
@@ -114,6 +124,11 @@ namespace SnipStudio
             bool isInitiator, bool includeOpenSnips)
         {
             return isSettings || (isEditor && isInitiator && !includeOpenSnips);
+        }
+
+        internal static bool IsNonblockingTranslationWindow(Form form)
+        {
+            return form is TranslationDialog && !form.Modal;
         }
 
         // Use on a newly created countdown/selection window before it is shown.
@@ -309,6 +324,8 @@ namespace SnipStudio
             if (snip != null) snip.CaptureRestoreWithoutActivation = value;
             SettingsForm settings = form as SettingsForm;
             if (settings != null) settings.CaptureRestoreWithoutActivation = value;
+            TranslationDialog translation = form as TranslationDialog;
+            if (translation != null) translation.CaptureRestoreWithoutActivation = value;
         }
 
         [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out int value, int size);

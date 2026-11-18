@@ -14,6 +14,7 @@ namespace SnipStudio
         private StudioButton recordButton;
         private ScreenRecorder screenRecorder;
         private RecordingControlForm recordingControl;
+        private RecordingBoundary recordingBoundary;
         private bool recordingSession, recordingStarting, stoppingRecording, closeAfterRecording;
         private string recordingPath;
         private FormWindowState recordingRestoreState;
@@ -65,6 +66,7 @@ namespace SnipStudio
             recordMicrophone.Enabled = !capturePending;
             recordSystemAudio.Enabled = !capturePending;
             mode.Enabled = !capturePending;
+            recordingRegionMode.Enabled = !capturePending;
             delay.Enabled = !capturePending;
             UpdateAudioSourceControlState();
         }
@@ -139,7 +141,7 @@ namespace SnipStudio
         {
             await recordingWindows.WaitUntilHiddenAsync();
             if (closing || IsDisposed || Disposing) return false;
-            Rectangle? region = CaptureService.SelectRecordingRegion(hideTaskbars, keepPrimaryVisible);
+            Rectangle? region = CaptureService.SelectRecordingRegion(SelectedRecordingCaptureMode, hideTaskbars, keepPrimaryVisible);
             if (closing || IsDisposed || Disposing || closeAfterRecording) return false;
             if (!region.HasValue)
             {
@@ -182,12 +184,23 @@ namespace SnipStudio
             }
             if (recordingFailure != null) throw recordingFailure;
             if (recordingTaskbarFailure != null) throw recordingTaskbarFailure;
+            recordingBoundary = new RecordingBoundary(recorder.SourceRegion);
+            recordingBoundary.Show();
             recordingStarting = false;
             recordingControl = new RecordingControlForm(microphone, systemAudio);
             recordingControl.StopRequested += delegate { StopRecording(); };
+            if (!recordingBoundary.HasCompleteOutline)
+                recordingControl.RecordingAreaNotice = "Some screen-edge markers are hidden because Windows could not exclude them.";
             recordingControl.Show();
             recordingControl.UpdateRecording(recorder.Duration, "Recording your selected area. Stop saves the video.");
-            if (closeAfterRecording) StopRecording();
+            // A worker error may arrive while the indicator/controller HWNDs
+            // are being prepared. Do not leave a stale recording outline up.
+            if (recordingFailure != null || recorder.Error != null)
+            {
+                recordingFailure = recordingFailure ?? recorder.Error;
+                StopRecording();
+            }
+            else if (closeAfterRecording) StopRecording();
             return true;
         }
 
@@ -333,8 +346,16 @@ namespace SnipStudio
         private Exception ReleaseRecordingDesktop()
         {
             Exception failure = null;
-            try { failure = ReleaseRecordingTaskbars(); }
+            RecordingBoundary boundary = recordingBoundary;
+            recordingBoundary = null;
+            try { if (boundary != null) boundary.Dispose(); }
             catch (Exception error) { failure = error; }
+            try
+            {
+                Exception taskbarError = ReleaseRecordingTaskbars();
+                if (taskbarError != null) failure = failure == null ? taskbarError : new AggregateException(failure, taskbarError);
+            }
+            catch (Exception error) { failure = failure == null ? error : new AggregateException(failure, error); }
             CaptureVisibilityScope windows = recordingWindows;
             recordingWindows = null;
             try { if (windows != null) windows.Dispose(); }

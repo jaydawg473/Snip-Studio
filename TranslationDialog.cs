@@ -39,6 +39,10 @@ namespace SnipStudio
         private List<string> sourceSegments;
         private int translatedSegmentCount = 1;
         private CancellationToken replacementToken;
+        private bool replacementFeedbackProvided;
+        internal bool CaptureRestoreWithoutActivation;
+        protected override bool ShowWithoutActivation { get { return CaptureRestoreWithoutActivation || base.ShowWithoutActivation; } }
+        internal event EventHandler ChoicesClosing;
 
         internal string SelectedEndpoint { get { return lastEndpoint; } }
         internal Func<IList<string>, IWin32Window, Task<bool>> ReplaceInSnip
@@ -52,6 +56,13 @@ namespace SnipStudio
         }
         internal CancellationToken ReplacementCancellationToken
         { get { return addingToSnip ? replacementToken : CancellationToken.None; } }
+        internal void ShowReplacementFeedback(string message, bool failure)
+        {
+            if (disposed || IsDisposed || Disposing) return;
+            replacementFeedbackProvided = true;
+            SetStatus(message, failure);
+            if (Visible && IsHandleCreated) scroll.ScrollControlIntoView(status);
+        }
         internal IList<string> SourceSegments
         {
             get { return sourceSegments == null ? null : sourceSegments.AsReadOnly(); }
@@ -221,6 +232,7 @@ namespace SnipStudio
                 BackColor = StudioTheme.Surface };
             close = Button("Close", false, "Close translation and keep your screenshot unchanged.");
             close.DialogResult = DialogResult.Cancel;
+            close.Click += delegate { Close(); };
             copy = Button("Copy translation", false, "Copy the translated text, including any corrections you typed.");
             addToSnipButton = Button("Replace text in snip", false, "Replace the recognized words in their original positions with the translated text. Undo restores the original text.");
             cancelRequest = Button("Cancel request", false, "Stop waiting for this request. Earlier text remains available.");
@@ -494,6 +506,7 @@ namespace SnipStudio
 
         private async Task<TranslationDraft> TranslateDraftAsync(ITextTranslationService currentService, string fromCode, string toCode, CancellationToken token)
         {
+            currentService = new TechnicalTextTranslationService(currentService);
             List<string> blocks = sourceSegments == null ? new List<string> { sourceText } : new List<string>(sourceSegments);
             if (blocks.Count == 1)
             {
@@ -744,13 +757,14 @@ namespace SnipStudio
             int generation = requestGeneration;
             bool closeAfterReplacement = false;
             replacementToken = token;
+            replacementFeedbackProvided = false;
             SetStatus("Replacing the matching text in your snip…", false);
             try
             {
                 bool applied = await callback(edited.AsReadOnly(), this);
                 if (!RequestIsCurrent(generation, request, token)) return;
                 if (applied) closeAfterReplacement = true;
-                else SetStatus("No text was replaced. Your translation is still here.", false);
+                else if (!replacementFeedbackProvided) SetStatus("No text was replaced. Your translation is still here.", false);
             }
             catch (OperationCanceledException)
             {
@@ -948,7 +962,11 @@ namespace SnipStudio
         {
             if (disposing && !disposed)
             {
+                EventHandler closingChoices = ChoicesClosing;
+                ChoicesClosing = null;
+                if (closingChoices != null) closingChoices(this, EventArgs.Empty);
                 disposed = true;
+                replaceInSnip = null;
                 CancelPending(false);
                 if (service != null) { service.Dispose(); service = null; }
                 tips.Dispose();

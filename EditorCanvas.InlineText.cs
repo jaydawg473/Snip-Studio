@@ -13,6 +13,8 @@ namespace SnipStudio
         private float inlineTextWidth, inlineTextMinimumHeight;
         private object inlineTextImage;
         private long inlineTextRevision;
+        private object inlineCommittedImage;
+        private long inlineCommittedRevision;
         private string inlineInitialRtf, inlineInitialText, inlineTextStatus = "";
         private float inlineInitialWidth, inlineInitialMinimumHeight;
         private bool inlineLayoutChanging, inlineClosing, inlineLastDirty;
@@ -27,15 +29,16 @@ namespace SnipStudio
             get
             {
                 if (!InlineTextEditing) return false;
-                if (inlineTextIndex < 0) return !String.IsNullOrWhiteSpace(inlineTextEditor.Text);
+                if (inlineTextIndex < 0 && !inlineRecognizedSource) return !String.IsNullOrWhiteSpace(inlineTextEditor.Text);
                 return inlineTextWidth != inlineInitialWidth || inlineTextMinimumHeight != inlineInitialMinimumHeight ||
+                    (inlineRecognizedSource && inlineRecognizedBackground != inlineRecognizedInitialBackground) ||
                     !String.Equals(inlineTextEditor.Text, inlineInitialText, StringComparison.Ordinal) ||
                     !String.Equals(inlineTextEditor.Rtf, inlineInitialRtf, StringComparison.Ordinal);
             }
         }
         internal int InlineTextPreviewIndex
         {
-            get { return InlineTextEditing && InlineTextSnapshotCurrent ? inlineTextIndex : -1; }
+            get { return InlineTextEditing && InlineTextSnapshotCurrent && (!inlineRecognizedProxy || HasPendingInlineTextChanges) ? inlineTextIndex : -1; }
         }
         private bool InlineTextSnapshotCurrent
         {
@@ -94,13 +97,15 @@ namespace SnipStudio
                 draft.HideSelection = false;
                 draft.AutoWordSelection = false;
                 draft.ScrollBars = RichTextBoxScrollBars.Vertical;
-                draft.BorderStyle = BorderStyle.FixedSingle;
+                draft.BorderStyle = BorderStyle.None;
                 draft.MaxLength = 16000;
                 draft.Font = Font; // Make the base explicit before loading rich runs; parent font changes must not flatten them.
                 draft.Tag = "PreserveColor";
                 draft.AccessibleName = existing ? "Edit text directly on the snip" : "Type text directly on the snip";
                 draft.AccessibleDescription = "Enter starts a new line. Ctrl+Enter applies. Escape cancels. Advanced text opens all formatting options.";
-                Color color = RichTextLayout.GetFirstColor(rtf);
+                // Empty RTF has no persisted color run yet. Use the selected
+                // ink for a new note's contrast as well as its insertion color.
+                Color color = existing ? RichTextLayout.GetFirstColor(rtf) : Color.FromArgb(255, inkColor);
                 draft.ForeColor = color;
                 draft.Rtf = rtf;
                 draft.BackColor = color.GetBrightness() > .6f ? Color.FromArgb(28, 34, 44) : Color.White;
@@ -119,7 +124,13 @@ namespace SnipStudio
                 inlineTextStatus = "Type in the text box. Enter adds a line; Ctrl+Enter applies; Escape cancels.";
                 inlineContentHeight = 0;
                 selectedIndex = index;
-                Controls.Add(draft);
+                InitializeRecognizedInlineProxy(draft);
+                if (inlineRecognizedHost != null)
+                {
+                    Controls.Add(inlineRecognizedHost);
+                    inlineRecognizedHost.Controls.Add(draft);
+                }
+                else Controls.Add(draft);
                 draft.BringToFront();
                 draft.ContentsResized += delegate(object sender, ContentsResizedEventArgs e)
                 {
@@ -127,9 +138,16 @@ namespace SnipStudio
                     if (!inlineLayoutChanging) UpdateInlineTextLayout();
                 };
                 draft.TextChanged += delegate { InlineTextChanged(); };
-                draft.SelectionChanged += delegate { if (!inlineClosing && InlineTextEditing) RaiseTextStyleChanged(); };
+                draft.SelectionChanged += delegate
+                { if (!inlineClosing && InlineTextEditing) { RecognizedInlineSelectionChanged(); RaiseTextStyleChanged(); } };
                 UpdateInlineTextLayout();
                 draft.Select(existing ? draft.TextLength : 0, 0);
+                // Empty RTF does not retain its insertion color when RichEdit
+                // creates the native control. Apply the chosen ink after that
+                // setup, only for a new blank note; existing/source runs keep
+                // their own formatting.
+                if (!existing && draft.TextLength == 0)
+                    RichEditFormatting.SetTextColor(draft, Color.FromArgb(255, inkColor));
                 draft.Focus();
                 RaiseInlineTextStateChanged();
                 RaiseTextStyleChanged();
@@ -140,6 +158,7 @@ namespace SnipStudio
             {
                 if (Object.ReferenceEquals(inlineTextEditor, draft)) inlineTextEditor = null;
                 draft.Dispose();
+                ResetRecognizedInlineProxy();
                 throw;
             }
         }
@@ -148,6 +167,7 @@ namespace SnipStudio
         {
             if (inlineClosing || !InlineTextEditing) return;
             UpdateInlineTextLayout();
+            RecognizedInlineSelectionChanged();
             bool dirty = HasPendingInlineTextChanges;
             if (dirty != inlineLastDirty)
             {
@@ -167,8 +187,22 @@ namespace SnipStudio
                 // are source pixels. Cancel that DPI factor before applying zoom.
                 float factor = Math.Max(1f / 64f, Math.Min(64f, zoom * 96f / Math.Max(96, DeviceDpi)));
                 if (Math.Abs(inlineTextEditor.ZoomFactor - factor) > .0001f) inlineTextEditor.ZoomFactor = factor;
+                if (inlineRecognizedProxy) { UpdateRecognizedInlineProxyBounds(); return; }
                 int left = (int)Math.Floor(origin.X + inlineTextLocation.X * zoom);
                 int top = (int)Math.Floor(origin.Y + inlineTextLocation.Y * zoom);
+                if (inlineTextMinimumHeight > 0)
+                {
+                    // An explicitly drawn frame is the editor viewport, not a
+                    // minimum that RichEdit may enlarge as its content reflows.
+                    // Keep source-space dimensions stable while panning; the
+                    // parent clips offscreen portions and RichEdit scrolls text.
+                    float availableWidth = Math.Max(1, ImageSize.Width - inlineTextLocation.X);
+                    float availableHeight = Math.Max(1, ImageSize.Height - inlineTextLocation.Y);
+                    int frameWidth = Math.Max(1, (int)Math.Ceiling(Math.Min(inlineTextWidth, availableWidth) * zoom));
+                    int fixedFrameHeight = Math.Max(1, (int)Math.Ceiling(Math.Min(inlineTextMinimumHeight, availableHeight) * zoom));
+                    inlineTextEditor.SetBounds(left, top, frameWidth, fixedFrameHeight);
+                    return;
+                }
                 int width = Math.Max(8, (int)Math.Ceiling(inlineTextWidth * zoom) + 4);
                 float fontPixels = Math.Max(1, InlineTextFontSize);
                 int minimumHeight = Math.Max(24, (int)Math.Ceiling(fontPixels * zoom * 1.55f) + 8);
@@ -187,6 +221,11 @@ namespace SnipStudio
 
         internal bool HandleInlineTextMouseDown(MouseEventArgs e)
         {
+            // Neighboring source lines win over the current proxy's native
+            // layout height, which may be taller than the source's ink band.
+            if (ShouldNavigateRecognizedSession(e) && HandleRecognizedSessionMouseDown(e)) return true;
+            if (HandleRecognizedInlineMouseDown(e)) return true;
+            if (HandleRecognizedSessionMouseDown(e)) return true;
             // Child-editor clicks never reach the canvas. A canvas click commits
             // the draft before the ordinary tool/move/selection gesture continues.
             return InlineTextEditing && !CommitInlineText();
@@ -203,6 +242,8 @@ namespace SnipStudio
             }
             InlineDraftBox draft = inlineTextEditor;
             bool changed = HasPendingInlineTextChanges;
+            bool preserveRecognizedView = inlineRecognizedProxy;
+            RecognizedViewSnapshot recognizedView = preserveRecognizedView ? CaptureRecognizedView() : new RecognizedViewSnapshot();
             int index = inlineTextIndex;
             float size;
             Color color;
@@ -215,7 +256,14 @@ namespace SnipStudio
                 // Detach active state before the document transaction. It cannot
                 // re-enter a draft commit through export/auto-copy callbacks.
                 inlineTextEditor = null;
-                if (index >= 0)
+                if (inlineRecognizedSource)
+                {
+                    if (changed)
+                        selectedIndex = document.ReplaceImageRichTextAt(inlineRecognizedErase, plain, rtf, color,
+                            inlineRecognizedBackground, size, inlineTextWidth, inlineTextLocation);
+                    else selectedIndex = -1;
+                }
+                else if (index >= 0)
                 {
                     changed = changed && document.UpdateRichTextAnnotation(index, plain, rtf, color, size, inlineTextWidth, inlineTextMinimumHeight);
                     selectedIndex = String.IsNullOrWhiteSpace(plain) ? -1 : index;
@@ -235,31 +283,43 @@ namespace SnipStudio
                 RaiseInlineTextStateChanged();
                 return false;
             }
+            // Capture this transaction before callbacks can replace the snip.
+            // Navigation may accept our own source-frame replacement, but must
+            // not reuse its click against a later externally changed document.
+            inlineCommittedImage = ImageIdentity; inlineCommittedRevision = DocumentRevision;
+            if (annotationNavigationDepth > 0 && Object.ReferenceEquals(annotationNavigationImage, inlineTextImage))
+                annotationNavigationImage = inlineCommittedImage;
             textFontSize = size;
             defaultTextBoxWidth = inlineTextWidth;
+            AdvanceRecognizedTextSession(changed);
             CloseDetachedInlineText(draft);
             inlineTextStatus = changed ? "Text applied. Use Move to reposition it; Undo restores the previous state." : "Text unchanged.";
             RaiseInlineTextStateChanged();
             RaiseTextStyleChanged();
             if (changed) RaiseChanged(); else Invalidate();
+            if (preserveRecognizedView && HasImage)
+            { recognizedView.Image = ImageIdentity; RestoreRecognizedView(recognizedView); }
             return true;
         }
 
         public void CancelInlineText()
         {
             if (!InlineTextEditing) return;
+            bool preserveRecognizedView = inlineRecognizedProxy;
+            RecognizedViewSnapshot recognizedView = preserveRecognizedView ? CaptureRecognizedView() : new RecognizedViewSnapshot();
             InlineDraftBox draft = inlineTextEditor;
             inlineTextEditor = null;
             CloseDetachedInlineText(draft);
             inlineTextStatus = "Text editing canceled. The snip is unchanged.";
             RaiseInlineTextStateChanged(); RaiseTextStyleChanged(); Invalidate();
+            if (preserveRecognizedView) RestoreRecognizedView(recognizedView);
         }
 
         private void CloseDetachedInlineText(InlineDraftBox draft)
         {
             inlineClosing = true;
-            try { Controls.Remove(draft); draft.Dispose(); }
-            finally { inlineClosing = false; }
+            try { if (draft.Parent != null) draft.Parent.Controls.Remove(draft); draft.Dispose(); }
+            finally { ResetRecognizedInlineProxy(); inlineClosing = false; }
         }
 
         private void DisposeInlineText()
@@ -311,12 +371,13 @@ namespace SnipStudio
             string rtf = draft.Rtf;
             using (TextEditorDialog dialog = new TextEditorDialog("Advanced text", draft.Text,
                 RichTextLayout.GetFirstFontSize(rtf), inlineTextWidth, available,
-                RichTextLayout.GetFirstColor(rtf), draft.BackColor, false, rtf))
+                RichTextLayout.GetFirstColor(rtf), draft.BackColor, inlineRecognizedSource, rtf))
             {
                 dialog.SelectTextRange(draft.SelectionStart, draft.SelectionLength);
                 if (dialog.ShowDialog(FindForm()) != DialogResult.OK) { draft.Focus(); return; }
                 RichTextLayout.ValidateRtf(dialog.Rtf);
                 draft.Rtf = dialog.Rtf;
+                if (inlineRecognizedSource) { inlineRecognizedBackground = dialog.BackgroundColor; draft.BackColor = dialog.BackgroundColor; }
                 inlineTextWidth = dialog.BoxWidth;
                 textFontSize = dialog.TextSize;
                 InlineTextChanged();

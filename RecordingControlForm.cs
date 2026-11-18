@@ -16,6 +16,7 @@ namespace SnipStudio
 
         public event EventHandler StopRequested;
         public bool CaptureExclusionSupported { get; private set; }
+        public string RecordingAreaNotice { get; set; }
         public bool AllowClose { get { return allowClose; } set { allowClose = value; } }
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -110,7 +111,7 @@ namespace SnipStudio
             detail.Margin = new Padding(1, 9, 0, 0);
             detail.ForeColor = StudioTheme.Muted;
             detail.Text = "Recording your selected area. Stop saves the video.";
-            detail.AutoEllipsis = true;
+            detail.AutoEllipsis = false;
             detail.AccessibleName = "Recording status";
             layout.Controls.Add(detail, 0, 2);
             layout.SetColumnSpan(detail, 2);
@@ -157,7 +158,11 @@ namespace SnipStudio
             elapsed.Text = duration.TotalHours >= 1 ?
                 ((int)duration.TotalHours).ToString("00") + ":" + duration.Minutes.ToString("00") + ":" + duration.Seconds.ToString("00") :
                 ((int)duration.TotalMinutes).ToString("00") + ":" + duration.Seconds.ToString("00");
-            if (!stopRequested && !String.IsNullOrEmpty(message)) detail.Text = message;
+            if (!stopRequested && !String.IsNullOrEmpty(message))
+            {
+                detail.Text = !CaptureExclusionSupported ? "Keep this panel outside your recorded area." :
+                    !String.IsNullOrEmpty(RecordingAreaNotice) ? RecordingAreaNotice : message;
+            }
         }
 
         public void SetStopping(string message)

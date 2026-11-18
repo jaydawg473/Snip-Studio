@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Runtime.InteropServices;
 
 namespace SnipStudio
 {
@@ -510,7 +511,16 @@ namespace SnipStudio
 
         public int ReplaceImageRichText(Rectangle eraseBounds, string plain, string rtf, Color foreground, Color background, float fontSize, float layoutWidth)
         {
+            RequireImage();
+            Rectangle clipped = ClipPixelRectangle(eraseBounds);
+            return ReplaceImageRichTextAt(eraseBounds, plain, rtf, foreground, background, fontSize, layoutWidth, clipped.Location);
+        }
+
+        internal int ReplaceImageRichTextAt(Rectangle eraseBounds, string plain, string rtf, Color foreground, Color background,
+            float fontSize, float layoutWidth, PointF textLocation)
+        {
             RequireImage(); ValidatePositive(fontSize, "fontSize"); ValidateTextWidth(layoutWidth);
+            ValidatePoint(textLocation);
             Rectangle clipped = ClipPixelRectangle(eraseBounds);
             if (clipped.IsEmpty) throw new ArgumentException("The text region must overlap the image.", "eraseBounds");
             List<Annotation> annotations = new List<Annotation>(Current.Annotations);
@@ -518,7 +528,7 @@ namespace SnipStudio
             if (!String.IsNullOrWhiteSpace(plain))
             {
                 addedIndex = annotations.Count;
-                annotations.Add(new TextAnnotation(plain, rtf, clipped.Location, foreground, fontSize, layoutWidth, "Segoe UI", FontStyle.Regular));
+                annotations.Add(new TextAnnotation(plain, rtf, textLocation, foreground, fontSize, layoutWidth, "Segoe UI", FontStyle.Regular));
             }
             Bitmap patched = CopyImage(Current.Frame.Bitmap);
             try
@@ -555,17 +565,34 @@ namespace SnipStudio
                 Rectangle clipped = ClipPixelRectangle(replacement.Bounds);
                 if (clipped.IsEmpty || clipped != replacement.Bounds || String.IsNullOrWhiteSpace(replacement.PlainText))
                     throw new ArgumentException("Every replacement must contain text and stay inside its source image.", "replacements");
+                RectangleF layout = replacement.LayoutBounds;
+                ValidatePoint(layout.Location);
+                ValidatePoint(new PointF(layout.Right, layout.Bottom));
+                ValidateTextWidth(layout.Width);
+                ValidateTextHeight(layout.Height);
+                if (layout.Width <= 0 || layout.Height <= 0 || layout.Left < clipped.Left || layout.Top < clipped.Top ||
+                    layout.Bottom > clipped.Bottom || layout.Right > ImageSize.Width)
+                    throw new ArgumentException("Translation layout may only extend right within its source image and line band.", "replacements");
                 // Construct and validate every immutable annotation first. RTF
                 // failures cannot leave a half-translated document or extra Undo.
                 TextAnnotation annotation = new TextAnnotation(replacement.PlainText, replacement.Rtf, replacement.TextLocation,
                     replacement.Foreground, replacement.FontSize, replacement.LayoutWidth, "Segoe UI", FontStyle.Regular);
                 RectangleF ink = annotation.InkBounds;
-                if (ink.IsEmpty || ink.Left < clipped.Left || ink.Top < clipped.Top || ink.Right > clipped.Right || ink.Bottom > clipped.Bottom)
-                    throw new ArgumentException("The complete translated text must fit inside its original source region.", "replacements");
+                if (ink.IsEmpty || ink.Left < layout.Left || ink.Top < layout.Top || ink.Right > layout.Right || ink.Bottom > layout.Bottom)
+                    throw new ArgumentException("The complete translated text must fit inside its verified layout region.", "replacements");
+                ValidateTranslationExtension(replacement, clipped, ink, replacements);
                 text.Add(annotation);
                 masks.Add(clipped);
                 backgrounds.Add(Color.FromArgb(255, replacement.Background));
             }
+            for (int first = 0; first < text.Count; first++)
+                for (int second = first + 1; second < text.Count; second++)
+                {
+                    RectangleF a = ((TextAnnotation)text[first]).InkBounds;
+                    RectangleF b = ((TextAnnotation)text[second]).InkBounds;
+                    if ((a.Right > masks[first].Right || b.Right > masks[second].Right) && a.IntersectsWith(b))
+                        throw new ArgumentException("Expanded translated lines would overlap. Nothing was replaced.", "replacements");
+                }
             if (!Object.ReferenceEquals(expectedImageIdentity, BaseIdentity) || expectedRevision != Revision) return -1;
 
             // Sampled flat-color masks cover only source raster text. The
@@ -578,6 +605,39 @@ namespace SnipStudio
             Current.Frame.AddReference();
             Commit(new DocumentState(Current.Frame, annotations, ++nextRevision));
             return annotations.Count - 1;
+        }
+
+        private void ValidateTranslationExtension(RecognizedTextReplacement replacement, Rectangle mask,
+            RectangleF ink, IList<RecognizedTextReplacement> replacements)
+        {
+            if (ink.Right <= mask.Right) return;
+            // Validate visible extension independently of the canvas planner.
+            // One extra blank column protects fractional raster placement.
+            int right = Math.Min(ImageSize.Width, (int)Math.Ceiling(ink.Right) + 1);
+            Rectangle extension = Rectangle.FromLTRB(mask.Right, mask.Top, right, mask.Bottom);
+            if ((long)extension.Width * extension.Height > 2 * 1024 * 1024)
+                throw new ArgumentException("Translation extension exceeds the checked pixel budget.", "replacements");
+            foreach (Annotation existing in Current.Annotations)
+                if (existing.Bounds.IntersectsWith(extension))
+                    throw new ArgumentException("Translation extension would overlap an existing annotation.", "replacements");
+            foreach (RecognizedTextReplacement other in replacements)
+                if (other != null && !Object.ReferenceEquals(other, replacement) && other.Bounds.IntersectsWith(extension))
+                    throw new ArgumentException("Translation extension would overlap another source line.", "replacements");
+            Bitmap source = Current.Frame.Bitmap;
+            Color background = replacement.Background;
+            BitmapData pixels = source.LockBits(extension, ImageLockMode.ReadOnly, PixelFormat.Format32bppArgb);
+            try
+            {
+                byte[] row = new byte[checked(extension.Width * 4)];
+                for (int y = 0; y < extension.Height; y++)
+                {
+                    Marshal.Copy(IntPtr.Add(pixels.Scan0, checked(y * pixels.Stride)), row, 0, row.Length);
+                    for (int x = 0; x < row.Length; x += 4)
+                        if (row[x] != background.B || row[x + 1] != background.G || row[x + 2] != background.R || row[x + 3] != 255)
+                            throw new ArgumentException("Translation extension contains source pixels that must be preserved.", "replacements");
+                }
+            }
+            finally { source.UnlockBits(pixels); }
         }
 
         public bool EraseImageRegions(IEnumerable<Rectangle> regions, Color background)

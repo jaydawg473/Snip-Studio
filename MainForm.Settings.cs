@@ -317,6 +317,7 @@ namespace SnipStudio
         private void OnDocumentEdited()
         {
             if (layoutTestMode || !canvas.HasImage) return;
+            TrackInitialImageView();
             if (lastDocumentRevision == canvas.DocumentRevision) return;
             lastDocumentRevision = canvas.DocumentRevision;
             if (lastSnipSize != canvas.ImageSize)
@@ -334,20 +335,54 @@ namespace SnipStudio
             }
         }
 
+        private int MinimumImageWorkspaceHeight()
+        {
+            if (!canvas.HasImage) return Ui(96);
+            // Keep small captures at their real pixel size when the monitor has
+            // room. The fit margin belongs inside the canvas, and the workspace
+            // has its own padding outside it. Large captures may still fit down.
+            int imageHeight = Math.Min(canvas.ImageSize.Height, Ui(360));
+            return Math.Max(Ui(64), imageHeight + canvas.FitPadding.Height + workspace.Padding.Vertical);
+        }
+
         private void ResizeForSnip()
         {
             if (!preferences.ResizeToSnip || !canvas.HasImage || WindowState == FormWindowState.Maximized || IsFullScreenEditor) return;
             Rectangle work = EditorWorkingArea();
-            int maximumWidth = Math.Max(640, work.Width - 48);
-            int maximumHeight = Math.Max(400, work.Height - 48);
+            if (work.Width < 1 || work.Height < 1) return;
+            // Prefer native source pixels over an arbitrary desktop gap. Only
+            // scale down when image plus measured chrome cannot fit the monitor.
+            int maximumWidth = work.Width;
+            int maximumHeight = work.Height;
+            // Clear obsolete native scroll ranges before measuring the usable
+            // client area, so scrollbar thickness is not mistaken for chrome.
+            canvas.FitToWindow();
             LayoutChrome();
-            int chromeHeight = CompactChromeHeight + (Height - ClientSize.Height) + Ui(24);
-            double fit = Math.Min(1.0, Math.Min((double)(maximumWidth - 64) / canvas.ImageSize.Width,
-                (double)Math.Max(100, maximumHeight - chromeHeight) / canvas.ImageSize.Height));
-            int minimumHeight = Math.Min(work.Height, Math.Max(Math.Min(Ui(380), maximumHeight), MinimumSize.Height));
+            // LayoutChrome has measured the actual toolbars, footer and useful
+            // image area. Small captures need no unrelated window-height floor.
+            int minimumHeight = Math.Min(work.Height, MinimumSize.Height);
             MinimumSize = new Size(Math.Min(Ui(780), maximumWidth), minimumHeight);
-            Size = new Size(Math.Max(MinimumSize.Width, Math.Min(maximumWidth, (int)Math.Ceiling(canvas.ImageSize.Width * fit) + 64)),
-                Math.Max(MinimumSize.Height, Math.Min(maximumHeight, (int)Math.Ceiling(canvas.ImageSize.Height * fit) + chromeHeight)));
+            canvas.FitToWindow();
+            // Width changes can wrap the status line and change real chrome
+            // height. Remeasure after layout instead of guessing with +24/+64.
+            for (int pass = 0; pass < 3; pass++)
+            {
+                LayoutChrome();
+                canvas.FitToWindow();
+                int overheadWidth = Math.Max(0, Width - canvas.ClientSize.Width);
+                int overheadHeight = Math.Max(0, Height - canvas.ClientSize.Height);
+                int allowedWidth = Math.Min(work.Width, Math.Max(maximumWidth, MinimumSize.Width));
+                int allowedHeight = Math.Min(work.Height, Math.Max(maximumHeight, MinimumSize.Height));
+                Size padding = canvas.FitPadding;
+                double fit = Math.Min(1.0, Math.Min(
+                    Math.Max(1, allowedWidth - overheadWidth - padding.Width) / (double)canvas.ImageSize.Width,
+                    Math.Max(1, allowedHeight - overheadHeight - padding.Height) / (double)canvas.ImageSize.Height));
+                Size desired = new Size(
+                    Math.Min(allowedWidth, Math.Max(MinimumSize.Width, (int)Math.Ceiling(canvas.ImageSize.Width * fit) + padding.Width + overheadWidth)),
+                    Math.Min(allowedHeight, Math.Max(MinimumSize.Height, (int)Math.Ceiling(canvas.ImageSize.Height * fit) + padding.Height + overheadHeight)));
+                if (Size == desired) break;
+                Size = desired;
+            }
             Location = new Point(Math.Max(work.Left, Math.Min(Left, work.Right - Width)), Math.Max(work.Top, Math.Min(Top, work.Bottom - Height)));
             // The snip's preferred image width must not reintroduce toolbar
             // wrapping after the initial chrome measurement.

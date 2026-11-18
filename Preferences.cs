@@ -168,6 +168,13 @@ namespace SnipStudio
 
         public void Save()
         {
+            SaveToPath(FileName);
+        }
+
+        // Explicit-path boundary for synthetic persistence checks. The production
+        // path remains fixed; there is no process-wide test path override.
+        internal void SaveToPath(string path)
+        {
             lock (fileGate)
             {
                 // A window or Settings draft can predate an asynchronous check.
@@ -177,17 +184,25 @@ namespace SnipStudio
                 if (checkedUtc > nowUtc) checkedUtc = DateTime.MinValue;
                 if (latestUpdateCheckUtc > nowUtc) latestUpdateCheckUtc = DateTime.MinValue;
                 if (latestUpdateCheckUtc > checkedUtc) checkedUtc = latestUpdateCheckUtc;
-                DateTime diskUtc = ReadUpdateCheckUtc(FileName);
+                DateTime diskUtc = ReadUpdateCheckUtc(path);
                 if (diskUtc > nowUtc) diskUtc = DateTime.MinValue;
                 if (diskUtc > checkedUtc) checkedUtc = diskUtc;
                 LastUpdateCheckUtc = checkedUtc == DateTime.MinValue ? "" : FormatUpdateCheckUtc(checkedUtc);
-                SaveCore();
+                // Only an explicit capture-type choice may replace the saved
+                // type. Older editors and Settings drafts must retain it.
+                int savedMode;
+                if (TryReadCaptureMode(path, out savedMode)) CaptureModeIndex = savedMode;
+                SaveCore(path);
             }
         }
 
         private void SaveCore()
         {
-            string path = FileName;
+            SaveCore(FileName);
+        }
+
+        private void SaveCore(string path)
+        {
             string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
@@ -198,6 +213,54 @@ namespace SnipStudio
                 else File.Move(temporary, path);
             }
             finally { if (File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
+        }
+
+        private static bool TryReadCaptureMode(string path, out int mode)
+        {
+            mode = 0;
+            try
+            {
+                XmlNode node = ReadPreferencesDocument(path).DocumentElement.SelectSingleNode("CaptureModeIndex");
+                return node != null && Int32.TryParse(node.InnerText, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out mode) && mode >= 0 && mode <= 5;
+            }
+            catch (FileNotFoundException) { return false; }
+            catch (DirectoryNotFoundException) { return false; }
+        }
+
+        internal static void RecordCaptureModeChoice(int mode)
+        {
+            RecordCaptureModeChoiceAtPath(FileName, mode);
+        }
+
+        internal static void RecordCaptureModeChoiceAtPath(string path, int mode)
+        {
+            if (mode < 0 || mode > 5) throw new ArgumentOutOfRangeException("mode");
+            lock (fileGate)
+            {
+                if (!File.Exists(path))
+                {
+                    new Preferences { CaptureModeIndex = mode }.SaveCore(path);
+                    return;
+                }
+                // Preserve every other saved/unknown compatible setting, rather
+                // than serializing whichever editor happened to receive input.
+                XmlDocument document = ReadPreferencesDocument(path);
+                XmlElement node = document.DocumentElement.SelectSingleNode("CaptureModeIndex") as XmlElement;
+                if (node == null)
+                {
+                    node = document.CreateElement("CaptureModeIndex");
+                    document.DocumentElement.AppendChild(node);
+                }
+                node.InnerText = mode.ToString(CultureInfo.InvariantCulture);
+                string temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    using (XmlWriter writer = XmlWriter.Create(temporary, new XmlWriterSettings { Indent = true })) document.Save(writer);
+                    File.Replace(temporary, path, null);
+                }
+                finally { if (File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
+            }
         }
 
         internal DateTime GetLastUpdateCheckUtc() { return ParseUpdateCheckUtc(LastUpdateCheckUtc); }

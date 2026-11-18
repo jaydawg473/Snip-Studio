@@ -52,6 +52,7 @@ namespace SnipStudio
         private bool disposed, starting;
         private long stoppedAt = -1;
         private Size outputSize;
+        private Rectangle sourceRegion;
         private int fps = 15;
         private Exception lastError;
         private AudioCaptureMixer activeAudio;
@@ -59,6 +60,9 @@ namespace SnipStudio
         public bool IsRecording { get { return recording; } }
         public TimeSpan Duration { get { lock (gate) return stoppedAt >= 0 ? TimeSpan.FromTicks(stoppedAt) : activeAudio == null ? clock.Elapsed : activeAudio.Duration; } }
         public Size OutputSize { get { return outputSize; } }
+        // The indicator uses the exact physical rectangle accepted by the worker,
+        // including clipping at the desktop edge. It never guesses from output size.
+        public Rectangle SourceRegion { get { lock (gate) return sourceRegion; } }
         public int FramesPerSecond { get { return fps; } }
         public Exception Error { get { return lastError; } }
         public string DestinationPath { get; private set; }
@@ -104,6 +108,7 @@ namespace SnipStudio
                 clock = new Stopwatch();
                 fps = snapshot.FramesPerSecond;
                 outputSize = CalculateOutputSize(region.Size);
+                sourceRegion = region;
                 DestinationPath = path;
                 RecoveryPath = null;
                 finished = new TaskCompletionSource<bool>();

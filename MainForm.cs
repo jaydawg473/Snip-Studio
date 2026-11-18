@@ -19,7 +19,7 @@ namespace SnipStudio
         private readonly ComboBox width = new StudioComboBox();
         private readonly Label status = new Label();
         private readonly Label dimensions = new Label();
-        private readonly Label zoomLabel = new Label();
+        private readonly ZoomPercentBox zoomLabel = new ZoomPercentBox();
         private readonly Label toolGuidance = new Label();
         private readonly Label recognitionStatus = new Label();
         private readonly CheckBox snapToText = new CheckBox();
@@ -36,6 +36,9 @@ namespace SnipStudio
         private bool closeDecisionInProgress;
         private bool closeEmptyShortcutCapture;
         private bool captureOpenSnipsRequested;
+        private CaptureFailureNotice captureFailureNotice;
+        private object captureWarningImage;
+        private string captureWarningText;
         private bool highlighterColor;
         private bool selectingCanvasTool;
         private readonly string initialPath;
@@ -72,6 +75,20 @@ namespace SnipStudio
             canvas.CopySelectedRecognizedTextRequested += delegate { CopyRecognizedText(false); };
             Resize += delegate { UpdateResponsiveChrome(); };
             mode.SelectedIndex = Math.Max(0, Math.Min(mode.Items.Count - 1, preferences.CaptureModeIndex));
+            mode.SelectionChangeCommitted += delegate
+            {
+                if (layoutTestMode || mode.SelectedIndex < 0) return;
+                try
+                {
+                    Preferences.RecordCaptureModeChoice(mode.SelectedIndex);
+                    preferences.CaptureModeIndex = mode.SelectedIndex;
+                    Program.RememberShortcutPreferences(preferences);
+                }
+                catch (Exception)
+                {
+                    SetStatus("Capture type changed for this window, but it could not be remembered. Check that your settings folder is writable.");
+                }
+            };
             int initialDelay = !layoutTestMode && sessionCaptureDelay.HasValue ? sessionCaptureDelay.Value : preferences.RememberCaptureDelay ? preferences.DelaySeconds : 0;
             delay.SelectedIndex = initialDelay == 3 ? 1 : initialDelay == 5 ? 2 : initialDelay == 10 ? 3 : 0;
             int stroke = Array.IndexOf(new int[] { 2, 4, 8, 12, 20 }, preferences.StrokeWidth);
@@ -182,6 +199,7 @@ namespace SnipStudio
 
         private void SelectTool(EditorTool tool)
         {
+            CancelInitialImageFitForToolIntent();
             canvas.TextActionsMode = false;
             selectingCanvasTool = true;
             try { canvas.Tool = tool; }
@@ -209,12 +227,13 @@ namespace SnipStudio
             UpdateColorButton();
             UpdateAnnotationContextControls();
             RefreshToolOptionsContents();
+            OpenSelectedToolOptions(false);
             UpdateContextHelp();
             LayoutChrome();
             if (canvas.HasImage)
             {
                 if (tool == EditorTool.Crop) SetStatus("Crop: drag an edge or corner, then Apply crop or Enter. Escape cancels.");
-                else if (tool == EditorTool.Text) SetStatus("Text: drag a box, then type. Click for a quick default box. Ctrl+Enter finishes; Advanced text opens full formatting.");
+                else if (tool == EditorTool.Text) SetStatus("Text: click recognized words to edit, or drag a new text box. Ctrl+Enter finishes; Advanced text opens formatting.");
                 else if (tool == EditorTool.Emoji) SetStatus(canvas.ActiveEmojiName + ": click to place. Drag a corner to resize; the top handle rotates. Emoji stays active.");
                 else if (IsShapeToolKind(tool)) SetStatus("Shapes: drag to draw a " + tool.ToString().ToLowerInvariant() + ". Fill and Outline control its appearance.");
                 else if (tool == EditorTool.Eraser) SetStatus("Eraser: click or drag over an annotation to remove it.");
@@ -231,13 +250,39 @@ namespace SnipStudio
             get { return canvas.Tool == EditorTool.RemoveArea || (canvas.Tool == EditorTool.Select && canvas.HasSelectedRemovalArea); }
         }
 
+        private Color CurrentDisplayedInkColor
+        {
+            get { bool mixed; return ReadDisplayedInkColor(out mixed); }
+        }
+
+        private Color ReadDisplayedInkColor(out bool mixed)
+        {
+            mixed = false;
+            if (IsSourceRemovalContext) return canvas.SourceRemovalFillColor;
+            Color color;
+            if (IsInlineTextContext && canvas.TryReadTextColor(out color, out mixed)) return color;
+            return canvas.InkColor;
+        }
+
         private void UpdateColorButton()
         {
             if (colorButton == null) return;
             StudioButton swatch = colorButton as StudioButton;
-            Color current = IsSourceRemovalContext ? canvas.SourceRemovalFillColor : canvas.InkColor;
-            if (swatch != null) { swatch.SwatchColor = Color.FromArgb(255, current); swatch.Invalidate(); }
-            tips.SetToolTip(colorButton, IsSourceRemovalContext ? "Choose the background fill for the selected removal area. Current color: " + current.Name : "Choose ink color. Current color: " + current.Name);
+            bool mixed;
+            Color current = ReadDisplayedInkColor(out mixed);
+            if (swatch != null)
+            {
+                Color opaque = Color.FromArgb(255, current);
+                Color previous = swatch.SwatchColor;
+                if (previous.ToArgb() != opaque.ToArgb()) { swatch.SwatchColor = opaque; swatch.Invalidate(); }
+            }
+            string description = IsSourceRemovalContext ? "Choose the background fill for the selected removal area. Current color: " + current.Name :
+                mixed ? "The selected text contains multiple colors. Choose a color to apply to the selection." :
+                IsInlineTextContext && canvas.InlineTextEditing ? "Choose text color. Current text color: " + current.Name :
+                IsInlineTextContext && canvas.HasSelectedTextAnnotation ? "Choose text color. First text color: " + current.Name :
+                "Choose ink color. Current color: " + current.Name;
+            tips.SetToolTip(colorButton, description);
+            colorButton.AccessibleDescription = description;
         }
 
         private void UpdateContextHelp()
@@ -256,7 +301,7 @@ namespace SnipStudio
                 case EditorTool.Rectangle: toolGuidance.Text = "Draw a rectangle. Fill and Outline set its appearance; Move repositions it."; break;
                 case EditorTool.Ellipse: toolGuidance.Text = "Draw an ellipse. Fill and Outline set its appearance; Move repositions it."; break;
                 case EditorTool.Line: toolGuidance.Text = "Draw a line. Outline controls its color, opacity and size."; break;
-                case EditorTool.Text: toolGuidance.Text = "Drag a text box, then type. Click for a quick default box. Ctrl+Enter finishes; Advanced text opens full formatting."; break;
+                case EditorTool.Text: toolGuidance.Text = "Click recognized text to edit it, or drag a blank area for a new text box. Ctrl+Enter finishes; Advanced text opens formatting."; break;
                 case EditorTool.Emoji: toolGuidance.Text = "Place a colored emoji sticker. Drag a corner to resize it; drag the top handle to rotate. Emoji stays active after placement."; break;
                 case EditorTool.Eraser: toolGuidance.Text = "Click or drag across an annotation to remove it. Captured pixels stay intact."; break;
                 case EditorTool.Crop: toolGuidance.Text = "Drag the snip's edges or corners, then Apply crop or Enter. Escape cancels; Undo restores an applied crop."; break;
@@ -289,7 +334,7 @@ namespace SnipStudio
             }
             List<Color> recent = new List<Color>();
             if (preferences.RecentInkColors != null) foreach (int argb in preferences.RecentInkColors) recent.Add(Color.FromArgb(argb));
-            using (ColorPaletteDialog picker = new ColorPaletteDialog(canvas.InkColor, recent))
+            using (ColorPaletteDialog picker = new ColorPaletteDialog(CurrentDisplayedInkColor, recent))
             {
                 if (!anchor.IsEmpty)
                 {
@@ -328,6 +373,7 @@ namespace SnipStudio
             if (IsCaptureSavePending) { SetStatus("Finishing the current capture. Please wait briefly."); return; }
             if (!includeOpenSnips && recordingModeSelected) SetCaptureKind(false);
             if (!preferences.MultipleWindows && !ConfirmReplace("starting a new capture")) return;
+            CloseCaptureFailureNotice();
             capturePending = true;
             // The taskbar timer is a one-shot override, independent of the saved
             // timer and its Remember setting. Do not assign the delay control.
@@ -338,6 +384,7 @@ namespace SnipStudio
             FormWindowState previousState = WindowState == FormWindowState.Minimized ? FormWindowState.Normal : WindowState;
             MainForm capturedWindow = null;
             bool captureFailed = false;
+            Exception captureFailure = null;
             CaptureVisibilityScope visibility = null;
             try
             {
@@ -349,7 +396,8 @@ namespace SnipStudio
                 }
                 await visibility.WaitUntilHiddenAsync();
                 if (closing || IsDisposed) return;
-                using (Bitmap image = CaptureService.Capture(captureMode))
+                string taskbarWarning;
+                using (Bitmap image = CaptureService.CaptureWithWarnings(captureMode, out taskbarWarning))
                 {
                     if (image != null)
                     {
@@ -363,6 +411,7 @@ namespace SnipStudio
                             capturedWindow.canvas.SetImage(image);
                             Program.OpenWindow(capturedWindow);
                             capturedWindow.BeginCapturePolicies(image);
+                            capturedWindow.SetCaptureWarning(taskbarWarning);
                             capturedWindow.SetStatus(capturedWindow.capturePolicyMessage ?? "Captured. Annotate your snip, then Copy or Save.");
                         }
                         else
@@ -372,13 +421,14 @@ namespace SnipStudio
                             canvas.SetImage(image);
                             Show();
                             BeginCapturePolicies(image);
+                            SetCaptureWarning(taskbarWarning);
                             SetStatus(capturePolicyMessage ?? "Captured. Annotate your snip, then Copy or Save.");
                         }
                     }
                     else SetStatus("Capture canceled. Your previous snip is unchanged.");
                 }
             }
-            catch (Exception ex) { captureFailed = true; Show(); Activate(); ShowFailure("Capture could not finish", ex); }
+            catch (Exception ex) { captureFailed = true; captureFailure = ex; }
             finally
             {
                 Exception restoreFailure = null;
@@ -402,7 +452,8 @@ namespace SnipStudio
                     newButton.Enabled = true;
                     UpdateDocumentState();
                     if (capturedWindow != null && !capturedWindow.IsDisposed) capturedWindow.Activate();
-                    if (restoreFailure != null) ShowFailure("The capture finished, but some Snip Studio windows could not be restored", restoreFailure);
+                    if (captureFailure != null || restoreFailure != null)
+                        ReportCaptureFailure(captureFailure, restoreFailure);
                     }
                 }
             }
@@ -564,7 +615,7 @@ namespace SnipStudio
             UpdateTextActionControls();
             LayoutChrome();
             canvas.Focus();
-            SetStatus(canvas.TextActionsMode ? "Select recognized words on the image, then copy the selection or all text." : "Text actions closed.");
+            SetStatus(canvas.TextActionsMode ? "Click recognized text to edit in place. Drag across words to select and copy." : "Text actions closed.");
         }
 
         private void PrintImage()
@@ -585,8 +636,47 @@ namespace SnipStudio
 
         private void SetStatus(string message)
         {
+            if (!String.IsNullOrEmpty(captureWarningText) && Object.ReferenceEquals(captureWarningImage, canvas.ImageIdentity) &&
+                (message ?? "").IndexOf(captureWarningText, StringComparison.Ordinal) < 0)
+                message = (message ?? "") + " " + captureWarningText;
             status.Text = message;
             tips.SetToolTip(status, message + (hotkeyRegistered ? "\nCapture shortcut: Ctrl+Alt+S" : "\nGlobal shortcut unavailable. Use New or Ctrl+N."));
+        }
+
+        private void SetCaptureWarning(string warning)
+        {
+            captureWarningImage = canvas.ImageIdentity;
+            captureWarningText = String.IsNullOrWhiteSpace(warning) ? null : "Warning: a taskbar may be visible in this snip.";
+        }
+
+        private void CloseCaptureFailureNotice()
+        {
+            CaptureFailureNotice notice = captureFailureNotice;
+            captureFailureNotice = null;
+            if (notice != null && !notice.IsDisposed) { notice.Close(); notice.Dispose(); }
+        }
+
+        private void ReportCaptureFailure(Exception failure, Exception restoreFailure)
+        {
+            // Called only after visibility scopes and capturePending are released.
+            // A message box here disables the other editors on this UI thread.
+            CloseCaptureFailureNotice();
+            string title = failure == null ? "Capture restore warning" : "Capture could not finish";
+            string details = failure == null ? "" : failure.Message;
+            if (restoreFailure != null) details += (details.Length == 0 ? "" : Environment.NewLine + Environment.NewLine) + restoreFailure.Message;
+            SetStatus(title + ". Your previous snip is kept where possible. You can try New again.");
+            CaptureFailureNotice notice = new CaptureFailureNotice(title, details);
+            Rectangle work = EditorWorkingArea();
+            Rectangle fitted = EditorClosePrompt.FitToWorkingArea(work, notice.Size);
+            notice.StartPosition = FormStartPosition.Manual;
+            notice.MinimumSize = new Size(Math.Min(440, fitted.Width), Math.Min(220, fitted.Height));
+            notice.Bounds = new Rectangle(
+                Math.Max(work.Left, Math.Min(Left + (Width - fitted.Width) / 2, work.Right - fitted.Width)),
+                Math.Max(work.Top, Math.Min(Top + (Height - fitted.Height) / 2, work.Bottom - fitted.Height)),
+                fitted.Width, fitted.Height);
+            captureFailureNotice = notice;
+            notice.FormClosed += delegate { if (Object.ReferenceEquals(captureFailureNotice, notice)) captureFailureNotice = null; };
+            if (!layoutTestMode) notice.Show(this);
         }
 
         private void UpdateDocumentState()
@@ -613,6 +703,7 @@ namespace SnipStudio
                 StudioButton button = item.Value as StudioButton;
                 if (button != null) button.Selected = item.Key == canvas.Tool;
             }
+            ObserveToolOptionsDocumentReadiness();
         }
 
         private void UpdateDocumentTitle()
@@ -621,7 +712,7 @@ namespace SnipStudio
                 Text = (canvas.HasImage && canvas.IsDirty ? "• " : "") + "Snip Studio" + (String.IsNullOrEmpty(currentPath) ? "" : " — " + Path.GetFileName(currentPath));
         }
 
-        private void UpdateZoomLabel() { zoomLabel.Text = canvas.HasImage ? (canvas.Zoom * 100).ToString("0.0", System.Globalization.CultureInfo.CurrentCulture) + "%" : "—"; }
+        private void UpdateZoomLabel() { if (canvas.HasImage) zoomLabel.UpdateViewPercent(canvas.Zoom * 100); }
 
         private void UpdateResponsiveChrome()
         {
@@ -709,7 +800,7 @@ namespace SnipStudio
                 "COPY TEXT\r\nCopy text recognizes the current snip and adds a selectable text overlay directly on the image. Drag over words to select them, then copy the selection or all recognized text. Right-click selected words for Copy selection; the selection stays in place. Recognition can make mistakes, especially with small text, unusual fonts, or low contrast. Check important values before using them. Screenshots are not uploaded for recognition.",
                 "TRANSLATE TEXT\r\nIn Text actions, choose Translate to translate selected words or all recognized text inside Snip Studio. The complete installer includes a free, open-source offline engine and English, German, Spanish, and French language models. Choose the original language and target language, then Translate. No server, paid account, or internet connection is needed for the included languages. Copy translation keeps the screenshot unchanged. Replace text in snip replaces each original recognized line in its existing position, using estimated source typography and a sampled solid background. Review the result; one Undo restores all original lines. Photos and gradients can show patches. Keep each translated line paired with its original line when editing the result. Other pairs among these languages can translate through English. Check the result before using it. An optional LibreTranslate server remains available for advanced use; only that mode sends text to the server you choose.",
                 "EDIT RECOGNIZED TEXT\r\nSelect words in one recognized line, then Edit line or F2. The words start selected so you can delete or replace them. Source font family, style, and size are estimated from the pixels; review and adjust the formatting. Applying a line edit covers the old screenshot line with the chosen solid background color. Delete selection on screenshot text covers only the selected words, leaving gaps and preserving surrounding text. Editable notes keep their formatting and reflow after deletion. Undo restores the original; ambiguous overlapping text is left unchanged.",
-                "RECORD SCREEN\r\nChoose Video mode. Use the audio button to choose microphone and system-audio sources, then Record. Choose the recording's save location when prompted, drag over the screen area to record, and prepare during the three-second countdown. Your current screenshot stays open. The recording panel shows elapsed time; Stop saves and finalizes the video. Closing the panel also stops and saves.\r\n\r\nVideos use MP4 at 15 frames per second, scaled proportionally to fit up to 1920 × 1080 pixels. Both audio sources are enabled initially. If a requested audio source cannot be used, the app reports the problem; it does not silently switch to a recording without that source. Keep the recording panel outside the selected area if Windows cannot exclude it from capture.",
+                "RECORD SCREEN\r\nChoose Video mode. Use the audio button to choose microphone and system-audio sources, then Record. Choose Draw area to drag a custom rectangle, or Window to click an application's visible window. Choose the recording's save location when prompted, select the area, and prepare during the three-second countdown. Window selection records a fixed screen area; it does not follow a window that moves or resizes. A red-and-white outline marks the recorded area until recording stops. It sits outside the video; at screen edges, an inset is shown only when Windows confirms capture exclusion. Your current screenshot stays open. The recording panel shows elapsed time; Stop saves and finalizes the video. Closing the panel also stops and saves.\r\n\r\nVideos use MP4 at 15 frames per second, scaled proportionally to fit up to 1920 × 1080 pixels. Both audio sources are enabled initially. If a requested audio source cannot be used, the app reports the problem; it does not silently switch to a recording without that source. Keep the recording panel outside the selected area if Windows cannot exclude it from capture.",
                 "PRINT\r\nPrint opens a preview of the current snip and annotations. Review the printer and page options before sending the image to print.",
                 "PDF AND SMALLER RECORDINGS\r\nMore > Save as PDF exports a lossless image of the finished snip. This PDF is an image document, not searchable or editable text. In recording review, Make smaller offers 720p, 480p, and target-size options for a separate MP4 copy. The original stays intact. Target sizes are estimates; check the actual result before attaching it to email.",
                 "TASKBARS AND TOOLTIPS\r\nSettings > Hide taskbars during capture applies to screenshots and video and defaults to On. Keep main monitor taskbar visible also defaults to On. Hidden taskbars are restored after the screenshot snapshot or when recording ends. Show tooltips is on by default; turn it off in Settings for fewer hints.",
@@ -723,6 +814,8 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
+            if (zoomLabel.ContainsFocus && ZoomPercentBox.IsEditingShortcut(keyData))
+                return base.ProcessCmdKey(ref msg, keyData);
             if (canvas.InlineTextEditing && canvas.ContainsFocus && IsInlineTextInputCommand(keyData))
                 return base.ProcessCmdKey(ref msg, keyData);
             if (keyData == Keys.Escape && CloseShapePopups()) return true;
@@ -823,7 +916,6 @@ namespace SnipStudio
             catch { Program.CancelApplicationExit(); throw; }
             finally { closeDecisionInProgress = false; }
             closing = true;
-            preferences.CaptureModeIndex = mode.SelectedIndex;
             if (preferences.RememberCaptureDelay) preferences.DelaySeconds = sessionCaptureDelay ?? new int[] { 0, 3, 5, 10 }[Math.Max(0, delay.SelectedIndex)];
             preferences.StrokeWidth = (int)canvas.StrokeWidth;
             if (!highlighterColor) preferences.InkArgb = canvas.InkColor.ToArgb();
@@ -835,6 +927,7 @@ namespace SnipStudio
         {
             if (disposing)
             {
+                CloseCaptureFailureNotice();
                 CancelScrollingCaptureOnDispose();
                 DisposeSettingsIntegration();
                 DisposeUpdateIntegration();

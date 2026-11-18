@@ -53,30 +53,55 @@ namespace SnipStudio
         {
             get
             {
-                int index = textSelection.SelectedLineIndex;
-                return !matchingSourceText && textActionsMode && HasImage && recognizedText != null && recognizedText.Available &&
-                    index >= 0 && index < recognizedText.Lines.Count &&
-                    (!recognizedText.TextAngle.HasValue || Math.Abs(recognizedText.TextAngle.Value) <= 2);
+                TextRecognitionResult result = RecognizedEditResult;
+                TextOverlaySelection selection = RecognizedEditSelection;
+                int index = selection == null ? -1 : selection.SelectedLineIndex;
+                return !matchingSourceText && (textActionsMode || (tool == EditorTool.Text && RecognizedTextSessionActive)) && HasImage && result != null && result.Available &&
+                    index >= 0 && index < result.Lines.Count &&
+                    (!result.TextAngle.HasValue || Math.Abs(result.TextAngle.Value) <= 2);
             }
         }
-        public bool CanDeleteRecognizedText { get { return CanEditRecognizedLine; } }
+        public bool CanDeleteRecognizedText { get { return textActionsMode && HasSelectedRecognizedText && CanEditRecognizedLine; } }
 
-        public async void EditRecognizedLine()
+        public void EditRecognizedLine() { EditRecognizedLineAt(null); }
+
+        private async void EditRecognizedLineAt(PointF? caret)
         {
+            await EditRecognizedLineAtAsync(caret);
+        }
+
+        private async Task EditRecognizedLineAtAsync(PointF? caret)
+        {
+            // A newer line click may supersede a canceled match before its
+            // continuation returns to the UI thread. Only that canceled request
+            // may be bypassed; an active match still owns the busy state.
+            if (matchingSourceText && sourceStyleCancellation != null && sourceStyleCancellation.IsCancellationRequested)
+                matchingSourceText = false;
             if (!CanEditRecognizedLine) return;
-            TextLineRegion line = recognizedText.Lines[textSelection.SelectedLineIndex];
+            TextRecognitionResult sourceResult = RecognizedEditResult;
+            TextOverlaySelection sourceWords = RecognizedEditSelection;
+            int sourceLineIndex = sourceWords.SelectedLineIndex;
+            string sourceSelection = sourceWords.SelectedText;
+            TextLineRegion line = sourceResult.Lines[sourceLineIndex];
+            StartRecognizedTextSession(sourceResult, sourceWords);
+            recognizedSessionLine = sourceLineIndex;
             int owner = FindTextAnnotationForLine(line);
             if (owner == -2) { ExplainMixedTextLine(); return; }
-            if (owner >= 0) { EditTextAnnotation(owner); return; }
+            if (owner >= 0)
+            {
+                BeginRecognizedAnnotationInline(owner, caret); return;
+            }
             CancelGesture();
             Rectangle erase = PaddedTextBounds(line.Bounds);
             if (erase.Width < 12 || erase.Height < 2) return;
             Color background, foreground;
             SampleTextColors(erase, out background, out foreground);
+            using (Bitmap sourceColors = document.CopyBaseRegion(erase))
+                foreground = SourceTextColor.Estimate(sourceColors, background, foreground);
             float width = Math.Min(ImageSize.Width - erase.Left, Math.Max(24, erase.Width));
             float size = EstimateLineFontSize(line.Text, line.Bounds, width);
             int selectionStart, selectionLength;
-            bool hasRange = textSelection.TryGetSelectedCharacterRange(line.Text, out selectionStart, out selectionLength);
+            bool hasRange = sourceWords.TryGetSelectedCharacterRange(line.Text, out selectionStart, out selectionLength);
             object identity = ImageIdentity;
             long revision = DocumentRevision;
             string rtf = null;
@@ -87,12 +112,17 @@ namespace SnipStudio
             RaiseTextSelectionChanged();
             try
             {
+                SourceTextFamilyContext familyContext = await GetSourceFamilyContextAsync(sourceResult, identity, revision, matchingToken);
+                if (matchingToken.IsCancellationRequested || !RecognizedEditStateCurrent(sourceResult, sourceWords, identity, revision)) return;
                 Rectangle sourceBounds = Rectangle.Intersect(new Rectangle(Point.Empty, ImageSize), Rectangle.Ceiling(line.Bounds));
                 using (Bitmap source = document.CopyBaseRegion(sourceBounds))
                 {
-                    SourceTextStyle style = await Task.Run(delegate { return SourceTextMatcher.Estimate(source,
-                        new Rectangle(Point.Empty, source.Size), line.Text, foreground, background, matchingToken); });
-                    if (disposingCanvas || matchingToken.IsCancellationRequested || !textActionsMode || !Object.ReferenceEquals(identity, ImageIdentity) || revision != DocumentRevision) return;
+                    SourceTextStyle style = await Task.Run(delegate { return SourceTextMatcher.EstimateWithFamilyContext(source,
+                        new Rectangle(Point.Empty, source.Size), line.Text, foreground, background, matchingToken, familyContext); });
+                    if (matchingToken.IsCancellationRequested || !RecognizedEditStateCurrent(sourceResult, sourceWords, identity, revision)) return;
+                    style = SourceTextMatcher.RefineSizeOnUi(source, new Rectangle(Point.Empty, source.Size),
+                        line.Text, foreground, background, style, matchingToken);
+                    if (matchingToken.IsCancellationRequested || !RecognizedEditStateCurrent(sourceResult, sourceWords, identity, revision)) return;
                     size = style.FontSizePixels;
                     rtf = RichTextLayout.CreatePlainRtf(line.Text, style.FontFamily, size, style.Style, foreground);
                 }
@@ -100,31 +130,28 @@ namespace SnipStudio
             catch (OperationCanceledException) { return; }
             catch (Exception)
             {
-                if (disposingCanvas || matchingToken.IsCancellationRequested || !textActionsMode || !HasImage || !Object.ReferenceEquals(identity, ImageIdentity) || revision != DocumentRevision) return;
+                if (matchingToken.IsCancellationRequested || !RecognizedEditStateCurrent(sourceResult, sourceWords, identity, revision)) return;
                 rtf = RichTextLayout.CreatePlainRtf(line.Text, "Segoe UI", size, FontStyle.Regular, foreground);
             }
             finally
             {
-                matchingSourceText = false;
-                if (Object.ReferenceEquals(sourceStyleCancellation, matching)) sourceStyleCancellation = null;
+                if (Object.ReferenceEquals(sourceStyleCancellation, matching))
+                { matchingSourceText = false; sourceStyleCancellation = null; }
                 matching.Dispose();
                 if (!disposingCanvas) RaiseTextSelectionChanged();
             }
-            if (disposingCanvas || matchingToken.IsCancellationRequested || !textActionsMode || !HasImage || !Object.ReferenceEquals(identity, ImageIdentity) || revision != DocumentRevision) return;
-            using (TextEditorDialog dialog = new TextEditorDialog("Edit recognized line", line.Text, size, width,
-                ImageSize.Width - erase.Left, foreground, background, true, rtf))
-            {
-                if (hasRange) dialog.SelectTextRange(selectionStart, selectionLength);
-                if (dialog.ShowDialog(FindForm()) != DialogResult.OK) return;
-                selectedIndex = document.ReplaceImageRichText(erase, dialog.EnteredText, dialog.Rtf, dialog.TextColor, dialog.BackgroundColor,
-                    dialog.TextSize, dialog.BoxWidth);
-                textFontSize = dialog.TextSize;
-                textActionsMode = false;
-                tool = EditorTool.Select;
-                RaiseTextSelectionChanged();
-                UpdateCursor();
-                RaiseChanged();
-            }
+            if (matchingToken.IsCancellationRequested || !RecognizedEditStateCurrent(sourceResult, sourceWords, identity, revision) ||
+                sourceWords.SelectedLineIndex != sourceLineIndex || !String.Equals(sourceWords.SelectedText, sourceSelection, StringComparison.Ordinal)) return;
+            // The keyboard proxy is invisible, but its wrapping width is also
+            // the committed annotation's layout box. Keep room to type only
+            // inside this column rather than claiming neighboring source cells.
+            float right = RecognizedColumnRight(line.Bounds, sourceResult.Lines, ImageSize.Width);
+            RichTextMetrics measured = RichTextLayout.Measure(rtf, Math.Max(1, right - line.Bounds.Left));
+            float layoutLeft = line.Bounds.Left - measured.InkBounds.Left;
+            width = Math.Max(1, right - layoutLeft);
+            float height = Math.Max(erase.Height, size * 1.55f + 8);
+            BeginRecognizedInlineDraftAt(erase, line.Bounds, line.Text, rtf, background, width, height,
+                hasRange ? selectionStart : line.Text.Length, hasRange ? selectionLength : 0, caret);
         }
 
         public void DeleteRecognizedText()
@@ -209,12 +236,13 @@ namespace SnipStudio
         {
             base.OnMouseDoubleClick(e);
             if (e.Button != MouseButtons.Left || !IsOnImage(e.Location)) return;
+            if (HandleRecognizedInlineDoubleClick(e)) return;
             if (!textActionsMode && (tool == EditorTool.RemoveArea ||
                 (tool == EditorTool.Select && IsOnSourceRemovalSelection(e.Location)))) return;
             CancelGesture();
             if (textActionsMode) { EditRecognizedLine(); return; }
             if (tool != EditorTool.Select && tool != EditorTool.Text) return;
-            int hit = document.HitTestAnnotation(ToImage(e.Location, false), 3 / zoom);
+            int hit = HitTestTextForEditing(ToImage(e.Location, false), 3 / zoom);
             if (document.GetTextAnnotation(hit) != null) { selectedIndex = hit; EditTextAnnotation(hit); }
         }
 
@@ -268,6 +296,32 @@ namespace SnipStudio
                 if (measured > width && measured > 0) size *= width / measured;
             }
             return Math.Max(8, Math.Min(160, (float)Math.Round(size)));
+        }
+
+        // OCR cells are source-space regions, not the broad native RichEdit
+        // viewport. Only a distinct cell on the same row limits this column;
+        // ordinary words within one cell and vertically adjacent lines do not.
+        internal static float RecognizedColumnRight(RectangleF sourceInk, IList<TextLineRegion> lines, float imageWidth)
+        {
+            if (Single.IsNaN(imageWidth) || Single.IsInfinity(imageWidth) || imageWidth < 1)
+                throw new ArgumentOutOfRangeException("imageWidth");
+            float right = imageWidth;
+            if (lines == null || sourceInk.Width <= 0 || sourceInk.Height <= 0 ||
+                !FiniteTextBoxPoint(sourceInk.Location) || !FiniteTextBoxPoint(new PointF(sourceInk.Right, sourceInk.Bottom))) return right;
+            foreach (TextLineRegion line in lines)
+            {
+                if (line == null || line.Bounds.Width <= 0 || line.Bounds.Height <= 0) continue;
+                RectangleF other = line.Bounds;
+                if (Single.IsNaN(other.Left) || Single.IsInfinity(other.Left) ||
+                    Single.IsNaN(other.Top) || Single.IsInfinity(other.Top) ||
+                    Single.IsNaN(other.Right) || Single.IsInfinity(other.Right) ||
+                    Single.IsNaN(other.Bottom) || Single.IsInfinity(other.Bottom)) continue;
+                float overlap = Math.Min(sourceInk.Bottom, other.Bottom) - Math.Max(sourceInk.Top, other.Top);
+                if (overlap < Math.Min(sourceInk.Height, other.Height) * .5f || other.Left <= sourceInk.Right) continue;
+                float gutter = Math.Min(4, (other.Left - sourceInk.Right) * .25f);
+                right = Math.Min(right, other.Left - gutter);
+            }
+            return Math.Max(Math.Min(imageWidth, sourceInk.Right), right);
         }
 
         private void SampleTextColors(Rectangle bounds, out Color background, out Color foreground)
