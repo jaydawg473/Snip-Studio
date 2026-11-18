@@ -1,97 +1,95 @@
-SNIP STUDIO 0.6.21 - AUTOMATION FORGE
-https://automation-forge.com/
+SNIP STUDIO 0.6.23 - VALIDATION, 18 NOVEMBER 2026
+Automation Forge
 
-RECOGNIZED REGIONS AND COLUMN NAVIGATION
-Strong graphic prefixes are separated from an OCR edit run before font/color
-estimation and background erasure. Conservative graphic/column anchors help
-keep icons separate from editable words. Ambiguous source symbols are retained.
-Fresh clicks and reentry into previously edited notes keep neighboring columns
-separate, including older notes whose original frame extends over another cell.
+SIGNED APPLICATION
+File version: 0.6.23.0. Authenticode Valid, Automation Forge LLC, Microsoft
+timestamp. Application SHA256:
+370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C
+All 117 C# source files match the final clean-build freeze. Freeze SHA256:
+B430D4C57F852B675BBA2C963E207D72358A16EB81829C83FF913C8BF780F83A
 
-The region processor and hit testing changed; the global font matcher and
-Windows OCR engine were not replaced. OCR spelling, source-font identity,
-mixed formatting and raster reconstruction remain approximate. Untouched source
-pixels and existing edit/Undo safeguards remain important when reviewing edits.
+CURRENT CHECKS
+Checks run signed helpers against this exact signed application. Signatures,
+timestamps and hashes are checked before execution; original failures and
+superseded candidates are retained separately and excluded from final passes.
 
-TEXT COLOR AND PALETTE VIEW
-Chosen text color applies from the first character of a new point/drawn note.
-The text swatch follows the active rich-text selection or caret, describes mixed
-colors, and updates when a color is applied. Source-text editing retains its
-current formatting until explicitly changed. Drawing ink remains a separate
-choice. These tests do not prove the accuracy of sampled source-color estimates.
+Core document checks: 74 assertions.
+Editing and paste checks: 198 assertions (includes 59 paste assertions).
+Ten conversion/selection/recovery fixtures: 774 assertions.
+OCR/selection/cache audit: 91 assertions.
+Window sizing: 452 assertions.
+Recent snips: 1,168 assertions across 46 control/layout cases.
+Capture selection and recording-notification workflow: 19 assertions.
+Video review: 45 managed and native synthetic-MP4 assertions.
 
-Palette transitions keep window/client bounds fixed. Fit recalculates for the
-available image viewport, keeps the full snip centered/contained, and clears
-stale native scroll extents on open/close. Manual zoom remains fixed and its
-center anchor is checked within one rendered viewport pixel while open; closing
-restores the original zoom, absolute origin and scroll extent. The palette keeps
-its own preferred content size and scrolling. This is view stability within the
-existing window, not a new automatic window-resizing policy.
+The six-row filename example recovers 6/6 filename bodies in source order;
+the earlier Explorer example covers 9/9 filename bodies. Tests exercise adjacent
+row dragging, column isolation, icon protection, source bounds and Undo.
+Coverage does not prove exact character transcription. Windows OCR can still
+confuse 0/O, 1/l and similar glyphs; no guessed identifier corrections are made.
+Color, font family, size, weight and reconstruction from pixels remain estimates.
 
-CURRENT SIGNED APPLICATION
-Version 0.6.21.0. Automation Forge Authenticode Valid with a timestamp.
-Application SHA256:
-291BFEBCA716AC8811D2CBE09F0FEBC7D3531C4303F0E3B797108E110001B81E
-All 114 C# inputs match the final source freeze. Freeze-file SHA256:
-C276540BBEB4814067E4102BAD2DE0EA485F73EBCBA66AF0D08BDAF1AB30BEEA
-The 12 changed files include one added recognized-region helper. No new artwork,
-translation model/runtime file or third-party binary is part of this scope.
+Editing tests cover failed replacement and rejected-paste preservation,
+pending-draft history/buttons, low native-editor zoom, exact RTF paragraph
+semantics, 16,001-character rejection, and selected replacement at exactly 16,000.
+Below 2% canvas zoom the native text editing surface uses a valid 2% minimum;
+the requested canvas scale, stored font size and exported pixels are unchanged.
 
-CURRENT CHECKS AND EXECUTION PROVENANCE
-Eleven accepted current jobs total 7,132 passing assertion executions:
-  Palette view: 5,742; column navigation: 159; icon-region/style: 145;
-  text color: 197; reentry: 189; rendered caret: 383; recognized inline: 123;
-  proxy host: 28; tool reentry: 49; edit transition: 63; automatic snapshot: 54.
+Save workflow, owner-lifetime, raw encoding, update/startup/recent/zoom policies,
+and offline translation have separate hash-bound reports in the local review.
+The full feature matrix distinguishes verified contracts from native acceptance.
+Synthetic inputs and unshown controls are not whole-application acceptance.
 
-Ten zero-exit jobs are retained unchanged from the original current-assembly
-run. The original text-color attempt stopped at a fixture reflection error;
-its failed execution remains preserved. A corrected-fixture actual rerun passed
-197 assertions, zero failures, ObserveOnly false, on the same unchanged signed
-application. The composite result binds original and rerun hashes separately.
-The failed attempt is not counted as a pass. An older observe-only baseline
-with 48 failures and released 0.6.20's 998 assertions are also excluded.
+PERFORMANCE
+A 3,600-word, 60-pointer-sample selection trace allocated 289,760 bytes versus
+16,066,424 bytes on the signed baseline: 98.2% fewer measured allocations,
+with zero rather than two Gen0 collections. Final observed trace time was 13 ms.
+Repeated native font refinement measured under 1 ms stopwatch resolution after
+warming. Initial refinement is still costly; shared-machine contention affects
+latency. Native OCR speed is not claimed as improved.
 
-The checks invoke production mouse-down/up routes on unshown controls, including
-column changes, prior broad-frame notes, panned/zoomed views, commits and Undo.
-Synthetic icon/column fixtures check exact icon and neighboring pixel retention.
-Known rich text is deliberately seeded for formatting/color preservation; this
-is not original-font accuracy proof. Native RichEdit insertion checks cover
-per-character colors in new and known-format source notes and text color UI.
+For synthetic 24 MP images, the earlier signed candidate's snapshot render took
+85-86 ms; encoding took 158-1,412 ms for PNG and 327-2,503 ms for PDF. Those
+single-run codec measurements are not a throughput improvement claim. The save
+change moves encoding/publishing off the UI thread. Snapshot rendering remains
+on the UI thread, and forced teardown may wait for the safe worker to finish.
+Full application startup, live scrolling latency, microphone/system audio,
+recording throughput and long-session memory have not been measured here.
 
-Eight palette cases combine four toolbar sides with fitted/manual views, each
-repeating 20 open/close, exact-spectrum, scroll and Apply/Cancel cycles. Shape
-outline and emoji exercise the shared host. Synthetic source/export pixels stay
-exact. Four images were visually inspected: two actual-control palette renders
-(normal/exact) and synthetic icon/column images before/after an edit. The snip
-was contained/centered and palette controls remained separately scrollable.
-These renders do not prove native combo-box display or physical desktop focus.
+RUNTIME AND SIGNING
+Bundled Node was refreshed to official 24.22.3. Its checksum matches the vendor
+release; its original OpenJS signature is Valid and timestamped. All 113 pinned
+runtime files plus bundle.json are checked. Vendor notices and original licenses
+are preserved. Bergamot/model files remain pinned; this bounded source/advisory
+review is not an independent audit of every transitive native/WASM component.
 
-Each current report and the accepted composite/original/rerun result has a
-separate private hash binding in the current-check manifest and release receipt.
-Supplied-image native OCR diagnostics are separate observations, not assertion
-jobs, and do not establish original font identity or universal icon detection.
+The application, generated full uninstaller and Setup require timestamped
+Automation Forge signatures. Compiler/extractor copies and native installer
+plugins are signed before use; no unsigned executable is substituted.
+Final Setup/portable hashes, extracted byte identity, signatures, CRC and known
+private-marker checks belong to the separate local release receipt/package audit.
+The signing process does not certify absence of malware or prevent every endpoint
+security alert. No SentinelOne protection or quarantine was bypassed.
 
-RETAINED FEATURES AND NOTICES
-Recording-area choices, desktop boundary, MP4 filmstrip/trim and the external
-Clipchamp action remain. Window recording uses a fixed visible screen rectangle,
-including other covering windows; it does not follow a moving target or recover
-hidden content. Inset boundary segments require supported Windows exclusion.
-Prior hidden-native readback did not establish saved-video pixel exclusion.
+LIMITS AND ACCEPTANCE
+The scrolling stitch/session suites passed 152/59 checks on signed 0.6.21;
+those are historical component evidence, not final 0.6.23 whole-workflow checks.
+The corrected recorder startup module passed 16 synthetic fault/retry checks;
+its injected old-flow failure is not an exact released-binary baseline.
 
-The original filmstrip implementation uses Windows Media Foundation. Microsoft's
-VideoThumbnail sample was a technical reference; its full pinned MIT credit
-remains in licenses/NOTICES.txt. Existing notices, artwork and translation files
-are retained and reconciled by the package audit.
+An isolated native editor was visually inspected with a synthetic 144x121 snip.
+Physical border dragging remained inconclusive through the automation tool;
+geometry checks do not establish physical resize, focus or multi-monitor behavior.
+Physical DPI rendering, live capture/HDR/exclusion, microphone/system audio,
+actual Windows Recent history, clipboard contention, printer/device behavior,
+Clipchamp import, startup/tray integration, live update transport, installation,
+upgrade and uninstall require separate native or installed acceptance.
 
-LIMITATIONS AND DELIVERY
-Unshown controls, synthetic recognition/seeded formatting and managed gestures
-are not physical mouse/focus/DPI tests or pixel-perfect font recovery. Private
-supplied images and diagnostic reports are excluded from public source, assets
-and release payloads. No live recording/exclusion, external Clipchamp import or
-installed upgrade is established by these text-region checks.
+Metadata waits are bounded at the UI. Already-running Windows native metadata or
+shell calls cannot be forcibly aborted; worker slots remain bounded until return.
+No multi-track or frame-exact video editing guarantee is made.
 
-Exact Setup/ZIP hashes, fresh signatures/timestamps, extracted payload identity,
-NSIS CRC/protected-byte checks and privacy-marker results belong to the separate
-local release receipt. Container hashes are not embedded in this payload file.
-Known-marker checks are not a universal privacy guarantee. Installation and Git
-publication are not performed by this validation; publication remains paused.
+Installer and uninstaller are statically inspected, not run. Installation,
+Git pushes and publication remain pending approval. Private screenshots, test
+utilities, source paths, signing credentials and review logs are excluded from
+release packages. Known-marker checks are not a universal privacy guarantee.

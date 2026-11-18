@@ -16,9 +16,20 @@ namespace SnipStudio
         public int LineIndex { get; private set; }
         public string SourceText { get; private set; }
         public RectangleF Bounds { get; private set; }
+        public RectangleF ExcludedGraphicBounds { get; private set; }
+        public RectangleF RecognitionClipBounds { get; private set; }
 
         internal TranslationSourceBlock(int lineIndex, string sourceText, RectangleF bounds)
-        { LineIndex = lineIndex; SourceText = sourceText; Bounds = bounds; }
+            : this(lineIndex, sourceText, bounds, RectangleF.Empty) { }
+
+        internal TranslationSourceBlock(int lineIndex, string sourceText, RectangleF bounds, RectangleF excludedGraphic)
+            : this(lineIndex, sourceText, bounds, excludedGraphic, RectangleF.Empty) { }
+
+        internal TranslationSourceBlock(int lineIndex, string sourceText, RectangleF bounds, RectangleF excludedGraphic, RectangleF recognitionClip)
+        {
+            LineIndex = lineIndex; SourceText = sourceText; Bounds = bounds;
+            ExcludedGraphicBounds = excludedGraphic; RecognitionClipBounds = recognitionClip;
+        }
     }
 
     public sealed class TranslationSourceSnapshot
@@ -122,7 +133,7 @@ namespace SnipStudio
                 // guessed text owner or silently leaving duplicate words.
                 if (FindTextAnnotationForLine(new TextLineRegion { Text = source, Bounds = bounds }) != -1)
                     throw new InvalidOperationException("Some recognized text overlaps an editable text box. Move or edit that box first, or select only screenshot text to translate. Nothing was replaced.");
-                blocks.Add(new TranslationSourceBlock(lineIndex, source, bounds));
+                blocks.Add(new TranslationSourceBlock(lineIndex, source, bounds, line.ExcludedGraphicBounds, line.RecognitionClipBounds));
             }
             if (blocks.Count == 0)
                 throw new InvalidOperationException("No recognized text positions are available to replace. Try Text actions on a clearer snip.");
@@ -181,7 +192,7 @@ namespace SnipStudio
                         if (!TranslationSnapshotCurrent(snapshot)) return TranslationReplacementStale();
                         familyContextPrepared = true;
                     }
-                    Rectangle maskBounds = PaddedTextBounds(block.Bounds);
+                    Rectangle maskBounds = PaddedTextBounds(block.Bounds, block.ExcludedGraphicBounds, block.RecognitionClipBounds);
                     // A changed line's erasure padding must not touch a line
                     // retained as original pixels. Reject the entire batch so
                     // the translated draft remains available without damage.

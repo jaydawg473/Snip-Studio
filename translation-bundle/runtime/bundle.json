@@ -3,7 +3,7 @@
   "engine": {
     "name": "Bergamot",
     "version": "0.4.9",
-    "node": "24.22.2"
+    "node": "24.22.3"
   },
   "models": [
     {
@@ -213,8 +213,8 @@
     "bergamotNpm": "https://registry.npmjs.org/@browsermt/bergamot-translator/-/bergamot-translator-0.4.9.tgz",
     "bergamotNpmIntegrity": "sha512-bNuuCwM/JnsIYQCKXcYKFT4Qc5vLMoB8Nbvz8ReIgs7xzebK8Sa+R8iEK8mLvNBe/WaZ6zrPaUQilLsRT/ea8Q==",
     "bergamotCommit": "8cc5d0495479c9ec56eafafd6bcd7fb5b929ca98",
-    "nodeZip": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip",
-    "nodeZipSha256": "ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2",
+    "nodeZip": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip",
+    "nodeZipSha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f",
     "nodeSigner": "OpenJS Foundation (original Authenticode signature verified Valid before use)"
   },
   "files": [
@@ -652,7 +652,7 @@
     },
     {
       "path": "licenses/NOTICES.txt",
-      "sha256": "a1139276c08c341b0d74877b6e5e0237ad21846b4a9b0ef47d3942a53cebc859"
+      "sha256": "4920a05f9997e903612a37e724c6d78e6a6ad47e613e4d511f92ff676766a862"
     },
     {
       "path": "runtime/LICENSE",
@@ -660,7 +660,7 @@
     },
     {
       "path": "runtime/node.exe",
-      "sha256": "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9"
+      "sha256": "86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6"
     },
     {
       "path": "runtime/README.md",

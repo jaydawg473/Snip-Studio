@@ -527,7 +527,7 @@ namespace SnipStudio
 
         private bool SaveImage(bool saveAs, bool pdfOnly)
         {
-            if (!canvas.HasImage) return false;
+            if (!canvas.HasImage || IsSavingImage) return false;
             string path = currentPath;
             string extension = path == null ? "" : Path.GetExtension(path).ToLowerInvariant();
             // Every explicit save is reviewable: choose name, folder, and format.
@@ -552,7 +552,6 @@ namespace SnipStudio
                         MessageBox.Show(this, "Replace the existing file " + Path.GetFileName(path) + "?", "Save your snip", MessageBoxButtons.YesNo, MessageBoxIcon.Question) != DialogResult.Yes) return false;
                 }
             }
-            string temporary = null;
             try
             {
                 extension = Path.GetExtension(path).ToLowerInvariant();
@@ -562,40 +561,22 @@ namespace SnipStudio
                 else if (extension == ".bmp") format = ImageFormat.Bmp;
                 else if (extension != ".pdf") throw new InvalidOperationException("Choose a .png, .jpg, .bmp, or .pdf filename.");
                 path = Path.GetFullPath(path);
-                if (extension == ".pdf")
+                using (Bitmap image = canvas.RenderImage())
                 {
-                    using (Bitmap image = canvas.RenderImage()) PdfExportService.Save(image, path);
+                    // Rendering finishes any applied text draft. Pin that exact
+                    // snapshot before the responsive modal loop can dispatch
+                    // another document notification.
+                    object identity = canvas.ImageIdentity;
+                    long revision = canvas.DocumentRevision;
+                    SaveRenderedImageWithProgress(image, path, format);
+                    return CompleteImageSave(path, identity, revision);
                 }
-                else
-                {
-                    temporary = Path.Combine(Path.GetDirectoryName(path), ".snip-" + Guid.NewGuid().ToString("N") + ".tmp");
-                    using (Bitmap image = canvas.RenderImage())
-                    {
-                        if (format.Guid == ImageFormat.Jpeg.Guid)
-                        {
-                            using (Bitmap flattened = new Bitmap(image.Width, image.Height, PixelFormat.Format24bppRgb))
-                            {
-                                using (Graphics graphics = Graphics.FromImage(flattened)) { graphics.Clear(Color.White); graphics.DrawImageUnscaled(image, 0, 0); }
-                                flattened.Save(temporary, format);
-                            }
-                        }
-                        else image.Save(temporary, format);
-                    }
-                    if (File.Exists(path)) File.Replace(temporary, path, null);
-                    else File.Move(temporary, path);
-                    temporary = null;
-                }
-                currentPath = path;
-                preferences.SaveFolder = Path.GetDirectoryName(path);
-                canvas.MarkSaved();
-                UpdateDocumentState();
-                SetStatus("Saved " + Path.GetFileName(path));
-                // PDF exports are not editable image documents on a later launch.
-                if (extension != ".pdf") TaskbarJumpList.RecordRecentFile(currentPath);
-                return true;
             }
-            catch (Exception ex) { ShowFailure("The snip could not be saved. Your snip is still open", ex); return false; }
-            finally { if (temporary != null && File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } } }
+            catch (Exception ex)
+            {
+                if (!IsDisposed && !Disposing) ShowFailure("The snip could not be saved. Your snip is still open", ex);
+                return false;
+            }
         }
 
         private async void CopyImage()
@@ -611,7 +592,16 @@ namespace SnipStudio
         private void CopyText()
         {
             if (!canvas.HasImage || capturePending) return;
-            canvas.TextActionsMode = !canvas.TextActionsMode;
+            bool enable = !canvas.TextActionsMode;
+            if (enable)
+            {
+                // Recognition opens an editing workflow. Use the same tool
+                // selection path as the Text button so its selected state,
+                // options and highlighter color restoration stay in sync.
+                SelectTool(EditorTool.Text);
+                if (canvas.Tool != EditorTool.Text) return;
+            }
+            canvas.TextActionsMode = enable;
             UpdateTextActionControls();
             LayoutChrome();
             canvas.Focus();
@@ -896,6 +886,14 @@ namespace SnipStudio
 
         private void OnClosing(object sender, FormClosingEventArgs e)
         {
+            if (IsSavingImage)
+            {
+                e.Cancel = true;
+                forceExit = false;
+                Program.CancelApplicationExit();
+                SetStatus("Finishing the image save. Close this snip after saving completes.");
+                return;
+            }
             if (EditorClosePrompt.DeferCloseIfPending(this)) { e.Cancel = true; return; }
             if (closeDecisionInProgress) { e.Cancel = true; return; }
             if (TryDelayCloseForScrollingCapture(e)) return;

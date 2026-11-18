@@ -1,28 +1,45 @@
-SNIP STUDIO 0.6.21 - AUTOMATION FORGE, 2026
+SNIP STUDIO 0.6.23 - AUTOMATION FORGE, 2026
 https://automation-forge.com/
 
-TEST BUILD - TYPOGRAPHY REMAINS APPROXIMATE
-This version refines recognized-text regions before inline editing. Strong
-graphic prefixes are separated from text before estimating its font, color
-and background-erasure area. Recognized columns keep separate hit-test regions,
-including when returning to an already edited line. Ambiguous graphic/text
-boundaries use conservative checks rather than treating every symbol as an icon.
+SIGNED RELEASE CANDIDATE
+The application and Setup/uninstaller carry timestamped Automation Forge
+signatures. The bundled Node runtime retains its original publisher signature.
+See VALIDATION.txt for the checks performed and remaining acceptance work.
 
-The selected text color now applies from the first typed character in new text
-boxes. Text color controls follow the active text selection or caret and describe
-mixed colors; explicit color choices apply to that text. Returning to drawing
-retains the chosen drawing ink. Source colors remain estimated from pixels.
+WHAT CHANGED
+Text actions activates Text. Small filename snips receive bounded recognition
+retries; icons are protected during supported text edits. Drag selection keeps
+filename separators and reading order. Repeated text selection and font matching
+reuse validated results to reduce repeated work.
 
-Palette opening and closing keep the current window bounds. Fit recalculates
-for the available image area and clears stale scroll extents, so the whole snip
-stays visible. Manual zoom/pan retains its view; closing restores the original
-view rather than leaving extra horizontal canvas space.
+After enlarging a snip window, you can shrink it to a compact editor again.
+Image replacement failures preserve unfinished text. Rejected pastes explain
+the problem; text draft history and tool feedback stay consistent.
 
-The exact signed 0.6.21 application has 7,132 passing assertion executions across
-11 accepted current jobs. Four synthetic/actual-control images were reviewed.
-OCR spelling and raster typography remain approximate; the global font matcher
-is unchanged. No exact source-font recovery or pixel-perfect editing is claimed.
-See VALIDATION.txt for the exact application identity and evidence limits.
+Saving encodes a frozen image in the background with progress and prevents
+closing halfway through the save. Recent snips and video review stop waiting
+indefinitely for metadata; late results cannot replace a newer request.
+Recording startup failures allow retry, and old recording callbacks cannot
+alter a new recording session.
+
+TEXT RECOGNITION FIXES
+Text actions selects the Text tool immediately. Click recognized words to edit
+them in place; the original screenshot stays intact until an edit is applied.
+Closing Text actions leaves Text selected for further editing.
+
+This release corrects source-color sampling for small Windows ClearType text
+and separates supported file-icon graphics from recognized text before font
+size/color matching and erasure. Real text symbols and identifiers remain text.
+Source font matching uses the remaining text pixels rather than the icon height.
+
+Small snips also receive an original-size recognition pass to recover text that
+the enlarged pass missed. A limited retry can exclude a proven icon column.
+Recovered rows keep their source positions and existing text-column order.
+Review extracted identifiers: Windows OCR can still confuse letters and digits.
+
+The existing text color controls, column navigation and fitted/manual palette
+view behavior remain available. OCR spelling, font identity and reconstruction
+remain estimates. See VALIDATION.txt for this build's checks and limits.
 
 RECORDING AREA AND DESKTOP OUTLINE
 Choose Draw area to drag a custom rectangle, or Window to click an application
@@ -43,7 +60,7 @@ The MP4 filmstrip, compact tool options and fixed editor shell remain available.
 The Windows OCR engine and font matcher are unchanged; editable-region processing is updated. Source-font identity, size, weight, color
 and layout remain estimates; pixel-perfect typography is not established.
 Prior 0.6.20 recording, native-media and layout checks are historical evidence;
-their 998 assertion executions are not current 0.6.21 test results. Live desktop
+their 998 assertion executions are historical evidence. Live desktop
 recording exclusion, physical monitor behavior and installed upgrades remain
 outside unshown-control and geometry checks.
 
@@ -110,7 +127,7 @@ TOP-ROW TEXT
 The supplied header's sender, recipient and first body line were already
 recognized in the earlier build. Prior fixed-layout checks targeted all three
 lines through tool cycles without measured point drift using managed handlers.
-Those historical counts are not current 0.6.21 evidence. The OCR engine is
+Those historical counts are separate from current validation. The OCR engine is
 unchanged.
 
 RETURNING TO AN EDITED NOTE
@@ -315,9 +332,12 @@ Windows remains optional. The program does not silently change Windows settings
 or install a low-level keyboard hook.
 
 INSTALL
-Use the signed SnipStudio-0.6.21-Setup.exe. Save current work and approve Setup's
-normal close prompt when requested. Existing app settings are retained.
-The signed portable ZIP includes the same complete offline translation bundle,
-models and third-party notices. See VALIDATION.txt for the verification scope.
+Installer: SnipStudio-0.6.23-Setup.exe. Save your work and close older Snip Studio
+windows before installing this update. Installation is per user.
+Portable: extract every file from SnipStudio-0.6.23-signed-portable.zip into its
+own folder and run Snip Studio.exe. Keep its translation and licenses folders
+together. The portable build does not replace an installed copy.
+Verify Publisher and Digital Signatures before running either build.
+See VALIDATION.txt for verification scope and known limitations.
 
 

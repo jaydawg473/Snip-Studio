@@ -109,7 +109,17 @@ namespace SnipStudio
             tips.SetToolTip(cancelInlineTextButton, "Cancel the current inline text edit (Escape), retaining the previous note.");
 
             canvas.ShapeStyleChanged += delegate { UpdateAnnotationContextAfterSelection(); };
-            canvas.InlineTextStateChanged += delegate { UpdateAnnotationContextAfterSelection(); UpdateDocumentTitle(); };
+            canvas.InlineTextStateChanged += delegate
+            {
+                UpdateAnnotationContextAfterSelection(); UpdateDocumentTitle();
+                // Draft edits intentionally create no document transaction,
+                // but they still change which history commands are available.
+                if (!IsDisposed && !Disposing && !closing)
+                {
+                    undoButton.Enabled = canvas.CanUndo && !capturePending;
+                    redoButton.Enabled = canvas.CanRedo && !capturePending;
+                }
+            };
             canvas.TextStyleChanged += delegate { UpdateAnnotationContextAfterSelection(); };
             UpdateAnnotationContextControls();
             RefreshToolOptionsContents();

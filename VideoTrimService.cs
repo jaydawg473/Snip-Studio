@@ -69,6 +69,7 @@ namespace SnipStudio
         // their boundaries, rather than a promise to interrupt a blocked codec.
         private static readonly SemaphoreSlim previewFrameSlot = new SemaphoreSlim(1, 1);
         private static readonly SemaphoreSlim filmstripFrameSlot = new SemaphoreSlim(1, 1);
+        private static readonly SemaphoreSlim inspectionSlot = new SemaphoreSlim(2, 2);
         private const long MaximumPreviewPixels = 16000000;
         private const int MaximumPreviewBufferBytes = 80 * 1024 * 1024;
 
@@ -243,10 +244,35 @@ namespace SnipStudio
         public static Task<VideoMetadata> InspectAsync(string path)
         {
             string fullPath = ValidateSource(path);
-            return Task.Run(delegate
+            return InspectCoreAsync(fullPath, CancellationToken.None);
+        }
+
+        public static Task<VideoMetadata> InspectAsync(string path, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            string fullPath = ValidateSource(path);
+            return InspectCoreAsync(fullPath, cancellationToken);
+        }
+
+        private static async Task<VideoMetadata> InspectCoreAsync(string fullPath, CancellationToken cancellationToken)
+        {
+            // Metadata still opens a native reader. Keep repeated review windows
+            // from starting unbounded codec work, and cancel queued work when
+            // its window closes. An in-flight native open is synchronous.
+            await inspectionSlot.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
             {
-                using (NativeReader reader = new NativeReader(fullPath, false)) return reader.Metadata;
-            });
+                return await Task.Run(delegate
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    using (NativeReader reader = new NativeReader(fullPath, false))
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        return reader.Metadata;
+                    }
+                }, cancellationToken).ConfigureAwait(false);
+            }
+            finally { inspectionSlot.Release(); }
         }
 
         public static Task TrimAsync(string sourcePath, string destinationPath, TimeSpan start, TimeSpan end)

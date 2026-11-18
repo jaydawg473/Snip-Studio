@@ -13,7 +13,9 @@ namespace SnipStudio
             internal readonly string Text;
             internal readonly RectangleF Bounds;
             internal readonly int Line;
-            internal Word(string text, RectangleF bounds, int line) { Text = text; Bounds = bounds; Line = line; }
+            internal readonly string SeparatorBefore;
+            internal Word(string text, RectangleF bounds, int line, string separatorBefore)
+            { Text = text; Bounds = bounds; Line = line; SeparatorBefore = separatorBefore; }
         }
 
         private readonly List<Word> words = new List<Word>();
@@ -32,7 +34,7 @@ namespace SnipStudio
                 StringBuilder value = new StringBuilder();
                 for (int i = first; i <= last; i++)
                 {
-                    if (i > first) value.Append(words[i].Line == words[i - 1].Line ? " " : Environment.NewLine);
+                    if (i > first) value.Append(words[i].Line == words[i - 1].Line ? words[i].SeparatorBefore : Environment.NewLine);
                     value.Append(words[i].Text);
                 }
                 return value.ToString();
@@ -48,11 +50,26 @@ namespace SnipStudio
                     TextLineRegion line = lines[lineIndex];
                     if (line == null) continue;
                     List<string> fallback = new List<string>();
+                    string nativeText = line.Text;
+                    bool haveNativePositions = !String.IsNullOrWhiteSpace(nativeText);
+                    int nativeCursor = 0;
                     if (line.Words != null)
                         foreach (TextWordRegion word in line.Words)
                         {
                             if (word == null || String.IsNullOrWhiteSpace(word.Text) || !ValidBounds(word.Bounds)) continue;
-                            words.Add(new Word(word.Text, word.Bounds, lineIndex));
+                            string separator = fallback.Count == 0 ? "" : " ";
+                            int nativeStart = haveNativePositions ? nativeText.IndexOf(word.Text, nativeCursor, StringComparison.Ordinal) : -1;
+                            if (nativeStart >= 0)
+                            {
+                                // Copy selection must preserve the same native
+                                // separators as Copy all. Inserting a guessed
+                                // space changes adjacent codes, underscores,
+                                // non-Latin words and meaningful whitespace.
+                                if (fallback.Count > 0) separator = nativeText.Substring(nativeCursor, nativeStart - nativeCursor);
+                                nativeCursor = nativeStart + word.Text.Length;
+                            }
+                            else haveNativePositions = false;
+                            words.Add(new Word(word.Text, word.Bounds, lineIndex, separator));
                             RectangleF existing;
                             lineBounds[lineIndex] = lineBounds.TryGetValue(lineIndex, out existing) ? RectangleF.Union(existing, word.Bounds) : word.Bounds;
                             fallback.Add(word.Text);
@@ -137,11 +154,29 @@ namespace SnipStudio
             int nearest = -1;
             double best = Double.MaxValue;
             double nearestLineDistance = Double.MaxValue;
+            double nearestLineHorizontalDistance = Double.MaxValue;
+            RectangleF nearestLine = RectangleF.Empty;
             foreach (RectangleF line in lineBounds.Values)
-                nearestLineDistance = Math.Min(nearestLineDistance, VerticalDistance(point.Y, line));
+            {
+                double vertical = VerticalDistance(point.Y, line);
+                double horizontal = Math.Max(line.Left - point.X, Math.Max(0, point.X - line.Right));
+                if (vertical < nearestLineDistance || (vertical == nearestLineDistance && horizontal < nearestLineHorizontalDistance))
+                { nearestLineDistance = vertical; nearestLineHorizontalDistance = horizontal; nearestLine = line; }
+            }
             for (int i = 0; i < words.Count; i++)
             {
-                if (VerticalDistance(point.Y, lineBounds[words[i].Line]) > nearestLineDistance) continue;
+                RectangleF line = lineBounds[words[i].Line];
+                // Descenders can make a neighboring date cell a few pixels
+                // taller than the filename on the same row. Keep nearby row
+                // glyphs eligible before choosing the closest actual word;
+                // otherwise a drag below a short glyph jumps to that column.
+                double rowTolerance = Math.Max(2, Math.Min(8, line.Height * .35));
+                double vertical = VerticalDistance(point.Y, line);
+                if (vertical > nearestLineDistance)
+                {
+                    float overlap = Math.Min(line.Bottom, nearestLine.Bottom) - Math.Max(line.Top, nearestLine.Top);
+                    if (vertical > nearestLineDistance + rowTolerance || overlap < Math.Min(line.Height, nearestLine.Height) * .5f) continue;
+                }
                 double distance = DistanceSquared(point, words[i].Bounds);
                 if (distance < best) { best = distance; nearest = i; }
             }

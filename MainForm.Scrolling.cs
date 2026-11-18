@@ -38,7 +38,8 @@ namespace SnipStudio
                 await hiddenWindows.WaitUntilHiddenAsync(cancellation.Token);
                 cancellation.Token.ThrowIfCancellationRequested();
                 // Select the scrolling content, excluding unrelated windows.
-                Rectangle? selected = CaptureService.SelectRecordingRegion();
+                Rectangle? selected = CaptureService.SelectScrollingRegion(
+                    preferences.HideTaskbarsDuringCapture, preferences.KeepPrimaryTaskbarVisible);
                 if (!selected.HasValue) return;
                 cancellation.Token.ThrowIfCancellationRequested();
                 Rectangle region = selected.Value;

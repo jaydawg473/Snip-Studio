@@ -83,10 +83,10 @@ namespace SnipStudio
         public string TextRecognitionStatus { get { return recognitionStatus; } }
         public bool TextSnapReady { get { return recognizedText != null && recognizedText.Available && recognizedText.Lines.Count > 0 && (!recognizedText.TextAngle.HasValue || Math.Abs(recognizedText.TextAngle.Value) <= 2); } }
         public bool HasImage { get { return document.HasImage; } }
-        public bool CanUndo { get { return document.CanUndo; } }
+        public bool CanUndo { get { return document.CanUndo || HasPendingInlineTextChanges; } }
         private bool requireCtrlForWheelZoom = true;
         public bool RequireCtrlForWheelZoom { get { return requireCtrlForWheelZoom; } set { requireCtrlForWheelZoom = value; } }
-        public bool CanRedo { get { return document.CanRedo; } }
+        public bool CanRedo { get { return document.CanRedo && !HasPendingInlineTextChanges; } }
         public bool IsDirty { get { return document.IsDirty || HasPendingInlineTextChanges; } }
         public Size ImageSize { get { return document.ImageSize; } }
         public float Zoom { get { return zoom; } }
@@ -161,13 +161,16 @@ namespace SnipStudio
 
         public void SetImage(Bitmap image)
         {
+            // Validate and copy the replacement before releasing the active
+            // draft. A failed open/paste must leave entered text and the old
+            // snip available for retry or recovery.
+            document.SetImage(image);
             recognizedTextToolHistory = false;
             EndRecognizedTextSession();
             CancelInlineText();
             CancelEmojiPlacement();
             ChangeViewIntent();
             StopViewAnimations();
-            document.SetImage(image);
             CancelGesture();
             ResetCropFrame();
             selectedIndex = -1;
@@ -203,7 +206,9 @@ namespace SnipStudio
         }
         public void Redo()
         {
-            if (!CommitInlineText()) return;
+            // A changed draft is a new history branch. Redo must not apply it
+            // as a side effect and thereby discard the existing redo states.
+            if (!CanRedo || !CommitInlineText()) return;
             CancelGesture();
             if (!CanRedo) return;
             document.Redo();

@@ -26,6 +26,11 @@ namespace SnipStudio
         private bool closePromptPending;
         private CancellationTokenSource exportCancellation;
         private CancellationTokenSource visualCancellation, previewCancellation;
+        private readonly CancellationTokenSource metadataCancellation = new CancellationTokenSource();
+        private CancellationTokenSource metadataRequestCancellation;
+        private int metadataGeneration;
+        private static readonly TimeSpan MetadataWait = TimeSpan.FromSeconds(10);
+        private bool videoResourcesDisposed;
         private int visualGeneration, previewGeneration;
         private bool updatingTimeline, visualReloadPending;
         private readonly System.Windows.Forms.Timer previewTimer = new System.Windows.Forms.Timer();
@@ -411,31 +416,120 @@ namespace SnipStudio
 
         private async void ReadMetadata(object sender, EventArgs e)
         {
-            string inspectedPath = currentPath;
+            await ReadMetadataAsync(currentPath, MetadataWait, false);
+        }
+
+        private async Task ReadMetadataAsync(string inspectedPath, TimeSpan maximumWait, bool preserveStatus)
+        {
+            if (IsDisposed || Disposing || videoResourcesDisposed) return;
+            CancelMetadataRead();
+            int generation = metadataGeneration;
+            CancellationTokenSource request = CancellationTokenSource.CreateLinkedTokenSource(metadataCancellation.Token);
+            metadataRequestCancellation = request;
+            loading = true;
+            UpdateSummary();
+            UpdateControls();
             try
             {
-                VideoMetadata result = await VideoTrimService.InspectAsync(inspectedPath);
-                if (IsDisposed || Disposing || currentPath != inspectedPath) return;
+                VideoMetadata result = await AwaitMetadataAsync(BeginMetadataInspection(inspectedPath, request.Token), maximumWait, request.Token);
+                if (!MetadataRequestCurrent(inspectedPath, generation, request) || request.IsCancellationRequested) return;
                 metadata = result;
+                tips.SetToolTip(details, "");
                 ResetRange();
-                SetStatus("Ready. Play opens your default video app. Save as makes a separate file.", false);
+                if (!preserveStatus) SetStatus("Ready. Play opens your default video app. Save as makes a separate file.", false);
+            }
+            catch (OperationCanceledException) { }
+            catch (TimeoutException)
+            {
+                request.Cancel();
+                if (MetadataRequestCurrent(inspectedPath, generation, request))
+                    MetadataUnavailable("Video details took too long to read. You can still play, copy or save the file. Windows may still be finishing its media operation.", preserveStatus);
             }
             catch (Exception error)
             {
-                if (IsDisposed || Disposing) return;
-                filmstrip.EmptyMessage = "Video details unavailable — numeric trim cannot be prepared.";
-                previewTime.Text = "Preview unavailable";
-                SetStatus("Video details could not be read. You can still play, copy or save the file. " + error.Message, true);
+                if (MetadataRequestCurrent(inspectedPath, generation, request))
+                    MetadataUnavailable("Video details could not be read. You can still play, copy or save the file. " + error.Message, preserveStatus);
             }
             finally
             {
-                if (!IsDisposed && !Disposing)
+                bool current = MetadataRequestCurrent(inspectedPath, generation, request);
+                request.Cancel();
+                if (Object.ReferenceEquals(metadataRequestCancellation, request)) metadataRequestCancellation = null;
+                request.Dispose();
+                if (current)
                 {
                     loading = false;
                     UpdateSummary();
                     UpdateControls();
                 }
             }
+        }
+
+        private bool MetadataRequestCurrent(string path, int generation, CancellationTokenSource request)
+        {
+            return !IsDisposed && !Disposing && !videoResourcesDisposed && generation == metadataGeneration &&
+                Object.ReferenceEquals(metadataRequestCancellation, request) && String.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private void CancelMetadataRead()
+        {
+            metadataGeneration++;
+            CancellationTokenSource previous = metadataRequestCancellation;
+            metadataRequestCancellation = null;
+            if (previous != null) previous.Cancel();
+            loading = false;
+        }
+
+        private void MetadataUnavailable(string message, bool preserveStatus)
+        {
+            metadata = null;
+            filmstrip.EmptyMessage = "Video details unavailable — numeric trim cannot be prepared.";
+            previewTime.Text = "Preview unavailable";
+            tips.SetToolTip(details, message);
+            if (!preserveStatus) SetStatus(message, true);
+        }
+
+        private static async Task<VideoMetadata> AwaitMetadataAsync(Task<VideoMetadata> operation, TimeSpan maximumWait, CancellationToken cancellationToken)
+        {
+            // A native media open cannot be interrupted safely. The UI wait is
+            // bounded independently; a late fault is observed without updating
+            // a timed-out, replaced or closed review. Native slots stay occupied
+            // until their actual operations finish.
+            ObserveMetadataCompletion(operation);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await Task.WhenAny(operation, Task.Delay(maximumWait, cancellationToken)).ConfigureAwait(false) != operation)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                throw new TimeoutException("Windows took too long to read the video details.");
+            }
+            return await operation.ConfigureAwait(false);
+        }
+
+        private static void ObserveMetadataCompletion(Task<VideoMetadata> operation)
+        {
+            operation.ContinueWith(delegate(Task<VideoMetadata> failed) { GC.KeepAlive(failed.Exception); },
+                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
+        private static Task<VideoMetadata> BeginMetadataInspection(string path, CancellationToken cancellationToken)
+        {
+            // Path validation can also wait on a disconnected network share.
+            // Keep that validation inside the independently timed background job.
+            return Task.Run<VideoMetadata>(delegate { return VideoTrimService.InspectAsync(path, cancellationToken); }, cancellationToken);
+        }
+
+        private static async Task<VideoMetadata> InspectMetadataAsync(string path, CancellationToken cancellationToken)
+        {
+            using (CancellationTokenSource request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                try { return await AwaitMetadataAsync(BeginMetadataInspection(path, request.Token), MetadataWait, request.Token).ConfigureAwait(false); }
+                finally { request.Cancel(); }
+            }
+        }
+
+        private async void ReadCopiedMetadata()
+        {
+            await ReadMetadataAsync(currentPath, MetadataWait, true);
         }
 
         private void ResetRange()
@@ -612,7 +706,7 @@ namespace SnipStudio
                 currentPath = destination;
                 dirty = true;
                 bool verified = true;
-                try { metadata = await VideoTrimService.InspectAsync(destination); }
+                try { metadata = await InspectMetadataAsync(destination, metadataCancellation.Token); }
                 catch (Exception)
                 {
                     verified = false;
@@ -640,7 +734,7 @@ namespace SnipStudio
 
         private void PlayCurrentFile()
         {
-            if (loading || working) return;
+            if (working || IsDisposed || Disposing) return;
             try
             {
                 if (!File.Exists(currentPath)) throw new FileNotFoundException("This recording file is no longer available.");
@@ -652,7 +746,7 @@ namespace SnipStudio
 
         private void EditCurrentFileInClipchamp()
         {
-            if (loading || working) return;
+            if (working || IsDisposed || Disposing) return;
             try
             {
                 bool fileSubmitted = ClipchampLauncher.Open(currentPath, Handle);
@@ -715,12 +809,13 @@ namespace SnipStudio
                 dirty = false;
                 lastSaveFolder = Path.GetDirectoryName(destination);
                 bool inspected = true;
-                try { metadata = await VideoTrimService.InspectAsync(destination); }
+                try { metadata = await InspectMetadataAsync(destination, metadataCancellation.Token); }
                 catch (Exception) {
                     inspected = false;
                     metadata = new VideoMetadata { Duration = plan.Duration, Width = plan.Width, Height = plan.Height,
                         FramesPerSecond = plan.FramesPerSecond, HasAudio = plan.HasAudio };
                 }
+                if (IsDisposed || Disposing) return;
                 ResetRange(); UpdateSummary();
                 bool copied = preferences.AutoCopyRecordingChanges && CopyCurrentFile(true);
                 string message = "Saved a separate smaller MP4: " + (result.Bytes / 1000000.0).ToString("0.0") + " MB (was " +
@@ -742,7 +837,7 @@ namespace SnipStudio
 
         private bool CopyCurrentFile(bool automatic)
         {
-            if (!automatic && (loading || working)) return false;
+            if (IsDisposed || Disposing || (!automatic && working)) return false;
             try
             {
                 if (!File.Exists(currentPath)) throw new FileNotFoundException("This recording file is no longer available.");
@@ -764,7 +859,7 @@ namespace SnipStudio
 
         private async Task<bool> SaveAsAsync()
         {
-            if (loading || working) return false;
+            if (working || IsDisposed || Disposing) return false;
             string source = currentPath;
             string extension = Path.GetExtension(source);
             if (String.IsNullOrEmpty(extension)) extension = ".mp4";
@@ -792,10 +887,18 @@ namespace SnipStudio
                 SetStatus("Use a " + extension + " filename for this recording copy. Save as copies the existing video format.", true);
                 return false;
             }
+            return await SaveCopyAsync(source, destination);
+        }
+
+        private async Task<bool> SaveCopyAsync(string source, string destination)
+        {
+            if (working || IsDisposed || Disposing || !String.Equals(source, currentPath, StringComparison.OrdinalIgnoreCase)) return false;
+            CancelMetadataRead();
             SetWorking(true, "Saving your recording copy…");
             try
             {
                 await Task.Run(delegate { CopyAtomically(source, destination); });
+                if (IsDisposed || Disposing) return true;
                 currentPath = destination;
                 dirty = false;
                 lastSaveFolder = Path.GetDirectoryName(destination);
@@ -808,7 +911,11 @@ namespace SnipStudio
                 SetStatus("The copy could not be saved. Your current video is still available. " + error.Message, true);
                 return false;
             }
-            finally { SetWorking(false, null); }
+            finally
+            {
+                SetWorking(false, null);
+                if (!IsDisposed && !Disposing && metadata == null) ReadCopiedMetadata();
+            }
         }
 
         private static void CopyAtomically(string source, string destination)
@@ -836,6 +943,7 @@ namespace SnipStudio
         private void SetWorking(bool value, string message)
         {
             working = value;
+            if (IsDisposed || Disposing) return;
             if (value) { CancelVideoVisuals(); visualReloadPending = metadata != null; }
             else if (metadata != null)
             {
@@ -850,10 +958,10 @@ namespace SnipStudio
         {
             if (IsDisposed || Disposing) return;
             bool ready = !loading && !working;
-            play.Enabled = ready;
-            editInClipchamp.Enabled = ready;
-            copy.Enabled = ready;
-            saveAs.Enabled = ready;
+            play.Enabled = !working;
+            editInClipchamp.Enabled = !working;
+            copy.Enabled = !working;
+            saveAs.Enabled = !working;
             smaller.Enabled = ready && metadata != null;
             cancelExport.Visible = exportCancellation != null;
             cancelExport.Enabled = exportCancellation != null && !exportCancellation.IsCancellationRequested;
@@ -863,7 +971,7 @@ namespace SnipStudio
             setStart.Enabled = setEnd.Enabled = ready && metadata != null;
             close.Enabled = !working;
             progress.Visible = loading || working;
-            UseWaitCursor = loading || working;
+            UseWaitCursor = working;
             UpdateRange();
         }
 
@@ -960,8 +1068,12 @@ namespace SnipStudio
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !videoResourcesDisposed)
             {
+                videoResourcesDisposed = true;
+                CancelMetadataRead();
+                metadataCancellation.Cancel();
+                metadataCancellation.Dispose();
                 CancelVideoVisuals();
                 previewTimer.Dispose();
                 Image previous = preview.Image; preview.Image = null;

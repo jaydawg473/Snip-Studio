@@ -112,6 +112,29 @@ namespace SnipStudio
             string result = box.Rtf; RememberMetadata(result, box); return result;
         }
         internal static string GetPlainText(string rtf) { return Metadata(rtf).Text; }
+
+        // Loading a complete RTF document and inserting its SelectedRtf do not
+        // have identical paragraph semantics. Preview the actual insertion in
+        // a detached native control, including the target selection/context,
+        // rather than undercounting a terminal paragraph or trimming it away.
+        internal static bool RichTextPasteFits(RichTextBox target, string incomingRtf)
+        {
+            if (target == null) throw new ArgumentNullException("target");
+            ValidateRtf(incomingRtf);
+            string currentRtf = target.Rtf;
+            ValidateRtf(currentRtf);
+            using (RichTextBox preview = new RichTextBox { Multiline = true, DetectUrls = false,
+                AllowDrop = false, MaxLength = Int32.MaxValue, RightToLeft = target.RightToLeft })
+            {
+                preview.Rtf = currentRtf;
+                if (!String.Equals(preview.Text, target.Text, StringComparison.Ordinal))
+                    throw new ArgumentException("The current formatted draft could not be prepared for pasting.", "target");
+                preview.Select(target.SelectionStart, target.SelectionLength);
+                preview.SelectedRtf = incomingRtf;
+                return preview.TextLength <= MaximumTextLength;
+            }
+        }
+
         internal static string GetFirstFontFamily(string rtf) { return Metadata(rtf).Family; }
         internal static FontStyle GetFirstFontStyle(string rtf) { return Metadata(rtf).Style; }
         internal static float GetFirstFontSize(string rtf) { return Metadata(rtf).Size; }

@@ -506,21 +506,37 @@ namespace SnipStudio
             private void PasteSupportedText()
             {
                 bool hasPlain = Clipboard.ContainsText(TextDataFormat.UnicodeText), hasRich = Clipboard.ContainsText(TextDataFormat.Rtf);
-                if (!hasPlain && !hasRich) return;
-                string plain = hasPlain ? Clipboard.GetText(TextDataFormat.UnicodeText) : "";
-                if (TextLength - SelectionLength + plain.Length > 16000)
-                { MessageBox.Show(FindForm(), "This paste would exceed the 16,000-character text limit.", "Paste text", MessageBoxButtons.OK, MessageBoxIcon.Information); return; }
-                if (hasRich)
+                string message;
+                if (!PasteTextContent(hasPlain ? Clipboard.GetText(TextDataFormat.UnicodeText) : null,
+                    hasRich ? Clipboard.GetText(TextDataFormat.Rtf) : null, out message) && !String.IsNullOrEmpty(message))
+                    MessageBox.Show(FindForm(), message, "Paste text", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+
+            // Detached clipboard values keep the same admission policy in the
+            // inline and advanced editors, without requiring a real clipboard
+            // or a modal warning when the behavior is checked.
+            internal bool PasteTextContent(string plain, string rich, out string message)
+            {
+                message = null;
+                bool exceedsLimit = false;
+                if (rich != null)
                 {
-                    string rich = Clipboard.GetText(TextDataFormat.Rtf);
                     try
                     {
-                        ValidateTextRtf(rich);
-                        if (TextLength - SelectionLength + RichTextLayout.GetPlainText(rich).Length <= 16000) { SelectedRtf = rich; return; }
+                        if (RichTextLayout.RichTextPasteFits(this, rich)) { SelectedRtf = rich; return true; }
+                        exceedsLimit = true;
                     }
                     catch (ArgumentException) { }
                 }
-                if (hasPlain) SelectedText = plain;
+                if (plain != null)
+                {
+                    if (TextLength - SelectionLength + plain.Length <= 16000) { SelectedText = plain; return true; }
+                    exceedsLimit = true;
+                }
+                message = exceedsLimit ? "This paste would exceed the 16,000-character text limit. Your draft is kept."
+                    : rich != null ? "This formatted clipboard content cannot be pasted into one text note. Copy a smaller plain-text selection and try again. Your draft is kept."
+                    : "The clipboard contains no text to paste. Your draft is kept.";
+                return false;
             }
             protected override void WndProc(ref Message message)
             {

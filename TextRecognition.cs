@@ -23,6 +23,12 @@ namespace SnipStudio
     {
         public string Text { get; set; }
         public RectangleF Bounds { get; set; }
+        // A proven neighboring graphic stays protected even when erase/color
+        // sampling padding would otherwise extend beyond the text bounds.
+        public RectangleF ExcludedGraphicBounds { get; set; }
+        // Empty means the whole source image. A cropped OCR pass cannot prove
+        // that adjacent pixels outside its recognition copy are safe to erase.
+        public RectangleF RecognitionClipBounds { get; set; }
         public List<TextWordRegion> Words { get; private set; }
 
         public TextLineRegion() { Words = new List<TextWordRegion>(); }
@@ -36,6 +42,10 @@ namespace SnipStudio
         // Native OCR output is retained even when a proven graphical icon is
         // excluded from editable text regions. This is not corrected spelling.
         public string RawText { get; set; }
+        // Verbatim native output of bounded recovery passes. The initial raw
+        // output is never replaced by a merged or corrected representation.
+        public string RecoveryRawText { get; internal set; }
+        public int RecoveryPasses { get; internal set; }
         public string Language { get; set; }
         public double? TextAngle { get; set; }
         public bool WasResized { get; set; }
@@ -46,6 +56,7 @@ namespace SnipStudio
             Text = "";
             Message = "";
             Language = "";
+            RecoveryRawText = "";
             Lines = new List<TextLineRegion>();
         }
     }
@@ -121,11 +132,68 @@ namespace SnipStudio
             int maxDimension = (int)OcrEngine.MaxImageDimension;
             if (maxDimension < 1) return Unavailable("Windows reported no supported OCR image size. Freehand highlighting remains available.");
             System.Drawing.Size target = PreparedSize(snapshot.Size, maxDimension);
+            Rectangle sourceBounds = new Rectangle(System.Drawing.Point.Empty, snapshot.Size);
+            TextRecognitionResult recognition = null;
+            bool recoveryTimedOut = false;
+            // The initial pass and both optional recovery passes share one
+            // budget. Cancellation never turns into a successful stale result.
+            using (CancellationTokenSource budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
+            {
+                budget.CancelAfter(TimeSpan.FromSeconds(30));
+                try
+                {
+                    recognition = await RecognizePassAsync(engine, snapshot, sourceBounds, target, budget.Token).ConfigureAwait(false);
+                    RecognizedTextRegions.Refine(recognition, snapshot);
+                    bool enlarged = target.Width > snapshot.Width && target.Height > snapshot.Height;
+                    if (enlarged && (!recognition.TextAngle.HasValue || Math.Abs(recognition.TextAngle.Value) <= 2))
+                    {
+                        budget.Token.ThrowIfCancellationRequested();
+                        TextRecognitionResult native = await RecognizePassAsync(engine, snapshot, sourceBounds, snapshot.Size, budget.Token).ConfigureAwait(false);
+                        recognition.RecoveryPasses++;
+                        recognition.RecoveryRawText = native.RawText ?? "";
+                        RecognizedTextRegions.Refine(native, snapshot);
+                        RecognizedTextRecovery.MergeMissing(recognition, native, sourceBounds, budget.Token);
+                        // Repeated proven icons can make Windows omit an entire
+                        // neighboring row. One measured original-size retry
+                        // excludes that icon column, while safe geometric merge
+                        // keeps all already-read text elsewhere in the image.
+                        Rectangle column = RecognizedTextRecovery.IconFreeColumnCrop(native, snapshot.Size);
+                        if (!column.IsEmpty)
+                        {
+                            budget.Token.ThrowIfCancellationRequested();
+                            TextRecognitionResult pane = await RecognizePassAsync(engine, snapshot, column, column.Size, budget.Token).ConfigureAwait(false);
+                            recognition.RecoveryPasses++;
+                            recognition.RecoveryRawText += Environment.NewLine + (pane.RawText ?? "");
+                            RecognizedTextRegions.Refine(pane, snapshot);
+                            RecognizedTextRecovery.MergeMissing(recognition, pane, sourceBounds, budget.Token);
+                        }
+                    }
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+                catch (OperationCanceledException)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (recognition == null)
+                        return Unavailable("Local text recognition took too long. Try a smaller snip, or use freehand highlighting.");
+                    recoveryTimedOut = true;
+                }
+            }
+            recognition.Message = recognition.Lines.Count == 0 ? "No text was detected. Freehand highlighting is available."
+                : "Text ready — " + recognition.Language + ".";
+            if (recoveryTimedOut) recognition.Message += " Additional recognition timed out; some text may be missing.";
+            if (recognition.TextAngle.HasValue && Math.Abs(recognition.TextAngle.Value) > 2)
+                recognition.Message += " Angled text may need freehand highlighting.";
+            return recognition;
+        }
+
+        private static async Task<TextRecognitionResult> RecognizePassAsync(OcrEngine engine, Bitmap snapshot,
+            Rectangle sourceBounds, System.Drawing.Size target, CancellationToken cancellationToken)
+        {
             int targetWidth = target.Width;
             int targetHeight = target.Height;
-            bool resized = target != snapshot.Size;
-            double scaleX = (double)snapshot.Width / targetWidth;
-            double scaleY = (double)snapshot.Height / targetHeight;
+            bool resized = target != sourceBounds.Size;
+            double scaleX = (double)sourceBounds.Width / targetWidth;
+            double scaleY = (double)sourceBounds.Height / targetHeight;
 
             using (Bitmap prepared = new Bitmap(targetWidth, targetHeight, PixelFormat.Format32bppArgb))
             {
@@ -137,7 +205,7 @@ namespace SnipStudio
                     graphics.InterpolationMode = resized ? InterpolationMode.HighQualityBicubic : InterpolationMode.NearestNeighbor;
                     graphics.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     graphics.DrawImage(snapshot, new Rectangle(0, 0, targetWidth, targetHeight),
-                        new Rectangle(0, 0, snapshot.Width, snapshot.Height), GraphicsUnit.Pixel);
+                        sourceBounds, GraphicsUnit.Pixel);
                 }
                 cancellationToken.ThrowIfCancellationRequested();
                 byte[] pixels = ReadPixels(prepared);
@@ -148,23 +216,16 @@ namespace SnipStudio
                         targetWidth, targetHeight, BitmapAlphaMode.Ignore))
                     {
                         IAsyncOperation<OcrResult> operation = engine.RecognizeAsync(bitmap);
-                        OcrResult result;
-                        using (CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
-                        {
-                            timeout.CancelAfter(TimeSpan.FromSeconds(30));
-                            try { result = await AwaitRecognition(operation, timeout.Token).ConfigureAwait(false); }
-                            catch (OperationCanceledException)
-                            {
-                                cancellationToken.ThrowIfCancellationRequested();
-                                return Unavailable("Local text recognition took too long. Try a smaller snip, or use freehand highlighting.");
-                            }
-                        }
+                        OcrResult result = await AwaitRecognition(operation, cancellationToken).ConfigureAwait(false);
+                        cancellationToken.ThrowIfCancellationRequested();
 
                         TextRecognitionResult recognition = new TextRecognitionResult();
                         recognition.Available = true;
                         recognition.Language = engine.RecognizerLanguage.LanguageTag;
                         recognition.TextAngle = result.TextAngle;
-                        recognition.WasResized = targetWidth != snapshot.Width || targetHeight != snapshot.Height;
+                        // This describes the initial pass on the returned result;
+                        // recovery reads retain original source coordinates.
+                        recognition.WasResized = resized;
                         // Preserve recognized text verbatim; OCR is not a rewrite or
                         // verification of business identifiers or numeric values.
                         recognition.Text = result.Text ?? "";
@@ -172,12 +233,14 @@ namespace SnipStudio
                         foreach (OcrLine sourceLine in result.Lines)
                         {
                             TextLineRegion line = new TextLineRegion();
+                            if (sourceBounds != new Rectangle(System.Drawing.Point.Empty, snapshot.Size))
+                                line.RecognitionClipBounds = sourceBounds;
                             line.Text = sourceLine.Text ?? "";
                             bool haveBounds = false;
                             foreach (OcrWord sourceWord in sourceLine.Words)
                             {
                                 Windows.Foundation.Rect rect = sourceWord.BoundingRect;
-                                RectangleF bounds = new RectangleF((float)(rect.X * scaleX), (float)(rect.Y * scaleY),
+                                RectangleF bounds = new RectangleF((float)(sourceBounds.Left + rect.X * scaleX), (float)(sourceBounds.Top + rect.Y * scaleY),
                                     (float)(rect.Width * scaleX), (float)(rect.Height * scaleY));
                                 bounds = RectangleF.Intersect(bounds, new RectangleF(0, 0, snapshot.Width, snapshot.Height));
                                 if (bounds.Width <= 0 || bounds.Height <= 0) continue;
@@ -187,11 +250,6 @@ namespace SnipStudio
                             }
                             if (line.Words.Count > 0) recognition.Lines.Add(line);
                         }
-                        RecognizedTextRegions.Refine(recognition, snapshot);
-                        recognition.Message = recognition.Lines.Count == 0 ? "No text was detected. Freehand highlighting is available."
-                            : "Text ready — " + recognition.Language + ".";
-                        if (recognition.TextAngle.HasValue && Math.Abs(recognition.TextAngle.Value) > 2)
-                            recognition.Message += " Angled text may need freehand highlighting.";
                         return recognition;
                     }
                 }

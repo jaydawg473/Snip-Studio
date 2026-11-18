@@ -38,28 +38,48 @@ namespace SnipStudio
                     if (height < 5 || height > 96 || first.Width < height * 2.5f) continue;
                     int pad = Math.Max(2, (int)Math.Ceiling(height * .4f));
                     Rectangle probe = Rectangle.FromLTRB((int)Math.Floor(first.Left - height * 3.5f),
-                        (int)Math.Floor(first.Top) - pad, (int)Math.Floor(first.Left) - 2,
+                        (int)Math.Floor(first.Top) - pad, (int)Math.Floor(first.Left),
                         (int)Math.Ceiling(first.Bottom) + pad);
                     examined++;
                     Evidence evidence = pixels.Inspect(probe);
                     Rectangle graphic = evidence.ColorBounds;
-                    if (evidence.Multicolor && graphic.Width >= height * .6f && graphic.Width <= height * 2 &&
+                    if ((evidence.Multicolor || evidence.ChromaticPaperContour) && graphic.Width >= height * .6f && graphic.Width <= height * 2 &&
                         graphic.Height >= height * .75f && graphic.Height <= height * 2 &&
                         graphic.Right < first.Left && first.Left - graphic.Right <= height * 1.8f)
+                    {
                         anchors.Add(graphic);
+                        ProtectGraphic(line, graphic);
+                    }
+                }
+
+                // A PDF-only list may have no multicolor application icon, and
+                // Windows OCR may read every red paper icon as "@". Those rows
+                // cannot establish the old omitted-icon anchors. A compact
+                // chromatic paper contour supplies independent raster evidence;
+                // two separate rows must still prove the graphics column.
+                examined = 0;
+                foreach (TextLineRegion line in regions)
+                {
+                    if (line == null || line.Words.Count == 0 || examined >= MaximumRasterChecks ||
+                        anchors.Count >= MaximumAnchors) continue;
+                    TextWordRegion word = line.Words[0];
+                    if (String.IsNullOrEmpty(word.Text) || word.Text.Length > 3) continue;
+                    RectangleF bounds = word.Bounds;
+                    float height = line.Words.Count > 1 ? MedianHeight(line.Words, 1) : bounds.Height / 1.4f;
+                    if (!CompactPrefix(line, height, false)) continue;
+                    examined++;
+                    Evidence evidence = pixels.Inspect(Rectangle.Ceiling(bounds));
+                    if (evidence.ChromaticPaperContour) anchors.Add(Rectangle.Ceiling(bounds));
                 }
 
                 examined = 0;
                 foreach (TextLineRegion line in regions)
                 {
-                    if (line == null || line.Words.Count < 2 || examined >= MaximumRasterChecks) continue;
-                    TextWordRegion word = line.Words[0], next = line.Words[1];
-                    float height = MedianHeight(line.Words, 1);
+                    if (line == null || line.Words.Count == 0 || examined >= MaximumRasterChecks) continue;
+                    TextWordRegion word = line.Words[0];
+                    float height = line.Words.Count > 1 ? MedianHeight(line.Words, 1) : word.Bounds.Height / 1.4f;
                     RectangleF bounds = word.Bounds;
-                    if (String.IsNullOrEmpty(word.Text) || word.Text.Length > 3 || height < 5 || height > 96 ||
-                        bounds.Height < height * 1.15f || bounds.Height > height * 2.3f ||
-                        bounds.Width > bounds.Height * 1.8f || next.Bounds.Left <= bounds.Right ||
-                        next.Bounds.Left - bounds.Right > height * 2 || bounds.Top > next.Bounds.Top ||
+                    if (!CompactPrefix(line, height, true) ||
                         !ProvenColumn(bounds, anchors, height)) continue;
                     examined++;
                     Evidence evidence = pixels.Inspect(Rectangle.Ceiling(bounds));
@@ -67,11 +87,22 @@ namespace SnipStudio
                     foreach (char character in word.Text)
                         if (!Char.IsLetterOrDigit(character) && !Char.IsWhiteSpace(character)) symbols = true;
                     // A monochrome N, part code or CJK character is not removed.
-                    // Folded-paper geometry also needs a punctuation-like OCR
-                    // token; a multicolor graphic supplies its own raster proof.
-                    if (!evidence.Multicolor && (!symbols || !evidence.PaperContour)) continue;
+                    // Neutral folded-paper geometry also needs a punctuation-like
+                    // OCR token; chromatic artwork supplies its own raster proof.
+                    if (!evidence.Multicolor && !evidence.ChromaticBoxContour && (!symbols || !evidence.PaperContour)) continue;
+                    if (line.Words.Count == 1)
+                    {
+                        if (!evidence.ChromaticBoxContour) continue;
+                        ProtectGraphic(line, bounds);
+                        line.Words.Clear();
+                        line.Text = "";
+                        line.Bounds = RectangleF.Empty;
+                        changed = true;
+                        continue;
+                    }
                     string retained;
                     if (!TrySlice(line, 1, line.Words.Count, out retained)) continue;
+                    ProtectGraphic(line, bounds);
                     line.Words.RemoveAt(0);
                     line.Text = retained;
                     RecomputeBounds(line);
@@ -79,11 +110,33 @@ namespace SnipStudio
                 }
             }
             if (!changed) return;
+            regions.RemoveAll(delegate(TextLineRegion line) { return line != null && line.Words.Count == 0; });
             result.Lines.Clear();
             result.Lines.AddRange(regions);
             List<string> text = new List<string>();
             foreach (TextLineRegion line in regions) text.Add(line.Text ?? "");
             result.Text = String.Join(Environment.NewLine, text.ToArray());
+        }
+
+        private static bool CompactPrefix(TextLineRegion line, float height, bool requireTall)
+        {
+            TextWordRegion word = line.Words[0];
+            RectangleF bounds = word.Bounds;
+            if (String.IsNullOrEmpty(word.Text) || word.Text.Length > 3 || height < 5 || height > 96 ||
+                bounds.Height < height * (requireTall ? 1.15f : 1.05f) || bounds.Height > height * 2.3f ||
+                bounds.Width > bounds.Height * 1.8f) return false;
+            // A compact non-Latin identifier can itself have a rectangular
+            // contour. Keep it ambiguous rather than treating it as artwork.
+            foreach (char character in word.Text) if (character > 127) return false;
+            if (line.Words.Count == 1) return true;
+            RectangleF next = line.Words[1].Bounds;
+            return next.Left > bounds.Right && next.Left - bounds.Right <= height * 2 && bounds.Top <= next.Top;
+        }
+
+        private static void ProtectGraphic(TextLineRegion line, RectangleF graphic)
+        {
+            line.ExcludedGraphicBounds = line.ExcludedGraphicBounds.IsEmpty ? graphic :
+                RectangleF.Union(line.ExcludedGraphicBounds, graphic);
         }
 
         private static bool ProvenColumn(RectangleF candidate, List<Rectangle> anchors, float textHeight)
@@ -131,6 +184,8 @@ namespace SnipStudio
                     if (!TrySlice(line, start, end, out text)) { fragments.Clear(); break; }
                     TextLineRegion fragment = new TextLineRegion();
                     fragment.Text = text;
+                    fragment.RecognitionClipBounds = line.RecognitionClipBounds;
+                    if (start == 0) fragment.ExcludedGraphicBounds = line.ExcludedGraphicBounds;
                     for (int index = start; index < end; index++) fragment.Words.Add(line.Words[index]);
                     RecomputeBounds(fragment);
                     fragments.Add(fragment);
@@ -182,7 +237,7 @@ namespace SnipStudio
         private sealed class Evidence
         {
             internal Rectangle ColorBounds;
-            internal bool Multicolor, PaperContour;
+            internal bool Multicolor, PaperContour, ChromaticPaperContour, ChromaticBoxContour;
         }
 
         private sealed class Pixels : IDisposable
@@ -201,6 +256,7 @@ namespace SnipStudio
                 Rectangle area = Rectangle.Intersect(new Rectangle(Point.Empty, bitmap.Size), requested);
                 if (area.Width < 2 || area.Height < 2 || area.Width > 256 || area.Height > 256) return result;
                 int[] hues = new int[12], columns = new int[area.Width], rows = new int[area.Height];
+                int[] colorColumns = new int[area.Width], colorRows = new int[area.Height];
                 int firstX = area.Right, firstY = area.Bottom, lastX = area.Left - 1, lastY = area.Top - 1, saturated = 0;
                 int background = Background(area);
                 int br = (background >> 16) & 255, bg = (background >> 8) & 255, bb = background & 255;
@@ -219,6 +275,7 @@ namespace SnipStudio
                         {
                             int hue = Math.Min(11, (int)(Color.FromArgb(r, g, b).GetHue() / 30));
                             hues[hue]++; saturated++;
+                            colorColumns[x]++; colorRows[y]++;
                             firstX = Math.Min(firstX, area.Left + x); lastX = Math.Max(lastX, area.Left + x);
                             firstY = Math.Min(firstY, area.Top + y); lastY = Math.Max(lastY, area.Top + y);
                         }
@@ -245,6 +302,20 @@ namespace SnipStudio
                 for (int y = 0; y < rows.Length; y++)
                     if (rows[y] >= area.Width * .55) { if (top < 0) top = y; bottom = y; }
                 result.PaperContour = right - left >= area.Width * .55 && bottom - top >= area.Height * .55;
+                if (!result.ColorBounds.IsEmpty)
+                {
+                    Rectangle ink = result.ColorBounds;
+                    int inkLeft = ink.Left - area.Left, inkRight = ink.Right - area.Left - 1;
+                    int inkTop = ink.Top - area.Top, inkBottom = ink.Bottom - area.Top - 1;
+                    // Long outer edges distinguish folded-paper artwork from
+                    // a colored glyph or ClearType fringe. Require all four
+                    // edges; density/color alone must not delete a real @.
+                    result.ChromaticBoxContour = ink.Width >= 7 && ink.Height >= 9 &&
+                        ink.Height >= ink.Width * .65 && ink.Height <= ink.Width * 2 &&
+                        colorColumns[inkLeft] >= ink.Height * .7 && colorColumns[inkRight] >= ink.Height * .6 &&
+                        colorRows[inkTop] >= ink.Width * .6 && colorRows[inkBottom] >= ink.Width * .6;
+                    result.ChromaticPaperContour = result.ChromaticBoxContour && ink.Height >= ink.Width * 1.05;
+                }
                 return result;
             }
             private int Background(Rectangle area)

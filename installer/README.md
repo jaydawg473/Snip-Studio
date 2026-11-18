@@ -1,37 +1,30 @@
 # Installer packaging
 
-`SnipStudio.nsi` packages the official Snip Studio 0.6.21 release for the current Windows account. The installer requires Windows 10/11 and .NET Framework 4.8. It creates Start menu shortcuts and offers optional desktop and Windows sign-in components. The sign-in component is unchecked by default. Installation does not launch the application.
+`SnipStudio.nsi` packages the signed Snip Studio 0.6.23 candidate for the current Windows account. It requires Windows 10/11 and .NET Framework 4.8, creates Start menu shortcuts, and offers optional desktop and Windows sign-in components. Sign-in startup is unchecked by default. Installation does not launch the application.
 
-From the repository root, point `Build-Installer.ps1` at an installed NSIS compiler:
+## Publisher prerequisites
 
-```powershell
-.\installer\Build-Installer.ps1 -CompilerPath 'C:\Program Files (x86)\NSIS\makensis.exe'
-```
+This is a publisher-specific signing pipeline. It requires a reviewed timestamp-signed application, a signed PowerShell host and release scripts, signed Python/signing hosts, the publisher's own Azure Artifact Signing credentials, and the reviewed portable NSIS 3.13 toolchain. Credentials and local signing-tool installations are excluded. `Sign-Uninstaller.ps1` shows the maintainer's expected tool layout; modifying it for another environment requires reviewing and signing the modified script before use. These sources alone do not create a signed release.
 
-The script expects `release-0.6.21-signed/` at the repository root containing:
+The reviewed official `nsis-3.13.zip` SHA256 is `BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8`. See `tooling-source-manifest.json` and the retained `NSIS-COPYING.txt`. Keep the archive beside its extracted `tools/nsis-3.13/` directory. Every compiler input must match that archive. The original compiler/zlib and the two required Unicode plugins were unsigned; reviewed local copies receive timestamped Automation Forge signatures before use. No original valid vendor signature is replaced. The public repository does not contain these PE files or the archive.
 
-- `Snip Studio.exe`
-- `Snip Studio.exe.config`
-- `README.txt`
-- `VALIDATION.txt`
-- `Signature Verification.json`
-- `SHA256SUMS.txt`
-- `translation/`, with the complete reviewed offline translation payload: original signed Node runtime, bridge, Bergamot JavaScript and WebAssembly engine, all six direct language models, vocabularies, shortlists, licenses, notices, corresponding source archives, and bundle manifest.
-
-The application must be version `0.6.21.0` with a valid timestamped Automation Forge LLC signature. Node must retain its original valid Node/OpenJS publisher signature. Packaging validates the complete recursive translation file list and hashes against the reviewed bundle, then checks `SHA256SUMS.txt` for exact payload coverage and matching bytes. The hash list covers every payload file except itself. Translation install and uninstall entries are generated from that checked file list.
-
-The public checkout includes the bridge source, patched licensed JavaScript, license text, manifests, and preparation scripts. It omits runtime binaries, WebAssembly, model weights, download caches, and corresponding source archives. Preparation requires additional upstream inputs; these sources alone do not automatically reproduce a complete reviewed bundle or signed release. Private signing scripts and credentials are excluded. Publishing these sources does not change the application's existing license policy or the bundled components' license terms.
-
-The output is `installer/output/SnipStudio-0.6.21-Setup.exe`. This script compiles Setup; it does not sign or run it, or launch Snip Studio. The publisher must sign Setup before distribution. The standard NSIS-generated uninstaller is not independently signed.
-
-Verify the installer's embedded NSIS data checksum before signing and again after signing:
+From the repository root, after these prerequisites are satisfied:
 
 ```powershell
-python checks/Verify-InstallerIntegrity.py path/to/Setup.exe
+.\installer\Build-Installer.ps1 -ReleaseVersion 0.6.23 -CompilerRoot '.\tools\nsis-3.13'
 ```
 
-Replace the final argument with the Setup file being released. The check reads the file without launching it and fails on a checksum mismatch. Both the unsigned build and final signed download must pass this gate. Release verification also checks timestamped Authenticode signatures and exact payload hashes; the installer's own integrity checks remain enabled. Python is only a development/release-check dependency. This source packaging script does not sign Setup or perform a native installation.
+The script requires `release-0.6.23-signed/` containing the signed application/configuration, `README.txt`, `VALIDATION.txt`, `Signature Verification.json`, `SHA256SUMS.txt`, four combined attribution/license files, and the complete reviewed `translation/` payload. Model weights, runtime binaries, bulk downloads and corresponding-source archives are omitted from this source checkout.
 
+The app must be version `0.6.23.0` with a valid timestamped Automation Forge signature. Node retains its original valid timestamped OpenJS signature. Payload paths, hashes, model directions and required notices are validated. The hash manifest covers every payload file except itself.
+
+## Uninstaller and Setup signing
+
+NSIS 3.13's `!uninstfinalize` invokes the signed `Sign-Uninstaller.ps1` hook. The hook signs the full generated uninstaller before embedding, checks the pre/post-signing NSIS CRC and protected bytes, and retains its complete signed copy and receipt. A signing or integrity failure stops compilation. Neither the uninstaller nor installer is executed by the pipeline.
+
+The resulting `installer/output/SnipStudio-0.6.23-Setup.exe` is an unsigned staging file until separately signed and verified. Do not run or distribute that staging file. Verify its NSIS CRC/protected bytes before signing and after signing; inspect the extracted complete signed uninstaller and plugin bytes as well as the outer Setup signature. `checks/Verify-InstallerIntegrity.py` reads artifacts without launching them. Use its `--baseline` and `--report` options for the paired integrity reports, through a verified timestamp-signed Python host.
+
+The final candidate's Setup, embedded full uninstaller, application, Node, plugin/tool signatures, exact 124-file payload and 117-source freeze passed static reconciliation. This does not establish installation or native upgrade/uninstall acceptance. The current release status remains **INSUFFICIENT EVIDENCE**; see `VALIDATION.txt` for test limits.
 Before updating or removing installed files, the installer checks whether this installation's application or translation runtime is in use. Closing an editor may leave the shortcut listener running; **Exit Snip Studio** stops it.
 
 In an interactive install, the in-use prompt defaults to **No**. Only an explicit **Yes** requests normal closure of the installed copy. Unsaved-work, recording, or text-draft prompts can delay or cancel closure; Setup rechecks file use and blocks replacement while files remain in use. **No** or **Cancel** stops the update without changing the installed files. Silent operation and diagnostic readiness checks never request closure. Setup never force-closes the app or other programs.

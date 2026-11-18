@@ -1,0 +1,39 @@
+{
+  "Schema": 1,
+  "Tool": "NSIS",
+  "Version": "3.13",
+  "Released": "2026-09-27",
+  "OfficialDownloadPage": "https://nsis.sourceforge.io/Download",
+  "OfficialFilePage": "https://sourceforge.net/projects/nsis/files/NSIS%203/3.13/nsis-3.13.zip/download",
+  "PublishedArchiveSHA256": "BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8",
+  "DownloadedArchiveSHA256": "BA63DFFC4410EE89193E1CB5A41989991BD77C61068DA17E3156D136B7B0B3D8",
+  "OriginalLicenseSHA256": "388357C1215FF403C5EBDE3A5ECD273E68F8B79A579996775245D1EE65442ABA",
+  "OriginalBinaries": [
+    {
+      "RelativePath": "Bin\\makensis.exe",
+      "OriginalSHA256": "65343C225EC88393CC4453B0963CAF63F763F42F48CB55736D51893FF2E29D4A",
+      "OriginalSignatureStatus": "NotSigned",
+      "OriginalTimestamp": false
+    },
+    {
+      "RelativePath": "Bin\\zlib1.dll",
+      "OriginalSHA256": "C78EAB41B346598736BE1196EB949660B710356AD83204F6EF5BF9585C94731E",
+      "OriginalSignatureStatus": "NotSigned",
+      "OriginalTimestamp": false
+    },
+    {
+      "RelativePath": "Plugins\\x86-unicode\\System.dll",
+      "OriginalSHA256": "AFE032F942E2ED0BF7494EC08BA813F5739FB522C640BDE81D30ECAF9F894432",
+      "OriginalSignatureStatus": "NotSigned",
+      "OriginalTimestamp": false
+    },
+    {
+      "RelativePath": "Plugins\\x86-unicode\\nsDialogs.dll",
+      "OriginalSHA256": "9C76F4D53CEEE2A471C936E0899688405E1009CE962D140E9ACB49ED68D114CB",
+      "OriginalSignatureStatus": "NotSigned",
+      "OriginalTimestamp": false
+    }
+  ],
+  "ToolingExecuted": false,
+  "Policy": "Use only the hash-reviewed compiler/zlib and the two Unicode plugins after valid timestamped signing; retain upstream notices and original provenance."
+}

@@ -6,6 +6,7 @@ using System.Drawing.Imaging;
 using System.Drawing.Text;
 using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 
 namespace SnipStudio
@@ -96,6 +97,12 @@ namespace SnipStudio
         private static readonly object CacheGate = new object();
         private static readonly Dictionary<string, SourceTextStyle> Cache = new Dictionary<string, SourceTextStyle>(StringComparer.Ordinal);
         private static readonly Queue<string> CacheOrder = new Queue<string>();
+        private const int MaximumNativeCachedStyles = 16;
+        private const int MaximumNativeCacheBytes = 2 * 1024 * 1024;
+        private const int MaximumNativeCachedPixels = 128 * 1024;
+        private static readonly Dictionary<string, NativeStyleCacheEntry> NativeCache = new Dictionary<string, NativeStyleCacheEntry>(StringComparer.Ordinal);
+        private static readonly Queue<string> NativeCacheOrder = new Queue<string>();
+        private static int nativeCacheBytes;
 
         public static SourceTextStyle Estimate(Bitmap source, Rectangle bounds, string text, Color foreground, Color background, CancellationToken cancellationToken)
         {
@@ -432,13 +439,25 @@ namespace SnipStudio
             try
             {
                 Coverage original;
+                int nativeDpiX, nativeDpiY;
                 using (Bitmap sample = new Bitmap(clipped.Width, clipped.Height, PixelFormat.Format24bppRgb))
                 {
                     using (Graphics graphics = Graphics.FromImage(sample))
-                    { graphics.Clear(background); graphics.DrawImage(source, new Rectangle(Point.Empty, sample.Size), clipped, GraphicsUnit.Pixel); }
+                    {
+                        graphics.Clear(background); graphics.DrawImage(source, new Rectangle(Point.Empty, sample.Size), clipped, GraphicsUnit.Pixel);
+                        // Match the device-capability inputs used by the native
+                        // RichEdit renderer, including a changed display scale.
+                        IntPtr hdc = graphics.GetHdc();
+                        try { nativeDpiX = Math.Max(1, GetDeviceCaps(hdc, 88)); nativeDpiY = Math.Max(1, GetDeviceCaps(hdc, 90)); }
+                        finally { graphics.ReleaseHdc(hdc); }
+                    }
                     original = ReadCoverage(sample, foreground, background, token);
                 }
                 if (original.Ink.Width < 2 || original.Ink.Height < 3 || original.Energy < 12) return initial;
+                string nativeCacheKey = original.Values.Length <= MaximumNativeCachedPixels ?
+                    NativeCacheKey(text, clipped.Size, original, foreground, background, initial, nativeDpiX, nativeDpiY) : null;
+                SourceTextStyle reused;
+                if (nativeCacheKey != null && TryNativeStyle(nativeCacheKey, original.Values, token, out reused)) return reused;
                 int glyphCount = SimpleGlyphCount(text);
                 Rectangle[] sourceGlyphs = glyphCount == 0 ? null : VerifiedGlyphRuns(original, glyphCount, token);
                 Coverage sourceLeading = sourceGlyphs == null ? null : CropCoverage(original, sourceGlyphs[0]);
@@ -534,15 +553,101 @@ namespace SnipStudio
                 }
                 token.ThrowIfCancellationRequested();
                 if (best == null || best.Grows) return initial;
-                return new SourceTextStyle(best.Candidate.Family, best.Size, best.Candidate.Style, initial.Confidence,
+                SourceTextStyle result = new SourceTextStyle(best.Candidate.Family, best.Size, best.Candidate.Style, initial.Confidence,
                     "Estimated source style: " + best.Candidate.Family + StyleLabel(best.Candidate.Style) + ", " +
                     best.Size.ToString("0.#", CultureInfo.InvariantCulture) + " px. Appearance compared with editor rendering; adjust if needed.");
+                if (nativeCacheKey != null) RememberNativeStyle(nativeCacheKey, original.Values, result);
+                return result;
             }
             catch (OperationCanceledException) { throw; }
             catch (ArgumentException) { return initial; }
             catch (InvalidOperationException) { return initial; }
             catch (ExternalException) { return initial; }
         }
+
+        private static string NativeCacheKey(string text, Size sourceSize, Coverage coverage,
+            Color foreground, Color background, SourceTextStyle initial, int nativeDpiX, int nativeDpiY)
+        {
+            StringBuilder key = new StringBuilder();
+            AppendNativeField(key, CacheKey(text, coverage.Ink.Size, sourceSize.Width, sourceSize.Height, coverage.Values));
+            key.Append('|').Append(foreground.ToArgb()).Append('|').Append(background.ToArgb()).Append('|')
+                .Append(Thread.CurrentThread.ManagedThreadId).Append('|').Append(nativeDpiX).Append('|').Append(nativeDpiY)
+                .Append('|').Append(initial.Confidence.ToString("R", CultureInfo.InvariantCulture));
+            AppendNativeCandidate(key, initial.FontFamily, initial.FontSizePixels, initial.Style);
+            int count = 1;
+            foreach (SourceTextCandidate candidate in initial.Candidates)
+            {
+                if (count >= 12) break;
+                if (candidate.Family == initial.FontFamily && candidate.Style == initial.Style) continue;
+                AppendNativeCandidate(key, candidate.Family, candidate.Size, candidate.Style);
+                count++;
+            }
+            if (initial.FamilyContext != null)
+            {
+                key.Append("|context|");
+                AppendNativeField(key, initial.FamilyContext.PreferredFamily);
+                key.Append('|').Append(initial.FamilyContext.SampleCount).Append('|')
+                    .Append(initial.FamilyContext.EvidenceGap.ToString("R", CultureInfo.InvariantCulture));
+            }
+            return key.ToString();
+        }
+
+        private static void AppendNativeCandidate(StringBuilder key, string family, float size, FontStyle style)
+        {
+            key.Append('|'); AppendNativeField(key, family);
+            key.Append('|').Append(size.ToString("R", CultureInfo.InvariantCulture)).Append('|').Append((int)style);
+        }
+
+        private static void AppendNativeField(StringBuilder key, string value)
+        { value = value ?? ""; key.Append(value.Length).Append(':').Append(value); }
+
+        private static bool TryNativeStyle(string key, byte[] coverage, CancellationToken token, out SourceTextStyle style)
+        {
+            token.ThrowIfCancellationRequested();
+            lock (CacheGate)
+            {
+                NativeStyleCacheEntry entry;
+                if (NativeCache.TryGetValue(key, out entry) && entry.Coverage.Length == coverage.Length)
+                {
+                    bool same = true;
+                    for (int index = 0; index < coverage.Length; index++)
+                        if (entry.Coverage[index] != coverage[index]) { same = false; break; }
+                    if (same) { token.ThrowIfCancellationRequested(); style = entry.Style; return true; }
+                }
+            }
+            style = null;
+            return false;
+        }
+
+        private static void RememberNativeStyle(string key, byte[] coverage, SourceTextStyle style)
+        {
+            int bytes = coverage.Length + key.Length * 2;
+            if (bytes > MaximumNativeCacheBytes) return;
+            lock (CacheGate)
+            {
+                // A hash is an index, not proof of identical raster evidence.
+                // TryNativeStyle also compares every observed coverage byte.
+                if (NativeCache.ContainsKey(key)) return;
+                while ((NativeCache.Count >= MaximumNativeCachedStyles || nativeCacheBytes + bytes > MaximumNativeCacheBytes) && NativeCacheOrder.Count > 0)
+                {
+                    string oldest = NativeCacheOrder.Dequeue();
+                    NativeStyleCacheEntry entry;
+                    if (NativeCache.TryGetValue(oldest, out entry)) { nativeCacheBytes -= entry.Bytes; NativeCache.Remove(oldest); }
+                }
+                NativeCache.Add(key, new NativeStyleCacheEntry { Coverage = (byte[])coverage.Clone(), Style = style, Bytes = bytes });
+                NativeCacheOrder.Enqueue(key);
+                nativeCacheBytes += bytes;
+            }
+        }
+
+        private sealed class NativeStyleCacheEntry
+        {
+            internal byte[] Coverage;
+            internal SourceTextStyle Style;
+            internal int Bytes;
+        }
+
+        [DllImport("gdi32.dll")] private static extern int GetDeviceCaps(IntPtr hdc, int index);
 
         private static bool BetterActualFit(Match candidate, Match current)
         {

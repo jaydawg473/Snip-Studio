@@ -1,0 +1,12 @@
+# Preserve every audited source, notice and script byte in Git. This keeps the
+# source fingerprint and Authenticode signatures stable without global settings.
+* -text
+*.cs -text
+*.ps1 -text
+*.json -text
+*.py -text
+*.nsi -text
+*.nsh -text
+app.config -text
+app.manifest -text
+assets/** -text

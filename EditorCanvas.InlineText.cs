@@ -185,7 +185,11 @@ namespace SnipStudio
                 PointF origin = ImageOrigin;
                 // RichEdit scales points with monitor DPI; canvas coordinates
                 // are source pixels. Cancel that DPI factor before applying zoom.
-                float factor = Math.Max(1f / 64f, Math.Min(64f, zoom * 96f / Math.Max(96, DeviceDpi)));
+                // RichTextBox rejects the exact 1/64 and 64 endpoints. Keep
+                // its keyboard/editor surface inside those native bounds;
+                // the canvas retains the user's source-image zoom, including
+                // 1%, and the stored text/font size is unchanged.
+                float factor = Math.Max(.02f, Math.Min(63f, zoom * 96f / Math.Max(96, DeviceDpi)));
                 if (Math.Abs(inlineTextEditor.ZoomFactor - factor) > .0001f) inlineTextEditor.ZoomFactor = factor;
                 if (inlineRecognizedProxy) { UpdateRecognizedInlineProxyBounds(); return; }
                 int left = (int)Math.Floor(origin.X + inlineTextLocation.X * zoom);
@@ -442,26 +446,56 @@ namespace SnipStudio
                 {
                     bool hasPlain = Clipboard.ContainsText(TextDataFormat.UnicodeText);
                     bool hasRich = Clipboard.ContainsText(TextDataFormat.Rtf);
-                    if (!hasPlain && !hasRich) return;
-                    string plain = hasPlain ? Clipboard.GetText(TextDataFormat.UnicodeText) : "";
-                    if (hasRich)
-                    {
-                        string rich = Clipboard.GetText(TextDataFormat.Rtf);
-                        try
-                        {
-                            RichTextLayout.ValidateRtf(rich);
-                            if (TextLength - SelectionLength + RichTextLayout.GetPlainText(rich).Length <= 16000)
-                            { SelectedRtf = rich; return; }
-                        }
-                        catch (ArgumentException) { }
-                    }
-                    if (hasPlain && TextLength - SelectionLength + plain.Length <= 16000) SelectedText = plain;
+                    PasteTextContent(hasPlain ? Clipboard.GetText(TextDataFormat.UnicodeText) : null,
+                        hasRich ? Clipboard.GetText(TextDataFormat.Rtf) : null);
                 }
                 catch (ExternalException)
                 {
-                    owner.inlineTextStatus = "The clipboard is busy. Try Paste again.";
-                    owner.RaiseInlineTextStateChanged();
+                    ReportPasteResult("The clipboard is busy. Try Paste again.");
                 }
+            }
+
+            // Keep clipboard access separate from insertion so rejected pastes
+            // can be checked without changing the user's real clipboard.
+            internal bool PasteTextContent(string plain, string rich)
+            {
+                bool exceedsLimit = false;
+                if (rich != null)
+                {
+                    try
+                    {
+                        if (RichTextLayout.RichTextPasteFits(this, rich))
+                        {
+                            SelectedRtf = rich;
+                            ReportPasteResult("Text pasted. Ctrl+Enter applies; Escape cancels.");
+                            return true;
+                        }
+                        exceedsLimit = true;
+                    }
+                    catch (ArgumentException) { }
+                }
+                if (plain != null)
+                {
+                    if (TextLength - SelectionLength + plain.Length <= 16000)
+                    {
+                        SelectedText = plain;
+                        ReportPasteResult("Text pasted. Ctrl+Enter applies; Escape cancels.");
+                        return true;
+                    }
+                    exceedsLimit = true;
+                }
+                ReportPasteResult(exceedsLimit
+                    ? "This paste would exceed the 16,000-character note limit. Paste a smaller selection or split it into separate notes. Your draft is kept."
+                    : rich != null
+                        ? "This formatted clipboard content cannot be pasted into one text note. Copy a smaller plain-text selection and try again. Your draft is kept."
+                        : "The clipboard contains no text to paste. Your draft is kept.");
+                return false;
+            }
+
+            private void ReportPasteResult(string message)
+            {
+                owner.inlineTextStatus = message;
+                owner.RaiseInlineTextStateChanged();
             }
             protected override void WndProc(ref Message message)
             {

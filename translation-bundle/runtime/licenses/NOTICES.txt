@@ -1,11 +1,11 @@
 Snip Studio - bundled local translation components
-Prepared 2026-11-05. These components retain their own licenses.
+Prepared 2026-11-05; Node runtime refreshed 2026-11-18. These components retain their own licenses.
 
-Node.js 24.22.2, unmodified official Windows x64 binary
+Node.js 24.22.3, unmodified official Windows x64 binary
 Copyright OpenJS Foundation and other contributors.
 The full Node.js and bundled third-party notices are in Node-LICENSE.txt.
-Original package: https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip
-SHA256: ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2
+Original package: https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip
+SHA256: e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f
 The executable retains its original OpenJS Foundation Authenticode signature.
 
 Bergamot Translator 0.4.9

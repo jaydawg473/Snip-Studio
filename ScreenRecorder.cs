@@ -45,6 +45,7 @@ namespace SnipStudio
         private readonly object gate = new object();
         private readonly ManualResetEvent stop = new ManualResetEvent(false);
         private readonly Action<Bitmap, Rectangle, bool> captureFrame;
+        private readonly Action<Thread> startWorker;
         private Stopwatch clock = new Stopwatch();
         private Thread worker;
         private TaskCompletionSource<bool> finished;
@@ -70,10 +71,16 @@ namespace SnipStudio
 
         public ScreenRecorder() : this(CaptureFrame) { }
         internal ScreenRecorder(Action<Bitmap, Rectangle, bool> captureFrame)
+            : this(captureFrame, StartWorkerThread) { }
+        internal ScreenRecorder(Action<Bitmap, Rectangle, bool> captureFrame, Action<Thread> startWorker)
         {
             if (captureFrame == null) throw new ArgumentNullException("captureFrame");
+            if (startWorker == null) throw new ArgumentNullException("startWorker");
             this.captureFrame = captureFrame;
+            this.startWorker = startWorker;
         }
+
+        private static void StartWorkerThread(Thread thread) { thread.Start(); }
 
         public Task StartAsync(Rectangle screenRegion, string destinationPath)
         { return StartAsync(screenRegion, destinationPath, new ScreenRecordingOptions()); }
@@ -112,11 +119,25 @@ namespace SnipStudio
                 DestinationPath = path;
                 RecoveryPath = null;
                 finished = new TaskCompletionSource<bool>();
-                worker = new Thread(new ThreadStart(delegate { Record(region, path, snapshot, ready); }));
-                worker.IsBackground = true;
-                worker.Name = "Snip Studio screen recorder";
-                worker.SetApartmentState(ApartmentState.MTA);
-                worker.Start();
+                try
+                {
+                    worker = new Thread(new ThreadStart(delegate { Record(region, path, snapshot, ready); }));
+                    worker.IsBackground = true;
+                    worker.Name = "Snip Studio screen recorder";
+                    worker.SetApartmentState(ApartmentState.MTA);
+                    startWorker(worker);
+                }
+                catch (Exception error)
+                {
+                    // No worker can complete the pending task when thread
+                    // initialization fails. Leave this recorder retryable and
+                    // let the caller handle the original startup exception.
+                    starting = false;
+                    worker = null;
+                    finished = null;
+                    lastError = error;
+                    throw;
+                }
             }
             return ready.Task;
         }

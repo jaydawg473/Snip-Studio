@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent
 PAYLOAD = ROOT / "runtime"
 draft = json.loads((ROOT / "bundle-draft.json").read_text(encoding="utf-8"))
 node = PAYLOAD / "runtime" / "node.exe"
-if hashlib.sha256(node.read_bytes()).hexdigest() != "1c331340fa6cac5e4294725959070a143fa0507195a78ad77eed7943f719aac9":
+if hashlib.sha256(node.read_bytes()).hexdigest() != "86fc4785327db5f5c7558dc6156c543b433c313e813a222e088086222ab4afa6":
     raise RuntimeError("The verified original Node executable changed")
 expected_pairs = {("en", lang) for lang in ("de", "es", "fr")} | {(lang, "en") for lang in ("de", "es", "fr")}
 if {(item["source"], item["target"]) for item in draft["models"]} != expected_pairs or len(draft["models"]) != 6:
@@ -48,8 +48,8 @@ draft["sources"] = {
     "bergamotNpm": "https://registry.npmjs.org/@browsermt/bergamot-translator/-/bergamot-translator-0.4.9.tgz",
     "bergamotNpmIntegrity": "sha512-bNuuCwM/JnsIYQCKXcYKFT4Qc5vLMoB8Nbvz8ReIgs7xzebK8Sa+R8iEK8mLvNBe/WaZ6zrPaUQilLsRT/ea8Q==",
     "bergamotCommit": "8cc5d0495479c9ec56eafafd6bcd7fb5b929ca98",
-    "nodeZip": "https://nodejs.org/dist/v24.22.2/node-v24.22.2-win-x64.zip",
-    "nodeZipSha256": "ca1bff5d8ead13c9f2ea404a176db46bd430704d5b5113734049fa365e7799e2",
+    "nodeZip": "https://nodejs.org/dist/v24.22.3/node-v24.22.3-win-x64.zip",
+    "nodeZipSha256": "e612af99f626ab415ea225af6bce5c971feb448cb5cae250bb1c3fa50c5f7d9f",
     "nodeSigner": "OpenJS Foundation (original Authenticode signature verified Valid before use)",
 }
 draft["files"] = []

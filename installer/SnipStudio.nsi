@@ -4,6 +4,19 @@ Unicode true
 !include "WinVer.nsh"
 !include "FileFunc.nsh"
 
+!ifndef RELEASE_VERSION
+  !define RELEASE_VERSION "0.6.23"
+!endif
+!ifndef UNINSTALL_SIGN_HOST
+  !error "A verified signing host is required for the generated uninstaller."
+!endif
+!ifndef UNINSTALL_SIGN_SCRIPT
+  !error "A verified uninstaller signing hook is required."
+!endif
+; NSIS 3.08+ signs the complete generated executable before embedding it.
+; The hook saves a verified full copy for auditing and never executes it.
+!uninstfinalize '"${UNINSTALL_SIGN_HOST}" -NoProfile -NonInteractive -File "${UNINSTALL_SIGN_SCRIPT}" -ArtifactPath "%1" -ReleaseVersion "${RELEASE_VERSION}"' = 0
+
 Var PreflightCheckOnly
 Var PreflightProbeOnly
 Var PreflightCloseApproved
@@ -14,7 +27,7 @@ Var InstalledCloseScanCount
 Var InstalledProbeExitCode
 
 !ifndef RELEASE_DIR
-  !define RELEASE_DIR "${__FILEDIR__}\..\release-0.6.21-signed"
+  !define RELEASE_DIR "${__FILEDIR__}\..\release-${RELEASE_VERSION}-signed"
 !endif
 !ifndef OUTPUT_DIR
   !define OUTPUT_DIR "${__FILEDIR__}\output"
@@ -30,7 +43,7 @@ Var InstalledProbeExitCode
 !endif
 
 Name "Snip Studio"
-OutFile "${OUTPUT_DIR}\SnipStudio-0.6.21-Setup.exe"
+OutFile "${OUTPUT_DIR}\SnipStudio-${RELEASE_VERSION}-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\Automation Forge\Snip Studio"
 InstallDirRegKey HKCU "Software\Automation Forge\Snip Studio" "InstallLocation"
 RequestExecutionLevel user
@@ -40,10 +53,10 @@ SetCompressorDictSize 16
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "Automation Forge"
-VIProductVersion "0.6.21.0"
+VIProductVersion "${RELEASE_VERSION}.0"
 VIAddVersionKey /LANG=1033 "ProductName" "Snip Studio"
-VIAddVersionKey /LANG=1033 "ProductVersion" "0.6.21.0"
-VIAddVersionKey /LANG=1033 "FileVersion" "0.6.21.0"
+VIAddVersionKey /LANG=1033 "ProductVersion" "${RELEASE_VERSION}.0"
+VIAddVersionKey /LANG=1033 "FileVersion" "${RELEASE_VERSION}.0"
 VIAddVersionKey /LANG=1033 "FileDescription" "Snip Studio Setup"
 VIAddVersionKey /LANG=1033 "CompanyName" "Automation Forge LLC"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "Copyright 2026 Automation Forge LLC"
@@ -479,7 +492,7 @@ Section "Snip Studio (required)" MainApplication
 
   WriteRegStr HKCU "Software\Automation Forge\Snip Studio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayName" "Snip Studio"
-  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "0.6.21"
+  WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayVersion" "${RELEASE_VERSION}"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "Publisher" "Automation Forge LLC"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "InstallLocation" "$INSTDIR"
   WriteRegStr HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio" "DisplayIcon" "$INSTDIR\Snip Studio.exe,0"

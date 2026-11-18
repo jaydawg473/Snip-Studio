@@ -206,7 +206,11 @@ namespace SnipStudio
 
         private void OnRecordingStatus(object sender, RecordingStatusEventArgs e)
         {
-            if (IsDisposed || Disposing || !recordingSession) return;
+            // A worker notification may already be queued when the previous
+            // recorder is unsubscribed. It must not update or stop a later
+            // recording after the UI message loop delivers that callback.
+            if (IsDisposed || Disposing || !recordingSession || screenRecorder == null ||
+                !Object.ReferenceEquals(sender, screenRecorder)) return;
             if (InvokeRequired)
             {
                 try { BeginInvoke((MethodInvoker)delegate { OnRecordingStatus(sender, e); }); }

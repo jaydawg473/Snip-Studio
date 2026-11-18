@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Runtime.CompilerServices;
 
 namespace SnipStudio
 {
@@ -8,6 +9,10 @@ namespace SnipStudio
     // No pointer-to-text guess is returned unless both ends are near actual words.
     public static class TextSnapSelection
     {
+        private static readonly object SnapshotGate = new object();
+        private static readonly ConditionalWeakTable<IList<TextLineRegion>, WordSnapshot> Snapshots =
+            new ConditionalWeakTable<IList<TextLineRegion>, WordSnapshot>();
+        private static readonly List<WordPosition> EmptyWords = new List<WordPosition>();
         public static bool CanStart(IList<TextLineRegion> lines, PointF start, float tolerance)
         {
             if (!Finite(start)) return false;
@@ -56,6 +61,22 @@ namespace SnipStudio
 
         private static List<WordPosition> Flatten(IList<TextLineRegion> lines)
         {
+            if (lines == null) return EmptyWords;
+            lock (SnapshotGate)
+            {
+                WordSnapshot snapshot;
+                if (!Snapshots.TryGetValue(lines, out snapshot) || !snapshot.Matches(lines))
+                {
+                    snapshot = new WordSnapshot(lines.Count, CopyWords(lines));
+                    Snapshots.Remove(lines);
+                    Snapshots.Add(lines, snapshot);
+                }
+                return snapshot.Words;
+            }
+        }
+
+        private static List<WordPosition> CopyWords(IList<TextLineRegion> lines)
+        {
             List<WordPosition> words = new List<WordPosition>();
             if (lines == null) return words;
             for (int lineIndex = 0; lineIndex < lines.Count; lineIndex++)
@@ -76,6 +97,30 @@ namespace SnipStudio
                         words.Add(new WordPosition { Line = lineIndex, Bounds = word.Bounds, LineBounds = lineBounds });
             }
             return words;
+        }
+
+        private sealed class WordSnapshot
+        {
+            internal readonly List<WordPosition> Words;
+            private readonly int lineCount;
+            internal WordSnapshot(int count, List<WordPosition> words) { lineCount = count; Words = words; }
+            internal bool Matches(IList<TextLineRegion> lines)
+            {
+                if (lines.Count != lineCount) return false;
+                int index = 0;
+                for (int line = 0; line < lines.Count; line++)
+                {
+                    TextLineRegion source = lines[line];
+                    if (source == null || source.Words == null) continue;
+                    foreach (TextWordRegion word in source.Words)
+                    {
+                        if (word == null || !Valid(word.Bounds)) continue;
+                        if (index >= Words.Count || Words[index].Line != line || Words[index].Bounds != word.Bounds) return false;
+                        index++;
+                    }
+                }
+                return index == Words.Count;
+            }
         }
 
         private static int FindStart(List<WordPosition> words, PointF point, float tolerance)

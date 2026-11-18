@@ -15,6 +15,7 @@ namespace SnipStudio
         private readonly Func<CancellationToken, Task<RecentSnipsResult>> readRecent;
         private readonly Func<string, int, CancellationToken, Task<Bitmap>> readPreview;
         private readonly Action<string> openImage;
+        private readonly int requestTimeoutMilliseconds;
         private readonly List<RecentSnipRow> rows = new List<RecentSnipRow>();
         private readonly Label help = new Label();
         private readonly Label status = new Label();
@@ -30,6 +31,8 @@ namespace SnipStudio
         private CancellationTokenSource recentCancellation, previewCancellation;
         private int recentGeneration, previewGeneration, hoveredIndex = -1, previewIndex = -1;
         private bool disposed, opened, openingImage;
+        internal float LayoutScaleOverride = 0f;
+        internal Rectangle LayoutWorkingAreaOverride = Rectangle.Empty;
         internal bool RestoreWithoutActivation { get; set; }
         protected override bool ShowWithoutActivation { get { return RestoreWithoutActivation; } }
 
@@ -41,13 +44,20 @@ namespace SnipStudio
         // without reading Windows history, the shell, or any user's image files.
         internal RecentSnipsForm(Func<CancellationToken, Task<RecentSnipsResult>> readRecent,
             Func<string, int, CancellationToken, Task<Bitmap>> readPreview, Action<string> openImage)
+            : this(readRecent, readPreview, openImage, 8000) { }
+
+        internal RecentSnipsForm(Func<CancellationToken, Task<RecentSnipsResult>> readRecent,
+            Func<string, int, CancellationToken, Task<Bitmap>> readPreview, Action<string> openImage, int requestTimeoutMilliseconds)
         {
             if (readRecent == null) throw new ArgumentNullException("readRecent");
             if (readPreview == null) throw new ArgumentNullException("readPreview");
             if (openImage == null) throw new ArgumentNullException("openImage");
+            if (requestTimeoutMilliseconds < 1 || requestTimeoutMilliseconds > 30000)
+                throw new ArgumentOutOfRangeException("requestTimeoutMilliseconds");
             this.readRecent = readRecent;
             this.readPreview = readPreview;
             this.openImage = openImage;
+            this.requestTimeoutMilliseconds = requestTimeoutMilliseconds;
             Text = "Recent snips — Snip Studio";
             Font = new Font("Segoe UI", 10f);
             AutoScaleDimensions = new SizeF(96, 96);
@@ -67,6 +77,8 @@ namespace SnipStudio
             status.Text = "Choose Refresh to read recent saved or opened snips from Windows.";
             status.ForeColor = StudioTheme.Muted;
             status.UseMnemonic = false;
+            status.AutoEllipsis = true;
+            status.TextChanged += delegate { tips.SetToolTip(status, status.Text); };
             recentList.DrawMode = DrawMode.OwnerDrawFixed;
             recentList.IntegralHeight = false;
             recentList.BorderStyle = BorderStyle.FixedSingle;
@@ -87,6 +99,15 @@ namespace SnipStudio
                 hoveredIndex = -1;
                 hoverTimer.Stop();
                 if (e.KeyCode == Keys.Enter) { e.Handled = true; e.SuppressKeyPress = true; OpenSelectedSnip(); }
+            };
+            recentList.MouseClick += async delegate(object sender, MouseEventArgs e)
+            {
+                if (e.Button != MouseButtons.Left || previewCancellation != null) return;
+                int index = recentList.IndexFromPoint(e.Location);
+                // SelectedIndexChanged does not fire when the same row is
+                // clicked after a timeout. That click is an explicit retry.
+                if (index >= 0 && index == recentList.SelectedIndex && index == previewIndex)
+                    await PreviewItemAsync(index);
             };
             filename.Text = "Preview";
             filename.AutoEllipsis = true;
@@ -132,7 +153,8 @@ namespace SnipStudio
             base.OnShown(e);
             if (opened) return;
             opened = true;
-            Rectangle work = Screen.FromControl(this).WorkingArea;
+            Rectangle work = LayoutWorkingAreaOverride.Width > 0 && LayoutWorkingAreaOverride.Height > 0
+                ? LayoutWorkingAreaOverride : Screen.FromControl(this).WorkingArea;
             if (Width > work.Width - 24 || Height > work.Height - 24)
             {
                 MinimumSize = new Size(Math.Min(MinimumSize.Width, Math.Max(320, work.Width - 24)), Math.Min(MinimumSize.Height, Math.Max(320, work.Height - 24)));
@@ -146,12 +168,13 @@ namespace SnipStudio
         {
             base.OnLayout(e);
             if (help == null) return;
-            float scale = Math.Max(1f, DeviceDpi / 96f);
+            float scale = LayoutScaleOverride > 0 ? LayoutScaleOverride : Math.Max(1f, DeviceDpi / 96f);
             RecentSnipsLayout layout = RecentSnipsLayout.Measure(ClientSize, scale);
             help.Bounds = layout.Help;
             status.Bounds = layout.Status;
             recentList.Bounds = layout.List;
-            recentList.ItemHeight = Math.Max(64, (int)Math.Round(82 * scale));
+            int preferredItemHeight = Math.Max(64, (int)Math.Round(82 * scale));
+            recentList.ItemHeight = Math.Min(preferredItemHeight, Math.Max(Math.Max(32, Font.Height + 8), layout.List.Height));
             filename.Bounds = layout.Filename;
             path.Bounds = layout.Path;
             preview.Bounds = layout.Preview;
@@ -168,21 +191,42 @@ namespace SnipStudio
             int generation = ++recentGeneration;
             ++previewGeneration;
             recentCancellation = new CancellationTokenSource();
+            CancellationTokenSource request = recentCancellation;
             CancellationToken token = recentCancellation.Token;
             refresh.Enabled = false;
             hoverTimer.Stop();
             hoveredIndex = -1;
-            status.Text = "Loading recent snips from Windows…";
-            ClearRows();
-            SetPreview(null, "Loading the Windows recent list…");
-            filename.Text = "Preview";
-            path.Text = "";
-            open.Enabled = false;
+            status.Text = rows.Count == 0 ? "Loading recent snips from Windows…" : "Refreshing recent snips from Windows…";
+            // A slow or unavailable Shell provider must not discard the last
+            // usable list/preview before a replacement has actually arrived.
+            if (rows.Count == 0)
+            {
+                SetPreview(null, "Loading the Windows recent list…");
+                filename.Text = "Preview";
+                path.Text = "";
+                open.Enabled = false;
+            }
             try
             {
-                RecentSnipsResult result = await readRecent(token);
+                RecentSnipsResult result = await AwaitBoundedAsync(readRecent(token), token, null);
                 if (disposed || token.IsCancellationRequested || generation != recentGeneration) return;
                 if (result == null) throw new InvalidOperationException("Windows did not return a recent list.");
+                if (!result.IsAvailable)
+                {
+                    SettleRetainedThumbnails();
+                    status.Text = !String.IsNullOrWhiteSpace(result.Message) ? result.Message : "The Windows recent list is unavailable.";
+                    if (rows.Count > 0) status.Text += " The previous list is kept.";
+                    if (rows.Count == 0 || preview.Image == null) SetPreview(null, "Windows recent snips are unavailable. Choose Refresh to try again.");
+                    return;
+                }
+                string selectedPath = previewIndex >= 0 && previewIndex < rows.Count ? rows[previewIndex].Info.Path : null;
+                CancelWork(ref previewCancellation);
+                ++previewGeneration;
+                ClearRows();
+                SetPreview(null, "Select or hover over a recent snip to see its preview.");
+                filename.Text = "Preview";
+                path.Text = "";
+                open.Enabled = false;
                 if (result.Items != null)
                 {
                     recentList.BeginUpdate();
@@ -207,17 +251,43 @@ namespace SnipStudio
                 else
                 {
                     status.Text = rows.Count + (rows.Count == 1 ? " recent snip. " : " recent snips. ") + (!String.IsNullOrWhiteSpace(result.Message) ? result.Message : "Hover or select to preview; Open snip opens it.");
-                    recentList.SelectedIndex = 0;
+                    int selectedIndex = 0;
+                    if (selectedPath != null)
+                        for (int index = 0; index < rows.Count; index++)
+                            if (String.Equals(rows[index].Info.Path, selectedPath, StringComparison.OrdinalIgnoreCase)) { selectedIndex = index; break; }
+                    recentList.SelectedIndex = selectedIndex;
                     LoadRowThumbnailsAsync(generation, token);
                 }
             }
-            catch (OperationCanceledException) { }
+            catch (TimeoutException)
+            {
+                if (!disposed && generation == recentGeneration && Object.ReferenceEquals(recentCancellation, request))
+                {
+                    request.Cancel();
+                    SettleRetainedThumbnails();
+                    status.Text = "Windows took too long to return recent snips. Choose Refresh to try again." +
+                        (rows.Count > 0 ? " The previous list is kept." : "");
+                    if (preview.Image == null) SetPreview(null, "The Windows recent list timed out. Your current editor image is unchanged.");
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!disposed && !token.IsCancellationRequested && generation == recentGeneration)
+                {
+                    SettleRetainedThumbnails();
+                    status.Text = "Windows canceled the recent-list request. Choose Refresh to try again." +
+                        (rows.Count > 0 ? " The previous list is kept." : "");
+                    if (preview.Image == null) SetPreview(null, "Recent snips are unavailable. Your current editor image is unchanged.");
+                }
+            }
             catch (Exception)
             {
                 if (!disposed && generation == recentGeneration)
                 {
-                    status.Text = "The Windows recent list could not be read. Choose Refresh to try again.";
-                    SetPreview(null, "Recent snips are unavailable. Your current editor image is unchanged.");
+                    SettleRetainedThumbnails();
+                    status.Text = "The Windows recent list could not be read. Choose Refresh to try again." +
+                        (rows.Count > 0 ? " The previous list is kept." : "");
+                    if (rows.Count == 0 || preview.Image == null) SetPreview(null, "Recent snips are unavailable. Your current editor image is unchanged.");
                 }
             }
             finally
@@ -235,9 +305,13 @@ namespace SnipStudio
                 if (disposed || token.IsCancellationRequested || generation != recentGeneration) return;
                 RecentSnipRow row = rows[index];
                 Bitmap image = null;
-                try { image = await readPreview(row.Info.Path, 128, token); }
-                catch (OperationCanceledException) { return; }
-                catch (Exception) { }
+                using (CancellationTokenSource request = CancellationTokenSource.CreateLinkedTokenSource(token))
+                {
+                    try { image = await AwaitBoundedAsync(readPreview(row.Info.Path, 128, request.Token), request.Token, DisposeLateBitmap); }
+                    catch (TimeoutException) { request.Cancel(); }
+                    catch (OperationCanceledException) { return; }
+                    catch (Exception) { }
+                }
                 if (disposed || token.IsCancellationRequested || generation != recentGeneration)
                 {
                     if (image != null) image.Dispose();
@@ -265,6 +339,7 @@ namespace SnipStudio
             CancelWork(ref previewCancellation);
             int generation = ++previewGeneration;
             previewCancellation = new CancellationTokenSource();
+            CancellationTokenSource request = previewCancellation;
             CancellationToken token = previewCancellation.Token;
             previewIndex = index;
             RecentSnipInfo item = rows[index].Info;
@@ -274,7 +349,17 @@ namespace SnipStudio
             open.Enabled = !openingImage;
             SetPreview(null, "Loading preview…");
             Bitmap image = null;
-            try { image = await readPreview(item.Path, 640, token); }
+            try { image = await AwaitBoundedAsync(readPreview(item.Path, 640, token), token, DisposeLateBitmap); }
+            catch (TimeoutException)
+            {
+                if (!disposed && generation == previewGeneration && previewIndex == index && Object.ReferenceEquals(previewCancellation, request))
+                {
+                    request.Cancel();
+                    if (Object.ReferenceEquals(previewCancellation, request)) CancelWork(ref previewCancellation);
+                    SetPreview(null, "Windows took too long to return this preview. Open snip can still try the file; select it again to retry the preview.");
+                }
+                return;
+            }
             catch (OperationCanceledException) { }
             catch (Exception) { }
             if (disposed || token.IsCancellationRequested || generation != previewGeneration || previewIndex != index)
@@ -283,6 +368,46 @@ namespace SnipStudio
                 return;
             }
             SetPreview(image, image == null ? "Preview unavailable. The file may have moved, be offline, or have no Windows thumbnail. Choose Open snip to try opening it." : "");
+        }
+
+        // Shell calls cannot be aborted safely. Bound the UI's wait without
+        // creating replacement workers; canceled queued requests are discarded
+        // by the existing service, and an ignored cancellation still has its
+        // late result observed/disposed here.
+        private async Task<T> AwaitBoundedAsync<T>(Task<T> operation, CancellationToken token, Action<T> disposeLate)
+        {
+            if (operation == null) throw new InvalidOperationException("Windows did not return a request.");
+            using (CancellationTokenSource delayCancellation = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                Task delay = Task.Delay(requestTimeoutMilliseconds, delayCancellation.Token);
+                Task finished = await Task.WhenAny(operation, delay);
+                if (Object.ReferenceEquals(finished, operation))
+                {
+                    delayCancellation.Cancel();
+                    return await operation;
+                }
+                Task observer = operation.ContinueWith(delegate(Task<T> completed)
+                {
+                    if (completed.Status == TaskStatus.RanToCompletion)
+                    {
+                        if (disposeLate != null) disposeLate(completed.Result);
+                    }
+                    else if (completed.IsFaulted) GC.KeepAlive(completed.Exception);
+                }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+                GC.KeepAlive(observer);
+                token.ThrowIfCancellationRequested();
+                throw new TimeoutException("The Windows request took too long.");
+            }
+        }
+
+        private static void DisposeLateBitmap(Bitmap image) { if (image != null) image.Dispose(); }
+
+        private void SettleRetainedThumbnails()
+        {
+            // Refresh canceled the previous loader. Retained rows no longer
+            // have pending thumbnail requests, so do not leave a loading cue.
+            foreach (RecentSnipRow row in rows) row.ThumbnailLoaded = true;
+            recentList.Invalidate();
         }
 
         private void OpenSelectedSnip()
@@ -405,20 +530,43 @@ namespace SnipStudio
         {
             Func<int, int> ui = delegate(int value) { return Math.Max(1, (int)Math.Round(value * scale)); };
             int gap = ui(12), width = Math.Max(1, client.Width - gap * 2), buttonHeight = ui(36), buttonWidth = ui(106);
-            int footer = Math.Max(gap, client.Height - gap - buttonHeight);
+            int actionRows = width >= buttonWidth * 3 + gap * 2 ? 1 : width >= buttonWidth * 2 + gap ? 2 : 3;
+            int footerHeight = actionRows * buttonHeight + (actionRows - 1) * gap;
+            int footer = Math.Max(gap, client.Height - gap - footerHeight);
+            buttonWidth = Math.Min(buttonWidth, width);
             bool compact = client.Height < ui(440);
             int helpHeight = client.Width < ui(740) ? ui(compact ? 50 : 62) : ui(46);
             int statusHeight = ui(compact ? 32 : 42);
-            int contentTop = gap + helpHeight + gap + statusHeight + gap;
+            int statusTop = gap + helpHeight + gap;
+            int contentTop = statusTop + statusHeight + gap;
             int contentHeight = Math.Max(1, footer - gap - contentTop);
+            if (contentHeight < ui(96))
+            {
+                // Keep the list and actions reachable on short high-DPI work
+                // areas. The list tooltip retains the optional help text.
+                helpHeight = 0;
+                statusHeight = Math.Min(ui(26), Math.Max(ui(16), (footer - gap * 3) / 3));
+                statusTop = gap;
+                contentTop = statusTop + statusHeight + gap;
+                contentHeight = Math.Max(1, footer - gap - contentTop);
+            }
             RecentSnipsLayout result = new RecentSnipsLayout();
             result.Help = new Rectangle(gap, gap, width, helpHeight);
-            result.Status = new Rectangle(gap, gap + helpHeight + gap, width, statusHeight);
+            result.Status = new Rectangle(gap, statusTop, width, statusHeight);
             result.Refresh = new Rectangle(gap, footer, buttonWidth, buttonHeight);
-            result.Close = new Rectangle(Math.Max(gap, client.Width - gap - buttonWidth), footer, buttonWidth, buttonHeight);
-            result.Open = new Rectangle(Math.Max(gap, result.Close.Left - gap - buttonWidth), footer, buttonWidth, buttonHeight);
+            int closeTop = footer + (actionRows - 1) * (buttonHeight + gap);
+            result.Close = new Rectangle(Math.Max(gap, client.Width - gap - buttonWidth), closeTop, buttonWidth, buttonHeight);
+            if (actionRows == 3)
+            {
+                // On the narrowest working areas, stack full-width actions.
+                result.Refresh.Width = width;
+                result.Open = new Rectangle(gap, footer + buttonHeight + gap, width, buttonHeight);
+                result.Close = new Rectangle(gap, closeTop, width, buttonHeight);
+            }
+            else
+                result.Open = new Rectangle(Math.Max(gap, result.Close.Left - gap - buttonWidth), closeTop, buttonWidth, buttonHeight);
             int rightLeft, rightTop, rightWidth, rightHeight;
-            if (client.Width >= ui(380))
+            if (client.Width >= ui(380) || contentHeight < ui(160))
             {
                 int leftWidth = Math.Min(ui(340), Math.Max(ui(150), (int)(width * .36)));
                 leftWidth = Math.Min(leftWidth, Math.Max(1, (width - gap) / 2));

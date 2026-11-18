@@ -347,7 +347,7 @@ namespace SnipStudio
 
         private void ResizeForSnip()
         {
-            if (!preferences.ResizeToSnip || !canvas.HasImage || WindowState == FormWindowState.Maximized || IsFullScreenEditor) return;
+            if (!preferences.ResizeToSnip || !canvas.HasImage || userSizedEditorWindow || WindowState == FormWindowState.Maximized || IsFullScreenEditor) return;
             Rectangle work = EditorWorkingArea();
             if (work.Width < 1 || work.Height < 1) return;
             // Prefer native source pixels over an arbitrary desktop gap. Only

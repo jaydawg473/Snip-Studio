@@ -8,6 +8,7 @@ namespace SnipStudio
         private object observedInitialImage, initialFitImage;
         private long initialFitRevision;
         private bool initialFitPending, initialFitQueued, initialFitHandleHooked, initialFitUserIntentHooked;
+        private bool userSizedEditorWindow;
 
         private void TrackInitialImageView()
         {
@@ -25,6 +26,7 @@ namespace SnipStudio
             // New/replaced images have a fresh history. Undo, crop and source
             // removal must not silently create a new presentation session.
             if (image == null || canvas.CanUndo || canvas.CanRedo) return;
+            userSizedEditorWindow = false;
             initialFitImage = image;
             initialFitRevision = canvas.DocumentRevision;
             initialFitPending = true;
@@ -37,6 +39,15 @@ namespace SnipStudio
             // completion must not grow this window back to its initial size.
             initialFitPending = false;
             initialFitImage = null;
+            if (canvas.HasImage)
+            {
+                // The initial shell prefers complete command rows and native
+                // image pixels. A manual resize may use the existing toolbar
+                // scrollbars and a smaller fitted viewport instead. Lower the
+                // tracking limits before Windows clamps the first shrink.
+                userSizedEditorWindow = true;
+                LayoutChrome();
+            }
         }
 
         private void InitialImageFitUserCanvasMouseDown(object sender, MouseEventArgs e)

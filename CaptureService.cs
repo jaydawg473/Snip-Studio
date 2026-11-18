@@ -20,6 +20,8 @@ namespace SnipStudio
         AllMonitors = 5
     }
 
+    internal enum CaptureOverlayPurpose { Screenshot, Recording, Scrolling }
+
     public static class CaptureService
     {
         public static bool UseHdrColorCorrection { get; set; }
@@ -164,9 +166,21 @@ namespace SnipStudio
             // and monitor modes must not silently change the recording selection.
             if (selectionMode != CaptureMode.Rectangle && selectionMode != CaptureMode.Window)
                 throw new ArgumentOutOfRangeException("selectionMode", "Choose Draw area or Window for recording.");
+            return SelectDesktopRegion(selectionMode, hideTaskbars, keepPrimaryVisible, CaptureOverlayPurpose.Recording);
+        }
+
+        internal static Rectangle? SelectScrollingRegion(bool hideTaskbars, bool keepPrimaryVisible)
+        {
+            return SelectDesktopRegion(CaptureMode.Rectangle, hideTaskbars, keepPrimaryVisible, CaptureOverlayPurpose.Scrolling);
+        }
+
+        private static Rectangle? SelectDesktopRegion(CaptureMode selectionMode, bool hideTaskbars, bool keepPrimaryVisible,
+            CaptureOverlayPurpose purpose)
+        {
             Rectangle desktopBounds = SystemInformation.VirtualScreen;
             if (desktopBounds.Width < 1 || desktopBounds.Height < 1)
-                throw new InvalidOperationException("No desktop is available to record.");
+                throw new InvalidOperationException(purpose == CaptureOverlayPurpose.Recording ?
+                    "No desktop is available to record." : "No desktop is available to capture.");
             Bitmap desktop = null;
             List<CaptureWindow> windows = new List<CaptureWindow>();
             try
@@ -184,7 +198,7 @@ namespace SnipStudio
                 throw;
             }
             using (desktop)
-            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, selectionMode, windows, true))
+            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, selectionMode, windows, purpose))
                 return overlay.ShowDialog() == DialogResult.OK ? (Rectangle?)overlay.SelectedScreenBounds : null;
         }
 
@@ -321,6 +335,13 @@ namespace SnipStudio
         }
 
         internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows, bool forRecording)
+            : this(desktop, desktopBounds, mode, windows,
+                forRecording ? CaptureOverlayPurpose.Recording : CaptureOverlayPurpose.Screenshot)
+        {
+        }
+
+        internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows,
+            CaptureOverlayPurpose purpose)
         {
             this.desktop = desktop;
             this.desktopBounds = desktopBounds;
@@ -332,13 +353,19 @@ namespace SnipStudio
             instructionDetail = mode == CaptureMode.FullScreen ? "One complete monitor    |    Esc or right-click to cancel" :
                 mode == CaptureMode.Window ? "Visible window area    |    Esc or right-click to cancel" :
                 "Release to capture    |    Esc or right-click to cancel";
-            if (forRecording)
+            if (purpose == CaptureOverlayPurpose.Recording)
             {
                 instructionTitle = mode == CaptureMode.Window ? "Click a window to record" : "Drag to select a recording area";
                 instructionDetail = mode == CaptureMode.Window ? "Visible window area    |    Esc or right-click to cancel" :
                     "Release to choose the recording area    |    Esc or right-click to cancel";
             }
-            Text = forRecording ? "Choose a recording area - Snip Studio" : "Choose a snip - Snip Studio";
+            else if (purpose == CaptureOverlayPurpose.Scrolling)
+            {
+                instructionTitle = "Select scrolling content";
+                instructionDetail = "Drag around the content to scroll    |    Esc or right-click to cancel";
+            }
+            Text = purpose == CaptureOverlayPurpose.Recording ? "Choose a recording area - Snip Studio" :
+                purpose == CaptureOverlayPurpose.Scrolling ? "Choose scrolling content - Snip Studio" : "Choose a snip - Snip Studio";
             FormBorderStyle = FormBorderStyle.None;
             StartPosition = FormStartPosition.Manual;
             AutoScaleMode = AutoScaleMode.None;

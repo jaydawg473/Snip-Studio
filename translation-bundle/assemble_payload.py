@@ -48,9 +48,9 @@ def copy_tar(archive, destination, drop_prefix=True):
 
 node_target = PAYLOAD / "runtime"
 node_target.mkdir(exist_ok=True)
-with zipfile.ZipFile(DOWNLOADS / "node-v24.22.2-win-x64.zip") as source:
+with zipfile.ZipFile(DOWNLOADS / "node-v24.22.3-win-x64.zip") as source:
     for name in ["node.exe", "LICENSE", "README.md"]:
-        entry = source.getinfo("node-v24.22.2-win-x64/" + name)
+        entry = source.getinfo("node-v24.22.3-win-x64/" + name)
         safe_parts(entry.filename)
         if stat.S_ISLNK(entry.external_attr >> 16):
             raise RuntimeError("Node archive has a symbolic link")
@@ -109,5 +109,5 @@ for model in models:
                     "files": files, "config": runtime_config, "archiveUrl": model["url"], "archiveSha256": model["checksum"]})
 
 shutil.copyfile(ROOT / "worker.js", PAYLOAD / "worker.js")
-(ROOT / "bundle-draft.json").write_text(json.dumps({"version": 1, "engine": {"name": "Bergamot", "version": "0.4.9", "node": "24.22.2"}, "models": entries}, indent=2) + "\n", encoding="utf-8")
+(ROOT / "bundle-draft.json").write_text(json.dumps({"version": 1, "engine": {"name": "Bergamot", "version": "0.4.9", "node": "24.22.3"}, "models": entries}, indent=2) + "\n", encoding="utf-8")
 print(json.dumps({"models": len(entries), "payloadFiles": sum(p.is_file() for p in PAYLOAD.rglob("*")), "bytes": sum(p.stat().st_size for p in PAYLOAD.rglob("*") if p.is_file())}))

@@ -92,7 +92,7 @@ namespace SnipStudio
                 BeginRecognizedAnnotationInline(owner, caret); return;
             }
             CancelGesture();
-            Rectangle erase = PaddedTextBounds(line.Bounds);
+            Rectangle erase = PaddedTextBounds(line.Bounds, line.ExcludedGraphicBounds, line.RecognitionClipBounds);
             if (erase.Width < 12 || erase.Height < 2) return;
             Color background, foreground;
             SampleTextColors(erase, out background, out foreground);
@@ -176,11 +176,21 @@ namespace SnipStudio
                 { selectedIndex = -1; RaiseChanged(); }
                 return;
             }
-            Rectangle erase = PaddedTextBounds(line.Bounds);
+            Rectangle erase = PaddedTextBounds(line.Bounds, line.ExcludedGraphicBounds, line.RecognitionClipBounds);
             Color background, foreground;
             SampleTextColors(erase, out background, out foreground);
             List<Rectangle> selectedRegions = new List<Rectangle>();
-            foreach (RectangleF band in textSelection.SelectedLineBounds()) selectedRegions.Add(PaddedTextBounds(band));
+            foreach (RectangleF band in textSelection.SelectedLineBounds())
+            {
+                Rectangle padded = PaddedTextBounds(band);
+                foreach (TextLineRegion sourceLine in recognizedText.Lines)
+                {
+                    padded = ProtectGraphicPadding(padded, band, sourceLine.ExcludedGraphicBounds);
+                    if (sourceLine.Bounds.IntersectsWith(band) && !sourceLine.RecognitionClipBounds.IsEmpty)
+                        padded = Rectangle.Intersect(padded, Rectangle.Ceiling(sourceLine.RecognitionClipBounds));
+                }
+                selectedRegions.Add(padded);
+            }
             // Screenshot pixels have no editable font runs. Erase only the
             // selected words; all remaining source typography stays exact.
             if (document.EraseImageRegions(selectedRegions, background)) { selectedIndex = -1; RaiseChanged(); }
@@ -280,6 +290,26 @@ namespace SnipStudio
             return Rectangle.Intersect(new Rectangle(Point.Empty, ImageSize), Rectangle.FromLTRB(
                 (int)Math.Floor(bounds.Left) - 2, (int)Math.Floor(bounds.Top) - 2,
                 (int)Math.Ceiling(bounds.Right) + 2, (int)Math.Ceiling(bounds.Bottom) + 2));
+        }
+
+        private Rectangle PaddedTextBounds(RectangleF bounds, RectangleF excludedGraphic)
+        {
+            return ProtectGraphicPadding(PaddedTextBounds(bounds), bounds, excludedGraphic);
+        }
+
+        private Rectangle PaddedTextBounds(RectangleF bounds, RectangleF excludedGraphic, RectangleF recognitionClip)
+        {
+            Rectangle padded = PaddedTextBounds(bounds, excludedGraphic);
+            return recognitionClip.IsEmpty ? padded : Rectangle.Intersect(padded, Rectangle.Ceiling(recognitionClip));
+        }
+
+        private static Rectangle ProtectGraphicPadding(Rectangle padded, RectangleF text, RectangleF graphic)
+        {
+            if (graphic.Width > 0 && graphic.Height > 0 && graphic.Right <= text.Left &&
+                graphic.Bottom > padded.Top && graphic.Top < padded.Bottom && graphic.Right > padded.Left)
+                return Rectangle.FromLTRB(Math.Min(padded.Right, (int)Math.Ceiling(graphic.Right)),
+                    padded.Top, padded.Right, padded.Bottom);
+            return padded;
         }
 
         private float EstimateLineFontSize(string text, RectangleF bounds, float width)

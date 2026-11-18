@@ -12,6 +12,28 @@ installer/output/
 
 # Captures, media, preferences, and development output
 checks/*
+!checks/README.md
+!checks/Checks.cs
+!checks/conversion-regression/
+!checks/editing-audit/
+!checks/ocr-audit/
+!checks/ocr-recovery/
+!checks/textoverlay/
+!checks/recorder-audit/
+!checks/capture-workflow/
+!checks/save-audit/
+!checks/video-audit/
+!checks/window-sizing/
+!checks/ocr/
+!checks/regions/
+!checks/hdr/
+!checks/reliability/
+checks/*/*
+!checks/*/*.cs
+!checks/Verify-StartupCompatibility.ps1
+!checks/Verify-Translation.ps1
+!checks/Verify-OfflineTranslation.ps1
+!checks/Verify-TranslationReplacement.ps1
 !checks/Verify-MenuPlacement.ps1
 !checks/Verify-SideToolbarHeight.ps1
 !checks/Verify-RemovalSelectionMove.ps1

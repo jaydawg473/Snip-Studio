@@ -540,8 +540,8 @@ namespace SnipStudio
                     // has room, even when resize-to-snip is turned off.
                     Rectangle work = EditorWorkingArea();
                     int nonClientHeight = Math.Max(0, Height - ClientSize.Height);
-                    int requiredViewport = MinimumImageWorkspaceHeight();
-                    if (verticalAnnotation)
+                    int requiredViewport = userSizedEditorWindow ? Ui(64) + workspace.Padding.Vertical : MinimumImageWorkspaceHeight();
+                    if (verticalAnnotation && !userSizedEditorWindow)
                         requiredViewport = Math.Max(requiredViewport, Math.Max(MeasureVerticalAnnotationToolbar(false, false).Height,
                             MeasureVerticalAnnotationToolbar(true, false).Height));
                     // The fixed submenu band is part of the initial snip shell.
@@ -753,10 +753,12 @@ namespace SnipStudio
             Rectangle work = EditorWorkingArea();
             if (work.Width <= 0) return;
             int maximumWidth = MaximumSize.Width > 0 ? Math.Min(work.Width, MaximumSize.Width) : work.Width;
-            int minimumWidth = Math.Min(maximumWidth, Math.Max(Ui(500), requiredClientWidth + Math.Max(0, Width - ClientSize.Width)));
+            int preferredWidth = Math.Max(Ui(500), requiredClientWidth + Math.Max(0, Width - ClientSize.Width));
+            int minimumWidth = Math.Min(maximumWidth, userSizedEditorWindow && canvas.HasImage ? Ui(500) : preferredWidth);
             if (MinimumSize.Width != minimumWidth) MinimumSize = new Size(minimumWidth, MinimumSize.Height);
-            // Grow for newly available commands; never shrink an existing snip
-            // merely because a tool, option row, or capture mode changes.
+            // A manually resized editor keeps its compact tracking limit.
+            // Overflowing command rows already expose horizontal scrolling.
+            // Merely changing a tool still never shrinks the chosen window.
             int targetWidth = Math.Min(maximumWidth, Math.Max(Width, minimumWidth));
             if (Width != targetWidth) Width = targetWidth;
             int left = Math.Max(work.Left, Math.Min(Left, work.Right - Width));

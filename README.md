@@ -1,23 +1,27 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.21
+# Snip Studio 0.6.23
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
 
-## Current test build: 0.6.21
+## Current main source: 0.6.23
 
-- Refines editable text regions around strong graphic prefixes and keeps recognized columns separate when entering or returning to inline editing.
-- Applies the selected text color from the first typed character. Text controls follow the active caret/selection and identify mixed colors; drawing ink stays separate.
-- Keeps window bounds steady while palettes open and close. Fit adapts to the available image area; manual zoom/pan retains its view within the checked render quantization.
-- Retains the 0.6.20 recording choices (**Draw area** or **Window**), desktop recording outline, MP4 filmstrip/trim editor, larger recording preview and **Edit in Clipchamp** action. Clipchamp is a separate installed application; a launch request does not establish completed import.
+This source corresponds to the timestamp-signed 0.6.23 candidate with application SHA256 `370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C`. Its 117 application C# files match the compiled source freeze. The application, generated full uninstaller and Setup are signed; bundled Node 24.22.3 retains its original OpenJS signature and timestamp.
 
-Download the signed [0.6.21 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-signed-portable.zip).
+- Text conversion selects Text, recovers missing dense filename rows with bounded retries, and protects supported file icons. Color and source-font estimates use the remaining text pixels.
+- Drag selection retains native separators and source order. Validated caches reduce repeated selection allocations and font-refinement work.
+- Failed image replacement and rejected paste preserve drafts. Pending text history, native low zoom and exact RTF paragraph/length admission are corrected.
+- Compact window sizing, responsive saving, bounded Recent/video metadata waits, and recording startup/session recovery are improved without replacing the existing interface.
 
-The exact timestamp-signed 0.6.21 application passed 7,132 assertion executions across 11 accepted current jobs on November 17, 2026. Four synthetic/actual-control images were inspected. These checks do not establish physical desktop/focus behavior, live recording exclusion, Clipchamp import, installed upgrades or exact source-font recovery. OCR and raster typography remain approximate; pixel-perfect reconstruction is not established. See [VALIDATION.txt](VALIDATION.txt) for exact identities, execution provenance and limits.
+Release status is **INSUFFICIENT EVIDENCE** for full release acceptance. Signed automated and synthetic native-component checks passed, but physical resizing/focus/DPI, live capture/audio/HDR, installed startup/upgrade/uninstall and other external workflows remain unverified. Final policy/native-save execution gaps and the exact accepted scope are described in [VALIDATION.txt](VALIDATION.txt). OCR identifiers and typography remain estimates; no guessed spelling corrections are applied.
 
-The following sections describe historical releases. Their test counts and acceptance scope are not current 0.6.21 results.
+The 0.6.23 installer and portable ZIP were prepared and audited locally. A GitHub 0.6.23 release download is not claimed here. The prior published [0.6.21 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-Setup.exe) and [0.6.21 portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-signed-portable.zip) are historical builds and do not include these fixes.
+
+See [0.6.23 release notes](release-notes-0.6.23.md), [verification sources](checks/README.md), and [installer preparation](installer/README.md).
+
+The following sections describe historical releases. Their counts and acceptance scope are not current 0.6.23 results.
 ## Eyedropper and Print Screen setup in 0.6.6
 
 - **Eyedropper** is available in the shared color palette. Click a visible color anywhere on the connected desktop, including the snip, then choose **Use color** or **Apply** to commit the palette draft. Sampling preserves shape opacity; Escape or right-click cancels.
@@ -169,7 +173,7 @@ Build the application in PowerShell on Windows:
 .\build.ps1 -UseExistingIcons
 ```
 
-The C# 5 build uses the installed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; a local build is unsigned. The build compiles the app without launching it or running development checks. Optional development checks require separate invocation. Omitting `-UseExistingIcons` compiles and runs the checked-in icon generator.
+The C# 5 build uses the installed, timestamp-signed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; compilation creates an unsigned staging binary that must be signed and verified before execution. Normal builds reuse the checked-in icons and run no checks. The legacy `-Check` switch refuses the former unsigned execution path. Explicit `-RebuildIcons` requires an already signed icon utility. Read [checks/README.md](checks/README.md) before preparing separate signed fixtures.
 
 Selected `checks/Verify-*.ps1` sources cover crop frames, taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
 
