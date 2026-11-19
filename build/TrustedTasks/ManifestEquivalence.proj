@@ -1,0 +1,54 @@
+<Project DefaultTargets="Check">
+  <PropertyGroup>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <FixtureOutputDirectory Condition="'$(FixtureOutputDirectory)' == ''">$(MSBuildThisFileDirectory)obj/manifest-checks/</FixtureOutputDirectory>
+    <_ManifestNamespaces>&lt;Namespace Prefix='a' Uri='urn:schemas-microsoft-com:asm.v1' /&gt;&lt;Namespace Prefix='v3' Uri='urn:schemas-microsoft-com:asm.v3' /&gt;&lt;Namespace Prefix='w' Uri='urn:schemas-microsoft-com:winrt.v1' /&gt;</_ManifestNamespaces>
+  </PropertyGroup>
+  <!-- This competing registration has no executable behind it. If Override
+       loses priority, task loading fails rather than running unsigned code. -->
+  <UsingTask TaskName="GenerateAppManifestFromAppxFragments"
+             AssemblyFile="$(MSBuildThisFileDirectory)fixtures/MustNeverLoad.dll" />
+  <Import Project="../WinUI.SignedTasks.targets" />
+  <Target Name="Check" DependsOnTargets="SnipStudioVerifyTrustedManifestTask">
+    <Error Condition="Exists('$(MSBuildThisFileDirectory)fixtures/MustNeverLoad.dll')"
+           Text="The task-priority fixture sentinel must not exist. Stop before attempting either registration." />
+    <MakeDir Directories="$(FixtureOutputDirectory)" />
+    <GenerateAppManifestFromAppxFragments RedirectDlls="false"
+       FrameworkDlls="C:/fixture/Alpha.dll;C:/fixture/ALPHA.DLL;C:/fixture/Beta.dll;C:/fixture/Remaining.dll"
+       AppxFragments="$(MSBuildThisFileDirectory)fixtures/registrations.appxfragment"
+       OutAppManifest="$(FixtureOutputDirectory)normal.manifest" />
+    <Message Importance="High" Text="Task registration priority fixture passed: the signed override loaded instead of the nonexistent competing assembly." />
+    <GenerateAppManifestFromAppxFragments RedirectDlls="true"
+       FrameworkDlls="C:/fixture/Alpha.dll;C:/fixture/ALPHA.DLL;C:/fixture/Beta.dll;C:/fixture/Remaining.dll"
+       AppxFragments="$(MSBuildThisFileDirectory)fixtures/registrations.appxfragment"
+       OutAppManifest="$(FixtureOutputDirectory)redirected.manifest" />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)normal.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file"><Output TaskParameter="Result" ItemName="_NormalFiles" /></XmlPeek>
+    <Error Condition="'@(_NormalFiles-&gt;Count())' != '2'" Text="Normal mode should contain only the two registered DLL entries." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)normal.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file/w:activatableClass"><Output TaskParameter="Result" ItemName="_NormalClasses" /></XmlPeek>
+    <Error Condition="'@(_NormalClasses-&gt;Count())' != '2'" Text="Native WinRT class registrations were not preserved." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)normal.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file/v3:comClass"><Output TaskParameter="Result" ItemName="_NormalComClasses" /></XmlPeek>
+    <Error Condition="'@(_NormalComClasses-&gt;Count())' != '1'" Text="Each proxy should have one COM class registration." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)normal.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file/v3:comInterfaceProxyStub"><Output TaskParameter="Result" ItemName="_NormalInterfaces" /></XmlPeek>
+    <Error Condition="'@(_NormalInterfaces-&gt;Count())' != '2'" Text="Proxy interface registrations or vendor exclusions changed." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)normal.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file[@loadFrom]"><Output TaskParameter="Result" ItemName="_NormalRedirects" /></XmlPeek>
+    <Error Condition="'@(_NormalRedirects-&gt;Count())' != '0'" Text="Normal mode must not redirect DLLs." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)redirected.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file"><Output TaskParameter="Result" ItemName="_RedirectedFiles" /></XmlPeek>
+    <Error Condition="'@(_RedirectedFiles-&gt;Count())' != '3'" Text="Redirected mode should include the remaining DLL exactly once." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)redirected.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file[@name='Remaining.dll']"><Output TaskParameter="Result" ItemName="_RemainingFiles" /></XmlPeek>
+    <Error Condition="'@(_RemainingFiles-&gt;Count())' != '1'" Text="The unregistered framework DLL was not retained exactly once." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)redirected.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file[starts-with(@loadFrom,'%MICROSOFT_WINDOWSAPPRUNTIME_BASE_DIRECTORY%')]"><Output TaskParameter="Result" ItemName="_RedirectedPaths" /></XmlPeek>
+    <Error Condition="'@(_RedirectedPaths-&gt;Count())' != '3'" Text="The vendor redirect prefix was not preserved." />
+    <XmlPeek XmlInputPath="$(FixtureOutputDirectory)redirected.manifest" Namespaces="$(_ManifestNamespaces)"
+             Query="/a:assembly/v3:file[@name='ALPHA.DLL']"><Output TaskParameter="Result" ItemName="_DuplicateAlpha" /></XmlPeek>
+    <Error Condition="'@(_DuplicateAlpha-&gt;Count())' != '0'" Text="Registered DLL removal must remain case-insensitive." />
+    <Message Importance="High" Text="Signed manifest task fixture checks passed: 9 structural assertions. The unchanged vendor fragment is separately source-hash pinned." />
+  </Target>
+</Project>

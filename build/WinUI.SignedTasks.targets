@@ -1,0 +1,60 @@
+<Project>
+  <PropertyGroup>
+    <SnipStudioTrustedTasksAssembly Condition="'$(SnipStudioTrustedTasksAssembly)' == ''">$(MSBuildThisFileDirectory)TrustedTasks/bin/Release/net10.0/SnipStudio.TrustedBuildTasks.dll</SnipStudioTrustedTasksAssembly>
+    <_SnipStudioManifestVendorTargetsSHA256>DD8344346FC2D0DCC45AF320610343B227DB741A53FC590D1184A9A258E1142E</_SnipStudioManifestVendorTargetsSHA256>
+    <!-- NuGetPackageRoot is valid with or without a trailing separator. -->
+    <_SnipStudioManifestVendorTargets>$(NuGetPackageRoot)/microsoft.windowsappsdk.base/2.7.0/buildTransitive/Microsoft.WindowsAppSDK.SelfContained.targets</_SnipStudioManifestVendorTargets>
+  </PropertyGroup>
+
+  <!-- Override is deliberate and unconditional. A missing or untrusted signed
+       assembly fails the build; the vendor inline compiler is never a fallback. -->
+  <UsingTask TaskName="GenerateAppManifestFromAppxFragments"
+             AssemblyFile="$(SnipStudioTrustedTasksAssembly)"
+             Override="true" />
+
+  <Target Name="SnipStudioRejectUnreviewedVisualCppInlineTask"
+          BeforeTargets="PrepareForBuild;GetVCInstallPath">
+    <Error Condition="'$(VsInstallRoot)' != ''"
+           Text="This reviewed C# WinUI build requires VsInstallRoot to be empty. A Visual C++ install root can activate the vendor GetLatestMSVCVersion inline task, which has not been compiled and signed. Review that separate build path before enabling it." />
+  </Target>
+
+  <Target Name="SnipStudioVerifyTrustedManifestTask"
+          BeforeTargets="CreateWinRTRegistration"
+          Condition="'$(WindowsAppSDKSelfContained)' == 'true'">
+    <Error Condition="'$(MSBuildRuntimeType)' != 'Core'"
+           Text="The signed manifest task requires the audited .NET 10 MSBuild host." />
+    <Error Condition="!Exists('$(SnipStudioTrustedTasksAssembly)')"
+           Text="The precompiled signed manifest task is missing. Build, timestamp-sign and verify build/TrustedTasks before building WinUI. Inline unsigned task execution is prohibited." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(SnipStudioTrustedTasksSHA256)', '^[A-Fa-f0-9]{64}$'))"
+           Text="Pass SnipStudioTrustedTasksSHA256 from the verified Automation Forge signing receipt." />
+    <Error Condition="'$(SnipStudioTrustedPowerShellPath)' == '' or !Exists('$(SnipStudioTrustedPowerShellPath)')"
+           Text="Pass the original publisher-signed PowerShell host audited by the build preflight as SnipStudioTrustedPowerShellPath." />
+    <Error Condition="!$([System.Text.RegularExpressions.Regex]::IsMatch('$(SnipStudioTrustedPowerShellSHA256)', '^[A-Fa-f0-9]{64}$'))"
+           Text="Pass SnipStudioTrustedPowerShellSHA256 from the build preflight's valid original publisher signature audit." />
+    <Error Condition="!Exists('$(_SnipStudioManifestVendorTargets)')"
+           Text="The pinned Windows App SDK Base 2.7.0 manifest targets were not found. Restore the reviewed locked dependencies first." />
+
+    <GetFileHash Files="$(SnipStudioTrustedTasksAssembly)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_SnipStudioActualTrustedTaskSHA256" />
+    </GetFileHash>
+    <Error Condition="'$(_SnipStudioActualTrustedTaskSHA256)' != '$(SnipStudioTrustedTasksSHA256)'"
+           Text="The signed manifest task differs from its reviewed signing receipt." />
+    <GetFileHash Files="$(SnipStudioTrustedPowerShellPath)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_SnipStudioActualPowerShellSHA256" />
+    </GetFileHash>
+    <Error Condition="'$(_SnipStudioActualPowerShellSHA256)' != '$(SnipStudioTrustedPowerShellSHA256)'"
+           Text="The PowerShell verifier host differs from the original publisher-signed executable audited before this build." />
+    <GetFileHash Files="$(_SnipStudioManifestVendorTargets)" Algorithm="SHA256">
+      <Output TaskParameter="Hash" PropertyName="_SnipStudioActualManifestVendorTargetsSHA256" />
+    </GetFileHash>
+    <Error Condition="'$(_SnipStudioActualManifestVendorTargetsSHA256)' != '$(_SnipStudioManifestVendorTargetsSHA256)'"
+           Text="The Windows App SDK inline manifest source differs from the reviewed 2.7.0 fragment. Stop and review/rebuild the signed wrapper for the new source." />
+
+    <!-- Values travel through the child environment, so path text is never
+         interpolated as PowerShell source. The host was audited before MSBuild
+         started and its bytes were checked above before this invocation. -->
+    <Exec Command="&quot;$(SnipStudioTrustedPowerShellPath)&quot; -NoProfile -NonInteractive -Command &quot;$ErrorActionPreference='Stop'; $taskSignature=Get-AuthenticodeSignature -LiteralPath $env:SNIPSTUDIO_TRUSTED_TASK_ASSEMBLY; if ($taskSignature.Status -ne 'Valid' -or $null -eq $taskSignature.TimeStamperCertificate -or $taskSignature.SignerCertificate.Subject -notlike '*Automation Forge LLC*') { throw 'The precompiled manifest task must have a valid timestamped Automation Forge signature before MSBuild loads it.' }&quot;"
+          EnvironmentVariables="SNIPSTUDIO_TRUSTED_TASK_ASSEMBLY=$(SnipStudioTrustedTasksAssembly)" />
+    <Message Importance="High" Text="Using verified signed Snip Studio manifest task; vendor inline compilation is overridden." />
+  </Target>
+</Project>

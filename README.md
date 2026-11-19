@@ -1,12 +1,38 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio 0.6.24
+# Snip Studio — WinUI 3 migration
+
+This separate Automation Forge repository preserves the Git history of [Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. The stable application remains in the original repository. GitHub returned that original repository for the self-fork request, so this is a separate repository with preserved history rather than a fork-network entry.
+
+## First WinUI preview
+
+The first implementation provides a native WinUI window and viewport for Open/Paste, Pen/Highlighter/Rectangle, Undo/Redo, Fit/100%/zoom/pan, and atomic PNG/JPEG/BMP/PDF Save As. It reuses the Windows document/rendering engine through a modern .NET adapter. File replacement and closing offer Save/Discard/Cancel, and failed operations preserve the document. The preview does not initialize stable preferences, updater, tray, startup, global hotkeys, shortcut broker or file associations.
+
+Capture, OCR/editable text, the remaining editing tools, recording/audio, scrolling capture and Windows integrations are not migrated yet. Initial image limits are 32,768 pixels per side and 67,108,864 total pixels. Full-image preview encoding is serialized; no performance improvement is claimed.
+
+**Migration in progress.** The x64 application builds and publishes successfully. Signed checks passed 77 backend assertions, 1,335 viewport assertions, and nine manifest assertions plus task-override priority verification. A signed resource-repair probe created the preview window and exposed its controls, but Windows was locked: native visual, mouse, keyboard, picker and clipboard acceptance remains incomplete. The corrected publish now automatically includes the application PRI and compiled XAML; see [current verification and limitations](VERIFICATION-WINUI.md). Older 0.6.24 assertion totals below are historical evidence, not WinUI results.
+
+## Migration source and development
+
+- `src/SnipStudio.WinUI/`: native WinUI application, commands and viewport.
+- `src/SnipStudio.Backend/`: Windows-only adapter linking existing document, rendering, emoji and PDF sources.
+- `tests/SnipStudio.Backend.Checks/`: document/export/ownership regression sources.
+- `tests/SnipStudio.Viewport.Checks/`: production viewport-model coordinate and layout checks.
+- Root C# files: inherited implementation retained for reuse and later stages.
+
+See [migration scope and stages](MIGRATION.md), [preview notes](release-notes-0.7.0-preview.1.md), and [signed build-task preparation](build/TrustedTasks/README.md). The SDK is pinned to .NET 10.0.404. The frontend uses Windows App SDK 2.7.0 and Windows SDK BuildTools 10.0.28000.2957. `SnipStudio.WinUI3.slnx` includes the application and standalone check projects. The initial target is unpackaged, self-contained x64 with multiple files. The backend retains the Windows Desktop runtime dependency for GDI+/RichEdit.
+
+NuGet restores only from NuGet.org and requires signatures using explicitly trusted repository certificates. Review the executable dependency closure before running build tasks. Preserve valid original publisher signatures. Compilation does not authorize running unsigned output: sign our application, backend, helpers and generated apphosts with timestamped Automation Forge signatures and verify them before execution. Local SDKs, package caches, captures, credentials, logs and generated artifacts do not belong in Git.
+
+The inherited publisher/updater/installer scripts describe the stable application; they are not the WinUI release pipeline. Installation, replacement of the stable channel and public release publication require separate approval.
+
+## Legacy 0.6.24 documentation
 
 A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
 
 Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
 
-## Current main source: 0.6.24
+## Legacy source baseline: 0.6.24
 
 This source corresponds to the timestamp-signed 0.6.24 application with SHA256 `7546A3AC9C4ED81986E29C6F8E9825437856F3054976D94CF4105D4AA8B92A4E`. Its 117 application C# files match the compiled source freeze `E519185C6D1999ED1835FFDD80D83EA50C464B98C70C9AA4E5A94963B8179D71`.
 

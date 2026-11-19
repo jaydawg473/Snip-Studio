@@ -1,0 +1,8 @@
+<Project>
+  <PropertyGroup Condition="'$(UseWinUI)' == 'true'">
+    <!-- The preview is C#. C++ WebView2 dispatch-adapter code generation is
+         outside its reviewed, signed build-tool dependency closure. -->
+    <WebView2UseDispatchAdapter>false</WebView2UseDispatchAdapter>
+  </PropertyGroup>
+  <Import Project="build/WinUI.SignedTasks.targets" Condition="'$(UseWinUI)' == 'true'" />
+</Project>

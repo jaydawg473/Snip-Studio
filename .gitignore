@@ -105,3 +105,11 @@ bin/
 obj/
 Thumbs.db
 Desktop.ini
+
+# WinUI migration build, restore and local evidence output
+artifacts/
+packages/
+toolchain/
+.work/
+*.user
+*.suo

@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <AssemblyName>SnipStudio.Backend</AssemblyName>
+    <RootNamespace>SnipStudio.WinUI.Backend</RootNamespace>
+    <Company>Automation Forge LLC</Company>
+    <Product>Snip Studio</Product>
+    <Description>Windows document and rendering adapter for the Snip Studio WinUI migration.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../EditorDocument.cs" Link="Legacy/EditorDocument.cs" />
+    <Compile Include="../../EditorDocument.ShapeGeometry.cs" Link="Legacy/EditorDocument.ShapeGeometry.cs" />
+    <Compile Include="../../EditorDocument.Emoji.cs" Link="Legacy/EditorDocument.Emoji.cs" />
+    <Compile Include="../../EditorDocument.EraseAll.cs" Link="Legacy/EditorDocument.EraseAll.cs" />
+    <Compile Include="../../ShapeStyle.cs" Link="Legacy/ShapeStyle.cs" />
+    <Compile Include="../../EmojiArtwork.cs" Link="Legacy/EmojiArtwork.cs" />
+    <Compile Include="../../RichTextLayout.cs" Link="Legacy/RichTextLayout.cs" />
+    <Compile Include="../../RichEditFormatting.cs" Link="Legacy/RichEditFormatting.cs" />
+    <Compile Include="../../PdfExportService.cs" Link="Legacy/PdfExportService.cs" />
+    <EmbeddedResource Include="../../assets/emoji/*.png" Link="Emoji/%(Filename)%(Extension)" LogicalName="SnipStudio.Emoji.%(Filename)%(Extension)" />
+    <Content Include="../../assets/emoji/LICENSE.txt" Link="licenses/FluentEmoji-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../assets/emoji/ATTRIBUTION.txt" Link="licenses/FluentEmoji-ATTRIBUTION.txt" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../assets/emoji/manifest.json" Link="licenses/FluentEmoji-manifest.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

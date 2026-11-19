@@ -1,0 +1,32 @@
+<UserControl
+    x:Class="SnipStudio.WinUI.EditorViewport"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    IsTabStop="True"
+    AutomationProperties.Name="Image editor canvas"
+    KeyDown="OnCanvasKeyDown">
+    <Grid x:Name="Host"
+          Background="{ThemeResource StudioCanvasBrush}"
+          SizeChanged="OnViewportSizeChanged"
+          Loaded="OnViewportLoaded"
+          Unloaded="OnViewportUnloaded"
+          PointerPressed="OnPointerPressed"
+          PointerMoved="OnPointerMoved"
+          PointerReleased="OnPointerReleased"
+          PointerCanceled="OnPointerCanceled"
+          PointerCaptureLost="OnPointerCaptureLost"
+          PointerWheelChanged="OnPointerWheelChanged">
+        <Canvas x:Name="Scene" IsHitTestVisible="False">
+            <Border x:Name="ImageFrame" BorderBrush="{ThemeResource StudioFrameBrush}" BorderThickness="1" Visibility="Collapsed">
+                <Image x:Name="Picture" Stretch="Fill" />
+            </Border>
+            <Polyline x:Name="StrokePreview" Visibility="Collapsed" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+            <Rectangle x:Name="RectanglePreview" Visibility="Collapsed" />
+        </Canvas>
+        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Margin="24" IsHitTestVisible="False">
+            <FontIcon Glyph="&#xE91B;" FontSize="36" HorizontalAlignment="Center" />
+            <TextBlock x:Name="EmptyTitle" Text="Your snip starts here" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" TextWrapping="Wrap" />
+            <TextBlock x:Name="EmptyHint" Text="Open an image or paste one from the clipboard." HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+        </StackPanel>
+    </Grid>
+</UserControl>

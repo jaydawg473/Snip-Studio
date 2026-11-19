@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/SnipStudio.Backend/SnipStudio.Backend.csproj" />
+    <Project Path="src/SnipStudio.WinUI/SnipStudio.WinUI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SnipStudio.Backend.Checks/SnipStudio.Backend.Checks.csproj" />
+    <Project Path="tests/SnipStudio.Viewport.Checks/SnipStudio.Viewport.Checks.csproj" />
+  </Folder>
+</Solution>

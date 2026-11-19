@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Fragment xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10">
+  <Extensions>
+    <Extension Category="windows.activatableClass.inProcessServer">
+      <InProcessServer>
+        <Path>Alpha.dll</Path>
+        <ActivatableClass ActivatableClassId="SnipStudio.Fixture.First" ThreadingModel="both" />
+        <ActivatableClass ActivatableClassId="SnipStudio.Fixture.Second" ThreadingModel="both" />
+      </InProcessServer>
+    </Extension>
+    <Extension Category="windows.comInterface">
+      <ProxyStub ClassId="11111111-2222-3333-4444-555555555555">
+        <Path>Beta.dll</Path>
+        <Interface InterfaceId="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE" Name="FixtureInterfaceA" />
+        <Interface InterfaceId="99999999-8888-7777-6666-555555555555" Name="FixtureInterfaceB" />
+      </ProxyStub>
+    </Extension>
+    <Extension Category="windows.comInterface">
+      <ProxyStub ClassId="22222222-2222-2222-2222-222222222222">
+        <Path>PushNotificationsLongRunningTask.ProxyStub.dll</Path>
+        <Interface InterfaceId="33333333-3333-3333-3333-333333333333" Name="MustNotRegisterPush" />
+      </ProxyStub>
+    </Extension>
+    <Extension Category="windows.comInterface">
+      <ProxyStub ClassId="44444444-4444-4444-4444-444444444444">
+        <Path>Microsoft.Windows.Widgets.dll</Path>
+        <Interface InterfaceId="55555555-5555-5555-5555-555555555555" Name="MustNotRegisterWidgets" />
+      </ProxyStub>
+    </Extension>
+  </Extensions>
+</Fragment>
