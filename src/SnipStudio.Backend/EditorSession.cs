@@ -13,7 +13,7 @@ namespace SnipStudio.WinUI.Backend;
 /// Adapts the existing document to a WinUI-owned STA. No application startup,
 /// hotkey, tray, update, clipboard or capture integration is activated here.
 /// </summary>
-public sealed class EditorSession : IDisposable
+public sealed partial class EditorSession : IDisposable
 {
     private const int MaximumImageDimension = 32768;
     private const long MaximumImagePixels = 64L * 1024 * 1024;

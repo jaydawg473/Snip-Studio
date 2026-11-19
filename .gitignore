@@ -86,6 +86,8 @@ translation-bundle/downloads/*
 !translation-bundle/downloads/node-SHASUMS256.txt
 translation-bundle/runtime/runtime/
 translation-bundle/runtime/*-tiny/
+translation-bundle/runtime/worker.js
+translation-bundle/runtime/licenses/components/SSplit/nonbreaking_prefixes/
 translation-bundle/runtime/bergamot/*
 !translation-bundle/runtime/bergamot/worker/
 translation-bundle/runtime/bergamot/worker/*

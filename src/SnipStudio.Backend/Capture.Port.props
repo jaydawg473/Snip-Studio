@@ -1,0 +1,11 @@
+<Project>
+  <ItemGroup>
+    <!-- Pixel-space selection and the bounded stitcher remain the released
+         implementations. Their temporary desktop overlays have their own STA
+         message pump; they never become the WinUI editor's main message loop. -->
+    <Compile Include="../../CaptureService.cs" Link="Legacy/CaptureService.cs" />
+    <Compile Include="../../TaskbarVisibilityScope.cs" Link="Legacy/TaskbarVisibilityScope.cs" />
+    <Compile Include="../../ScrollingCaptureService.cs" Link="Legacy/ScrollingCaptureService.cs" />
+    <Compile Include="../../ScrollingImageStitcher.cs" Link="Legacy/ScrollingImageStitcher.cs" />
+  </ItemGroup>
+</Project>

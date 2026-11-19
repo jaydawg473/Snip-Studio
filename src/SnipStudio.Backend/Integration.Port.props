@@ -1,0 +1,4 @@
+<Project>
+  <!-- Integrations are SDK-included adapters. Stable AppID, Run value,
+       preferences and updater services are deliberately not linked. -->
+</Project>

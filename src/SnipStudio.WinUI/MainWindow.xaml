@@ -1,9 +1,4 @@
-<Window
-    x:Class="SnipStudio.WinUI.MainWindow"
-    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:SnipStudio.WinUI"
-    Title="Snip Studio — WinUI 3 Preview">
+<Window x:Class="SnipStudio.WinUI.MainWindow" xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" xmlns:local="using:SnipStudio.WinUI" Title="Snip Studio — WinUI 3 Preview">
     <Grid x:Name="Root" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}" SizeChanged="OnRootSizeChanged">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -17,32 +12,65 @@
             <Image Source="ms-appx:///Assets/app-256.png" Width="32" Height="32" AutomationProperties.Name="Snip Studio" />
             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                 <TextBlock Text="Snip Studio" FontSize="20" FontWeight="SemiBold" />
-                <TextBlock Text="WinUI 3 preview · image editing" FontSize="12" TextWrapping="Wrap" />
+                <TextBlock Text="Capture · edit · extract · record" FontSize="12" TextWrapping="Wrap" />
             </StackPanel>
             <Button x:Name="HelpButton" Grid.Column="2" Content="Help" Click="OnHelpClicked" VerticalAlignment="Center" AutomationProperties.Name="Help and preview capabilities" />
         </Grid>
         <StackPanel Grid.Row="1">
             <CommandBar x:Name="FileBar" DefaultLabelPosition="Right" IsOpen="False" OverflowButtonVisibility="Auto" Background="Transparent">
+                <AppBarButton x:Name="CaptureButton" Icon="Camera" Label="New snip" Click="OnCaptureClicked" ToolTipService.ToolTip="Capture a rectangle (Ctrl+N)" />
+                <AppBarButton x:Name="CaptureOptionsButton" Label="Capture options">
+                    <AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon>
+                    <AppBarButton.Flyout><MenuFlyout>
+                        <MenuFlyoutItem Text="Rectangle" Tag="Rectangle" Click="OnCaptureModeClicked" />
+                        <MenuFlyoutItem Text="Freeform" Tag="Freeform" Click="OnCaptureModeClicked" />
+                        <MenuFlyoutItem Text="Window" Tag="Window" Click="OnCaptureModeClicked" />
+                        <MenuFlyoutItem Text="Monitor" Tag="Monitor" Click="OnCaptureModeClicked" />
+                        <MenuFlyoutItem Text="All monitors" Tag="AllMonitors" Click="OnCaptureModeClicked" />
+                        <MenuFlyoutSeparator /><MenuFlyoutItem Text="Scrolling capture…" Click="OnScrollingClicked" />
+                    </MenuFlyout></AppBarButton.Flyout>
+                </AppBarButton>
+                <AppBarButton x:Name="RecordButton" Icon="Video" Label="Record" Click="OnRecordClicked" />
                 <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" Click="OnOpenClicked" ToolTipService.ToolTip="Open an image (Ctrl+O)" />
                 <AppBarButton x:Name="PasteButton" Icon="Paste" Label="Paste" Click="OnPasteClicked" ToolTipService.ToolTip="Paste an image (Ctrl+V)" />
                 <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save as" Click="OnSaveClicked" ToolTipService.ToolTip="Save a flattened image or PDF (Ctrl+S)" IsEnabled="False" />
                 <AppBarSeparator />
                 <AppBarButton x:Name="UndoButton" Icon="Undo" Label="Undo" Click="OnUndoClicked" ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False" />
                 <AppBarButton x:Name="RedoButton" Icon="Redo" Label="Redo" Click="OnRedoClicked" ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False" />
+                <AppBarButton x:Name="OcrButton" Label="Image to text" Click="OnOcrClicked"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
+                
                 <AppBarButton x:Name="RetryPreviewButton" Icon="Refresh" Label="Retry preview" Click="OnRetryPreviewClicked" Visibility="Collapsed" />
-            </CommandBar>
+            <CommandBar.SecondaryCommands>
+                    <AppBarButton Icon="NewWindow" Label="New editor window" Click="OnNewWindowClicked" />
+                    <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy image or selected text" Click="OnCopyClicked" />
+                    <AppBarButton x:Name="ShareButton" Icon="Share" Label="Share image" Click="OnShareClicked" />
+                    <AppBarButton x:Name="PrintButton" Icon="Print" Label="Print image" Click="OnPrintClicked" />
+                    <AppBarButton Icon="Folder" Label="Recent files" Click="OnRecentClicked" />
+                    <AppBarButton Icon="Video" Label="Open video review" Click="OnVideoReviewClicked" />
+                    <AppBarButton Label="Open in external editor" Click="OnExternalEditorClicked"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
+                    <AppBarButton x:Name="ReloadExternalButton" Label="Import external editor copy" Click="OnReloadExternalClicked" IsEnabled="False" />
+                    <AppBarButton Icon="Setting" Label="Settings" Click="OnSettingsClicked" />
+                    <AppBarButton Label="Check for updates" Click="OnUpdatesClicked"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
+                    <AppBarButton Icon="FullScreen" Label="Full screen (F11)" Click="OnFullScreenClicked" />
+                </CommandBar.SecondaryCommands></CommandBar>
             <CommandBar x:Name="ToolBar" DefaultLabelPosition="Right" IsOpen="False" OverflowButtonVisibility="Auto" Background="Transparent">
+                <AppBarToggleButton x:Name="SelectButton" Label="Select" Click="OnSelectClicked"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="PanButton" Label="Move view" Click="OnPanClicked" ToolTipService.ToolTip="Drag to move the view. Middle-drag also pans with any tool.">
-                    <AppBarToggleButton.Icon><FontIcon Glyph="&#xE7C9;" /></AppBarToggleButton.Icon>
+                    <AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon>
                 </AppBarToggleButton>
                 <AppBarToggleButton x:Name="PenButton" Icon="Edit" Label="Pen" IsChecked="True" Click="OnPenClicked" />
                 <AppBarToggleButton x:Name="HighlighterButton" Icon="Highlight" Label="Highlighter" Click="OnHighlighterClicked" />
+                <AppBarToggleButton x:Name="SnapHighlighterButton" Label="Snap to text" IsChecked="True" Visibility="Collapsed" ToolTipService.ToolTip="Recognize touched words. Hold Shift while dragging for freehand highlighting." />
                 <AppBarToggleButton x:Name="RectangleButton" Label="Rectangle" Click="OnRectangleClicked">
-                    <AppBarToggleButton.Icon><FontIcon Glyph="&#xE739;" /></AppBarToggleButton.Icon>
+                    <AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon>
                 </AppBarToggleButton>
                 <AppBarSeparator />
+                <AppBarToggleButton x:Name="TextButton" Label="Text" Click="OnTextClicked"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
+                <AppBarToggleButton x:Name="EraserButton" Label="Eraser" Click="OnEraserClicked"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
+                <AppBarToggleButton x:Name="CropButton" Label="Crop" Click="OnCropClicked"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
+                
                 <AppBarButton x:Name="ColorButton" Label="Color" AutomationProperties.Name="Drawing color">
-                    <AppBarButton.Icon><FontIcon Glyph="&#xE790;" /></AppBarButton.Icon>
+                    <AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon>
                     <AppBarButton.Flyout>
                         <Flyout>
                             <ColorPicker x:Name="InkColorPicker" Color="#FFE24046" ColorChanged="OnInkColorChanged" IsAlphaEnabled="False" IsAlphaSliderVisible="False" IsAlphaTextInputVisible="False" IsColorChannelTextInputVisible="True" AutomationProperties.Name="Drawing color" />
@@ -52,10 +80,29 @@
                 <AppBarElementContainer>
                     <NumberBox x:Name="StrokeWidthBox" Header="Width (image px)" Minimum="1" Maximum="100" Value="3" SmallChange="1" LargeChange="5" SpinButtonPlacementMode="Compact" Width="144" Margin="8,0" ValueChanged="OnStrokeWidthChanged" AutomationProperties.Name="Stroke width in image pixels" />
                 </AppBarElementContainer>
+            <CommandBar.SecondaryCommands>
+                    <AppBarToggleButton x:Name="LineButton" Label="Line" Click="OnLineClicked" />
+                    <AppBarToggleButton x:Name="ArrowButton" Label="Arrow" Click="OnArrowClicked" />
+                    <AppBarToggleButton x:Name="EllipseButton" Label="Ellipse" Click="OnEllipseClicked" />
+                    <AppBarToggleButton x:Name="EmojiButton" Label="Emoji" Click="OnEmojiClicked" />
+                    <AppBarToggleButton x:Name="RemoveAreaButton" Label="Remove image area" Click="OnRemoveAreaClicked" />
+                    <AppBarToggleButton x:Name="OcrSelectButton" Label="Select recognized text" Click="OnOcrSelectClicked" />
+                    <AppBarButton x:Name="ObjectPropertiesButton" Label="Selected object properties" Click="OnObjectPropertiesClicked" />
+                    <AppBarButton x:Name="DeleteObjectButton" Icon="Delete" Label="Delete selected object" Click="OnDeleteObjectClicked" />
+                    <AppBarButton x:Name="EraseAllButton" Label="Erase all annotations" Click="OnEraseAllClicked" />
+                </CommandBar.SecondaryCommands></CommandBar>
+            <CommandBar x:Name="ContextBar" DefaultLabelPosition="Right" Visibility="Collapsed" Background="Transparent">
+                <AppBarElementContainer><ComboBox x:Name="FontFamilyBox" Header="Font" Width="160" IsEditable="True" SelectedIndex="0" SelectionChanged="OnTextFormatChanged" TextSubmitted="OnFontFamilySubmitted"><ComboBoxItem Content="Segoe UI" /><ComboBoxItem Content="Arial" /><ComboBoxItem Content="Calibri" /><ComboBoxItem Content="Consolas" /><ComboBoxItem Content="Times New Roman" /></ComboBox></AppBarElementContainer>
+                <AppBarElementContainer><NumberBox x:Name="TextSizeBox" Header="Text size (image px)" Width="136" Minimum="1" Maximum="1024" Value="18" SmallChange="1" SpinButtonPlacementMode="Compact" ValueChanged="OnTextSizeChanged" /></AppBarElementContainer>
+                <AppBarToggleButton x:Name="BoldButton" Icon="Bold" Label="Bold" Click="OnTextFormatClicked" />
+                <AppBarToggleButton x:Name="ItalicButton" Icon="Italic" Label="Italic" Click="OnTextFormatClicked" />
+                <AppBarToggleButton x:Name="UnderlineButton" Icon="Underline" Label="Underline" Click="OnTextFormatClicked" />
+                <AppBarButton x:Name="ApplyTextButton" Icon="Accept" Label="Apply text" Click="OnApplyTextClicked" />
+                <AppBarButton x:Name="CancelTextButton" Icon="Cancel" Label="Cancel text" Click="OnCancelTextClicked" />
             </CommandBar>
         </StackPanel>
         <StackPanel Grid.Row="2">
-            <InfoBar x:Name="PreviewNotice" IsOpen="True" IsClosable="True" Severity="Informational" Title="Migration preview" Message="Open or paste an image, draw, undo, and save. Screenshot capture, OCR, recording, and the other stable-app tools are not migrated yet." />
+            <InfoBar x:Name="PreviewNotice" IsOpen="False" IsClosable="True" Severity="Informational" Title="Snip Studio WinUI 3" Message="Changes stay in this editor until you save or copy them." />
             <InfoBar x:Name="ErrorNotice" IsOpen="False" IsClosable="True" Severity="Error" Title="The action could not finish" />
         </StackPanel>
         <local:EditorViewport x:Name="Viewport" Grid.Row="3" MinHeight="32" />
@@ -64,6 +111,7 @@
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <StackPanel x:Name="StatusInfo" Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
                 <ProgressRing x:Name="BusyRing" Width="18" Height="18" IsActive="False" Visibility="Collapsed" />
+                <Button x:Name="CancelActionButton" Content="Cancel" Visibility="Collapsed" Click="OnCancelActionClicked" />
                 <TextBlock x:Name="StatusText" Text="Open an image or paste one from the clipboard." TextWrapping="Wrap" MaxLines="2" VerticalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
             </StackPanel>
             <StackPanel x:Name="ZoomPanel" Grid.Column="1" Orientation="Horizontal" Spacing="4" VerticalAlignment="Center">

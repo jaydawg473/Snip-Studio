@@ -32,8 +32,8 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // Deliberately does not call the legacy Program, preferences, taskbar,
-        // shortcut broker, startup registration, updater or notification-area code.
+        // WinUI adapters own an isolated identity and settings. The legacy
+        // Program and its stable-channel integrations are never initialized.
         try
         {
             StartupDiagnostics.Stage("OnLaunched.MainWindow.constructor.begin");
@@ -42,6 +42,13 @@ public partial class App : Application
             mainWindow.Activate();
             StartupDiagnostics.Stage("OnLaunched.MainWindow.Activate.completed");
             startupCompleted = true;
+            // File arguments are consumed only after native XAML activation.
+            // The editor validates the file before replacing its current work.
+            string[] arguments = Environment.GetCommandLineArgs();
+            if (arguments.Contains("--background", StringComparer.OrdinalIgnoreCase))
+                mainWindow.TryStartInBackground();
+            if (arguments.Length > 1 && !arguments[1].StartsWith("-", StringComparison.Ordinal))
+                _ = mainWindow.OpenInitialPathAsync(arguments[1]);
         }
         catch (Exception exception)
         {

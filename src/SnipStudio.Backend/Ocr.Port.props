@@ -1,0 +1,11 @@
+<Project>
+  <ItemGroup>
+    <Compile Include="../../TextRecognition.cs" Link="Legacy/TextRecognition.cs" />
+    <Compile Include="../../RecognizedTextRegions.cs" Link="Legacy/RecognizedTextRegions.cs" />
+    <Compile Include="../../RecognizedTextRecovery.cs" Link="Legacy/RecognizedTextRecovery.cs" />
+    <Compile Include="../../SourceTextMatcher.cs" Link="Legacy/SourceTextMatcher.cs" />
+    <Compile Include="../../SourceTextColor.cs" Link="Legacy/SourceTextColor.cs" />
+    <Compile Include="../../TextOverlaySelection.cs" Link="Legacy/TextOverlaySelection.cs" />
+    <Compile Include="../../TextSnapSelection.cs" Link="Legacy/TextSnapSelection.cs" />
+  </ItemGroup>
+</Project>

@@ -22,6 +22,15 @@
             </Border>
             <Polyline x:Name="StrokePreview" Visibility="Collapsed" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
             <Rectangle x:Name="RectanglePreview" Visibility="Collapsed" />
+            <Ellipse x:Name="EllipsePreview" Visibility="Collapsed" />
+            <Rectangle x:Name="SelectionFrame" Visibility="Collapsed" Stroke="#FF0078D4" StrokeThickness="1.5" StrokeDashArray="4,2" />
+            <Canvas x:Name="RecognizedBands" />
+            <Canvas x:Name="ObjectHandles" />
+        </Canvas>
+        <Canvas x:Name="TextLayer" Visibility="Collapsed">
+            <Border x:Name="TextEditorFrame" Background="White" BorderBrush="#FF0078D4" BorderThickness="1" Padding="0">
+                <RichEditBox x:Name="InlineEditor" AcceptsReturn="True" TextWrapping="Wrap" Padding="0" BorderThickness="0" MinWidth="0" MinHeight="0" Background="White" Foreground="Black" KeyDown="OnInlineKeyDown" TextChanged="OnInlineTextChanged" />
+            </Border>
         </Canvas>
         <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Margin="24" IsHitTestVisible="False">
             <FontIcon Glyph="&#xE91B;" FontSize="36" HorizontalAlignment="Center" />

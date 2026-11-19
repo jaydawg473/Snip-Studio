@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup>
+    <!-- Identifier planning is shared byte-for-byte with the stable editor. -->
+    <Compile Include="../../TechnicalTextTranslation.cs" Link="Legacy/TechnicalTextTranslation.cs" />
+  </ItemGroup>
+</Project>

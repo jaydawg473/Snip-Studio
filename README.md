@@ -2,246 +2,44 @@
 
 # Snip Studio — WinUI 3 migration
 
-This separate Automation Forge repository preserves the Git history of [Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. The stable application remains in the original repository. GitHub returned that original repository for the self-fork request, so this is a separate repository with preserved history rather than a fork-network entry.
+Snip Studio brings capture, image editing, text extraction, recording and video review into a native WinUI 3 desktop interface. This separate Automation Forge repository preserves the history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`.
 
-## First WinUI preview
+**Current source: `0.7.0-preview.2`, file version `0.7.0.2`. Production release status: INSUFFICIENT EVIDENCE.** The workflows below are connected in source. All 1,673 current component assertions passed, including the repaired concurrent settings read/write workflow. Local translation and generated-video adapter checks passed separately. Required native/device acceptance remains blocked by the locked desktop. The supplied OCR example has a measured character-accuracy limit shared with stable 0.6.24; no guessed corrections were added. See [verification and measurements](VERIFICATION-WINUI.md); preview.1 artifacts remain historical.
 
-The first implementation provides a native WinUI window and viewport for Open/Paste, Pen/Highlighter/Rectangle, Undo/Redo, Fit/100%/zoom/pan, and atomic PNG/JPEG/BMP/PDF Save As. It reuses the Windows document/rendering engine through a modern .NET adapter. File replacement and closing offer Save/Discard/Cancel, and failed operations preserve the document. The preview does not initialize stable preferences, updater, tray, startup, global hotkeys, shortcut broker or file associations.
+## Available workflows in the current source
 
-Capture, OCR/editable text, the remaining editing tools, recording/audio, scrolling capture and Windows integrations are not migrated yet. Initial image limits are 32,768 pixels per side and 67,108,864 total pixels. Full-image preview encoding is serialized; no performance improvement is claimed.
+| Area | Controls and behavior |
+| --- | --- |
+| Capture | Rectangle, freeform, window, monitor, all monitors and scrolling capture; configurable delay, original-capture saving and clipboard copy. Partial scrolling results require a Keep/Discard choice. |
+| Image editing | Open/Paste, multiple editor windows, Select and Move view, Pen, Highlighter, Line, Arrow, Rectangle, Ellipse and emoji. Selected-object properties, resize/move, annotation erasing, crop, source-area removal, Undo and Redo. |
+| Editable text | On-canvas text drafts, font family, image-pixel size, color, bold, italic and underline. Apply/Cancel retains a clear draft boundary. |
+| OCR and translation | Local Windows OCR, original recognition output, selectable rows, source-style conversion and recognized-word selection. Conversion selects Text. Translation offers local processing or an explicitly chosen HTTPS server, with reviewed rows before applying. Font recovery remains approximate; review identifiers, leading zeros and duplicate rows. |
+| View | Fit, 100%, zoom, pan, full screen and toolbar overflow. The viewport uses physical-pixel/DIP geometry; real mixed-DPI behavior still needs device checks. |
+| Recording and video | Native WinUI recording/review window; display, region or window selection; microphone/system-audio device choices, pointer inclusion, 5–30 fps, recording boundaries and Stop and save. Local playback, playhead-based trim, original-copy saving and smaller MP4 exports. Recording is scaled to fit 1920 × 1080. Pause/Resume controls are not implemented. |
+| Files and Windows | Flattened PNG/JPEG/BMP/PDF Save As, image/text clipboard actions, Windows Share, printing, recent snips/recordings, external-editor working copies, keyboard shortcuts and Help. Settings offer separate preview tray, startup and global-shortcut choices. |
+| Recovery and release information | Cancellation and failure feedback, dirty-document prompts, atomic image/video-copy writes and recoverable preview preferences. Manual update checks read this migration repository's release information; they do not download or execute an installer. |
 
-**Migration in progress.** The x64 application builds and publishes successfully. Signed checks passed 77 backend assertions, 1,335 viewport assertions, and nine manifest assertions plus task-override priority verification. A signed resource-repair probe created the preview window and exposed its controls, but Windows was locked: native visual, mouse, keyboard, picker and clipboard acceptance remains incomplete. The corrected publish now automatically includes the application PRI and compiled XAML; see [current verification and limitations](VERIFICATION-WINUI.md). Older 0.6.24 assertion totals below are historical evidence, not WinUI results.
+The main editor, recording/video review and settings use WinUI controls. Temporary capture selectors, scrolling controls and recording boundaries still use dedicated WinForms STA overlays. The renderer retains Windows GDI+/RichEdit dependencies. This is a Windows migration with an explicit hybrid boundary; it is not an all-WinUI rewrite.
 
-## Migration source and development
+## Using the preview
 
-- `src/SnipStudio.WinUI/`: native WinUI application, commands and viewport.
-- `src/SnipStudio.Backend/`: Windows-only adapter linking existing document, rendering, emoji and PDF sources.
-- `tests/SnipStudio.Backend.Checks/`: document/export/ownership regression sources.
-- `tests/SnipStudio.Viewport.Checks/`: production viewport-model coordinate and layout checks.
-- Root C# files: inherited implementation retained for reuse and later stages.
+Use a signed candidate whose included validation, source/signature receipts and hash manifest identify its exact bytes and audit results. Extract the complete portable folder and launch `SnipStudio.WinUI3.Preview.exe`, keeping the adjacent runtime, resources, translation data and notices together. Verify valid timestamped Automation Forge signatures on our executables and valid original publisher signatures on bundled third-party binaries before execution. This source README does not predeclare a package audit result.
 
-See [migration scope and stages](MIGRATION.md), [preview notes](release-notes-0.7.0-preview.1.md), and [signed build-task preparation](build/TrustedTasks/README.md). The SDK is pinned to .NET 10.0.404. The frontend uses Windows App SDK 2.7.0 and Windows SDK BuildTools 10.0.28000.2957. `SnipStudio.WinUI3.slnx` includes the application and standalone check projects. The initial target is unpackaged, self-contained x64 with multiple files. The backend retains the Windows Desktop runtime dependency for GDI+/RichEdit.
+The preview has its own application identity and stores preferences at `%LocalAppData%\SnipStudio.WinUI3\preferences.json`. Tray behavior, sign-in startup and global shortcuts are deliberate Settings choices. The stable application and its preferences remain separate. Saving produces a flattened image or PDF; editable objects and Undo history remain in the open editor rather than in the exported file.
 
-NuGet restores only from NuGet.org and requires signatures using explicitly trusted repository certificates. Review the executable dependency closure before running build tasks. Preserve valid original publisher signatures. Compilation does not authorize running unsigned output: sign our application, backend, helpers and generated apphosts with timestamped Automation Forge signatures and verify them before execution. Local SDKs, package caches, captures, credentials, logs and generated artifacts do not belong in Git.
+Images, OCR, drawing and recording are processed locally. Sharing and a configured translation server are explicit actions; the server receives selected text only when Translate is chosen. Manual update checks contact GitHub. Local startup diagnostics are bounded and redact known application/profile paths; they do not deliberately record images, clipboard contents or document text.
 
-The inherited publisher/updater/installer scripts describe the stable application; they are not the WinUI release pipeline. Installation, replacement of the stable channel and public release publication require separate approval.
+Native workflows have not yet been accepted on an unlocked desktop. Installation and public GitHub Release publication have not been performed. Use [the verification checklist](VERIFICATION-WINUI.md) to distinguish source coverage from exercised behavior.
 
-## Legacy 0.6.24 documentation
+## Source and development
 
-A Windows screenshot and screen-recording workspace by [Automation Forge](https://automation-forge.com/).
+- [Migration design and remaining work](MIGRATION.md)
+- [Preview.2 release notes](release-notes-0.7.0-preview.2.md)
+- [Native WinUI frontend](src/SnipStudio.WinUI)
+- [Windows backend adapters](src/SnipStudio.Backend)
+- [Backend checks](tests/SnipStudio.Backend.Checks), [viewport checks](tests/SnipStudio.Viewport.Checks), [migration checks](tests/SnipStudio.Migration.Checks)
+- [Historical preview.1 notes](release-notes-0.7.0-preview.1.md) and [stable 0.6.24 notes](release-notes-0.6.24.md)
 
-Capture across monitors, annotate images, edit recognized text, and export the result. The editor starts compact and can resize around a snip.
+The pinned toolchain is .NET SDK 10.0.404, Windows App SDK 2.7.0 and Windows SDK BuildTools 10.0.28000.2957. The x64 application targets `net10.0-windows10.0.26100.0` and publishes as an unpackaged, self-contained folder. Build/test/signing steps must preserve the signature requirements; never substitute `dotnet run` or an unsigned helper for the verified workflow. Signing credentials and private verification outputs are not included in this repository.
 
-## Legacy source baseline: 0.6.24
-
-This source corresponds to the timestamp-signed 0.6.24 application with SHA256 `7546A3AC9C4ED81986E29C6F8E9825437856F3054976D94CF4105D4AA8B92A4E`. Its 117 application C# files match the compiled source freeze `E519185C6D1999ED1835FFDD80D83EA50C464B98C70C9AA4E5A94963B8179D71`.
-
-The image viewport now begins below the toolbar and context rows actually visible. Hidden larger tool panels no longer reserve an oversized empty strip above the snip. Preferred sizing still accommodates larger tools. Fit adapts when visible rows change, while manual zoom and pan retain their view intent. The OCR, editing, saving, metadata and recorder recovery fixes from 0.6.23 remain.
-
-Release status is **INSUFFICIENT EVIDENCE** for full native and installed acceptance. Signed component checks do not establish physical focus/DPI/monitor behavior, live capture/audio/HDR, startup or installation/upgrade/uninstall. Exact current verification and layout limits are recorded in [VALIDATION.txt](VALIDATION.txt); the generic fixture sources alone do not demonstrate a passing run. OCR spelling and source typography remain estimates.
-
-See [0.6.24 release notes](release-notes-0.6.24.md), [verification sources](checks/README.md), and [installer preparation](installer/README.md). No GitHub 0.6.24 release download is claimed here; installation and a public GitHub Release remain separate approval steps.
-## 0.6.23 repair history
-
-The previous source snapshot corresponded to the timestamp-signed 0.6.23 candidate with application SHA256 `370991B1BEE29F8B3AAC29C95323438AD9B8BEA94B3859C008FE3AD38AF8CD5C`. Its 117 application C# files match the compiled source freeze. The application, generated full uninstaller and Setup are signed; bundled Node 24.22.3 retains its original OpenJS signature and timestamp.
-
-- Text conversion selects Text, recovers missing dense filename rows with bounded retries, and protects supported file icons. Color and source-font estimates use the remaining text pixels.
-- Drag selection retains native separators and source order. Validated caches reduce repeated selection allocations and font-refinement work.
-- Failed image replacement and rejected paste preserve drafts. Pending text history, native low zoom and exact RTF paragraph/length admission are corrected.
-- Compact window sizing, responsive saving, bounded Recent/video metadata waits, and recording startup/session recovery are improved without replacing the existing interface.
-
-Release status is **INSUFFICIENT EVIDENCE** for full release acceptance. Signed automated and synthetic native-component checks passed, but physical resizing/focus/DPI, live capture/audio/HDR, installed startup/upgrade/uninstall and other external workflows remain unverified. Final policy/native-save execution gaps and the exact accepted scope are described in [VALIDATION.txt](VALIDATION.txt). OCR identifiers and typography remain estimates; no guessed spelling corrections are applied.
-
-The 0.6.23 installer and portable ZIP were prepared and audited locally. A GitHub 0.6.23 release download is not claimed here. The prior published [0.6.21 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-Setup.exe) and [0.6.21 portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.21/SnipStudio-0.6.21-signed-portable.zip) are historical builds and do not include these fixes.
-
-See [0.6.23 release notes](release-notes-0.6.23.md), [verification sources](checks/README.md), and [installer preparation](installer/README.md).
-
-The following sections describe historical releases. Their counts and acceptance scope are not current 0.6.24 results.
-## Eyedropper and Print Screen setup in 0.6.6
-
-- **Eyedropper** is available in the shared color palette. Click a visible color anywhere on the connected desktop, including the snip, then choose **Use color** or **Apply** to commit the palette draft. Sampling preserves shape opacity; Escape or right-click cancels.
-- The temporary desktop image stays in memory. A magnifier and measured RGB/hex preview support sampling without saving another screenshot or changing capture/taskbar policies.
-- Settings shows Windows' Print Screen assignment as **Off**, **On**, **Windows default**, or **Unavailable**. **Set up Print Screen** opens Windows keyboard settings with instructions, while **Retry Print Screen** and returning to the app refresh registration.
-- Windows' own **Use Print Screen to open screen capture** option must be turned **Off** for the intended background shortcut setup. An editor or Snip Studio's shortcut listener must be running. Registration alone does not guarantee priority over Windows; no Windows preference is silently changed and no low-level keyboard hook is installed.
-
-The final signed application passed 1,733 focused component/layout/rendering checks and 14,423 additional toolbar/options regression checks, for 16,156 total, on November 16, 2026. Live desktop sampling, physical mixed-DPI monitor transitions, native keyboard routing/focus and installed upgrades remain unverified. See [VALIDATION.txt](VALIDATION.txt) for the exact signed application hash and scope.
-
-Download the signed [0.6.6 installer](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.6/SnipStudio-0.6.6-Setup.exe) or [complete portable ZIP](https://github.com/jaydawg473/Snip-Studio/releases/download/v0.6.6/SnipStudio-0.6.6-signed-portable.zip).
-
-## Toolbar and settings layout in 0.6.5
-
-- The normal window widens to keep the capture toolbar and horizontal annotation toolbar on one row, measuring labels at the current Windows scale. Its width stays within the current monitor's working area; narrow monitors retain horizontal scrolling instead of wrapping the controls.
-- Changing tools and closing options do not shrink an existing snip window. Maximized and full-screen bounds are retained, and left/right toolbars keep their vertical layout.
-- The detected-editor selector in Settings returns to its compact header height when closed, removing the empty space beneath it. Expanded choices still move the following settings down.
-
-The final signed application passed 14,849 component, rendering and unshown layout checks on November 16, 2026. Physical mixed-monitor DPI transitions, displayed native UI/input and installed upgrades remain unverified. See [VALIDATION.txt](VALIDATION.txt) for the exact application hash and scope.
-
-The preceding 0.6.5 results describe that historical release.
-
-## Compact options in 0.6.4
-
-- Normal options fit in one slim row beneath the toolbars, outside the snip. Large headings, instructions and the large preview box are removed from that row.
-- Font and stroke menus retain preview samples; Advanced text and Erase all annotations remain available.
-- More > Recent snips adds an in-app gallery with a larger preview when hovering or selecting an item, before an explicit Open action. It uses Windows' own list and preserves the taskbar Recent menu.
-- Color and emoji choices use a reserved side area when opened. The options and choices do not overlap the image workspace. Closing them returns the space; image zoom and source-center view are retained.
-- Existing preferences, emoji artwork, capture/recording and offline translation are retained.
-
-Build, signed component/rendering and unshown full-editor layout checks passed on November 13, 2026. Physical monitor/DPI, native ComboBox composition, mouse/focus and installed-upgrade acceptance remain unverified. See VALIDATION.txt for scope.
-
-## Attached options and emoji fix in 0.6.3
-
-- Tool options are an attached card inside the editor, with the mockup's tinted surface, clear fields and group heading. Color and emoji choices expand inside the card; the snip view stays in place.
-- Font and stroke size choices have live samples and dropdown previews. Large samples show their fitted preview percentage; Advanced text retains full formatting.
-- Fixed the DPI-sensitive image copy that clipped emoji in both the chooser and placed stickers. All 24 original asset files remain unchanged.
-- Eraser options includes **Erase all annotations**, with one Undo to restore them together.
-- Saved preferences, offline translation and notices are retained.
-
-Build, signed component/rendering and unshown layout checks passed on November 13, 2026. Native mouse/focus, closed-combo composition, physical DPI and installed-upgrade acceptance remain unverified. See VALIDATION.txt for scope.
-
-## Editing update in 0.6.2
-
-- Draw a text frame, then type inline. Resize its frame without changing font size; Advanced text editing remains available.
-- Resize placed rectangles and ellipses with eight grips. Graphical emoji stickers have corner resize and rotation handles, and repeated placement stays in Emoji mode.
-- Titled tool-options cards separate formatting from tool selection. Text font size is inside Text options.
-- A shared color picker combines palette, recent colors, hex input and an inline spectrum with shape opacity/outline thickness. No nested More colors dialog.
-- Bundled Microsoft Fluent Emoji artwork is MIT-licensed; pinned source provenance and notices are included. Saved preferences are retained.
-
-Build and focused signed component/unshown layout checks passed on November 13, 2026. Native mouse/focus behavior, physical DPI and an installed upgrade still need live acceptance. See VALIDATION.txt for scope.
-
-## Icon and close-prompt update in 0.6.1
-
-- Removed outer transparent padding from all 43 toolbar symbols and the application icon frames, preserving natural proportions and transparent rounded corners. Updated SVGs, PNGs and ICO frames are included. Explicit pixel drawing fixes extra enlargement at higher DPI.
-- Closing an edited snip uses a visible, taskbar-accessible **Save / Don't save / Cancel** decision. Retrying closing brings the same decision forward; other grouped close requests queue behind it. Cancel or an unsuccessful Save stops the remaining batch.
-- Existing preferences, capture/recording guards and optional background shortcuts are retained.
-
-On November 13, 2026, the exact signed 0.6.1 app passed 966 component/policy checks and 2,442 unshown layout checks. All 136 generated asset files were reconciled and all 135 image files structurally reviewed; complete icon-size sheets were visually inspected. Actual Windows foreground/taskbar behavior, physical DPI and an installed upgrade still need live acceptance.
-
-## Editor tool update in 0.6.0
-
-- Choosing annotation tools keeps the normal arrow pointer; editing grips retain useful resize and move cursors.
-- **Shapes** offers Rectangle, Ellipse, Line, Arrow and **Emoji**. Fill and Outline have separate color, None and opacity choices; Outline also controls size. Apply accepts the popup draft; Cancel leaves the style unchanged.
-- **Text** lets you click and type directly on the snip. Enter adds a line; **Ctrl+Enter / Done** finishes; **Escape / Cancel** discards the draft. **Advanced text…** retains the full formatting editor. Right-click while typing for editing commands.
-- Emoji stamps remain editable text. Choose a symbol, then click to place it; use Move or Text to adjust it. Appearance follows Windows fonts.
-
-Version 0.6.0 passed 513 signed-library component checks, 2,442 unshown layout checks, and 73 installer close source-policy checks on November 13, 2026. These checks do not establish live popup focus, physical DPI, screen capture or installed-upgrade acceptance. Existing saved preferences are retained; their schema is unchanged.
-
-## Capture and edit
-
-- Rectangle, freeform, window, and scrolling capture. **Full screen** lets you choose one monitor; **All monitors** captures the connected desktop.
-- Ordinary screenshots hide only the initiating editor and Settings, leaving other open snips visible. To include the initiating editor as well, choose **More → Capture open snips**. This is a one-shot action; a Scrolling choice uses Rectangle for that shot while preserving the selected mode and timer.
-- Movable pen strokes, highlights, arrows, boxes, and rich text notes, with Undo and Redo. Right-click a mark to select it and switch to Move; use the middle mouse button to pan.
-- A pending **Remove area** box also survives switching to **Move**. Drag it within the image or nudge with arrow keys (Shift moves ten pixels), then press **Delete** to apply the removal at its new position. **Escape** cancels. Moving this review box changes no captured pixels, annotations or Undo history; Undo restores pixels after deletion.
-- Drag an arrow's tip or tail to rotate or resize it. Drag a text note's side handles to change wrapping width without shrinking its font.
-- Choose **Crop** to start with a full-image frame. Drag its eight edge/corner handles or move the frame by dragging inside. **Apply crop / Enter** commits one Undo step; **Cancel / Escape** keeps the image unchanged. Applying the unchanged full-image frame is a no-op, and entering Crop preserves zoom and image center. Retained annotations stay editable.
-- Double-click a text note, or select it and press F2, to edit font families, point sizes, mixed character styles, ink/highlighting, paragraph alignment, lists, indentation, and spacing.
-- Local, on-demand Windows OCR for copying words, snapped highlighting, and line editing. Deleting selected bitmap words masks those words and leaves gaps; it does not reposition the remaining screenshot text.
-- Color swatches, recent colors, hex input, and an Exact color honeycomb picker. Tooltips are on by default and can be turned off in Settings.
-- PNG, JPEG, BMP, lossless image-backed PDF, clipboard copy, print, external-editor working copies, and Windows Share. Save As is available from the menu and Ctrl+Shift+S.
-
-Source-font matching is an **estimate** from screenshot pixels and installed fonts. Line replacement uses a selectable solid fill; complex backgrounds are not reconstructed. Ambiguous overlapping text is guarded. Exports flatten annotations; notes remain editable in the open editor. PDFs are not searchable text documents or editable forms, and transparency becomes white.
-
-Updating to **0.5.9 retains your existing saved app settings**. The crop feature adds no preference fields or reset; it reuses the existing profile.
-
-Ctrl+wheel zooms toward the pointer by default; the wheel alone scrolls. Settings can switch to plain-wheel zoom, remember or reset capture delay, and preview screenshot-border color and thickness inline.
-
-The 0.5.5 wheel animation keeps its drawing position separate from native scrollbar updates until the motion finishes or is interrupted. This addresses jitter during rapid wheel input and direction changes while retaining pointer anchoring. Component checks passed; physical wheel feel and painting still need live acceptance.
-
-The More menu anchors to its button and clamps its position to that monitor's working area. Oversized menus use native scrolling. Left/right toolbars contribute their complete measured height to the editor minimum, bounded by the working area; shorter displays keep a scrolling fallback. Physical monitor/DPI placement and pointer dragging still need live acceptance.
-
-## Taskbar shortcuts and recent images
-
-Open Snip Studio once, then right-click its Windows taskbar icon. **Tasks** offers an immediate screenshot or one in **3, 5, or 10 seconds**, including when the editor is closed. Each task applies its delay to that one snip; it does not change the saved timer or **Remember capture delay**. Taskbar capture uses Photo mode, and a previous Scrolling choice returns to Rectangle so the countdown is honored.
-
-**Recent** contains successfully opened or saved PNG, JPG, JPEG, BMP, GIF, TIF, and TIFF images, including automatically saved originals. Choose an entry to reopen the image in Snip Studio. Unsaved clipboard images, canceled or failed saves, PDF exports, and recordings are not added to this image list. Windows owns the history, removed entries and recent-item privacy setting; the app does not keep a separate recent-file database or change the default image application. Windows also supplies **Pin/Unpin** and **Close window** according to the taskbar icon's state.
-
-Native Jump List appearance, existing-pin refresh and Windows recent-item behavior require live acceptance; component checks alone do not establish those outcomes.
-
-If the menu is missing or stale, choose **More → Refresh taskbar menu**, or use the same action in either notification-area menu mode. Startup also refreshes registration and repairs the identity on Start menu, desktop and pinned shortcuts whose target is this exact application copy. Refresh runs in the background, combines concurrent requests and reports the completed attempt or warnings. It does not force pinning/unpinning or choose a default image application. Windows controls its taskbar cache; a completed registration attempt is not proof of an immediate redraw.
-
-## Update notifications
-
-**Check for updates automatically** is **On by default**. The app checks the official GitHub releases in the background when it opens, at most once a day. Turn it off under **Settings → Updates**. **More → Check for updates** and the notification-area menus offer a manual check; short cooldowns and server rate limits still apply.
-
-After a transient connection failure, manual checking can retry after ten seconds. Cancellation, timeout and connection outcomes are reported separately with safe reason messages. Historical 0.5.8 product-host HTTPS evidence is recorded below; the exact cause of the earlier 0.5.7 connection error remains unconfirmed, and other networks/proxies still need acceptance. Certificate validation is not bypassed.
-
-When a newer version is available, choose **Download** or **Download update** to open its official installer URL in your browser. Snip Studio does not silently download, install or run an update. Requests include the app version, not captures, recognized text, preferences or user identity. A failed check reports an unavailable state rather than claiming that the app is up to date.
-
-## Scrolling capture
-
-Choose **Photo mode → Scrolling**, then select the moving content rather than fixed sidebars or message boxes. Capture advances only while a usable overlap can be verified. Localized animation can be tolerated; broad animation, repeated content, or reflow can stop the capture.
-
-**Finish** opens a preview; **Cancel** discards the capture. Review the joins and bottom before choosing **Use capture**. An early stop or repeated lack of movement produces a partial, **bottom-unconfirmed** result, not proof that the entire page was captured. The previous snip stays intact until the preview is accepted.
-
-Limits are three minutes, 300 scroll requests, 100 accepted frames, 30,000 pixels high, and 64 million pixels. Real applications and physical monitor/DPI behavior still need live acceptance.
-
-## Offline translation
-
-The complete signed release supplies the Bergamot WebAssembly engine, Node runtime, six compact translation models, license notices, and corresponding-source archives. Keep the entire `translation` folder beside `Snip Studio.exe`; extract portable packages completely.
-
-Included languages are **English, German, Spanish, and French**. Models translate English in both directions with each other language; other supported pairs use English as an intermediate step. Choose the source and target explicitly. No Python, Docker, server setup, paid API, subscription, API key, or translation-time model download is needed for the included package.
-
-In Text actions, select words or use all recognized text, then choose **Translate**. Copy the result or use **Replace text in snip** to place replacements in the recognized line bounds. Review wording, font estimates, and solid background fills; one Undo restores the original replacement operation. Compact models and intermediate translation can reduce accuracy. The included workflow does not upload text or images to a translation service.
-
-The public checkout includes the application bridge, patched licensed JavaScript, license text, manifests, and preparation scripts. **It is not a complete, automatically reproducible translation bundle.** Model weights, runtime binaries, bulk downloads, and corresponding-source archives are supplied in release packages rather than this checkout. Preparation scripts require additional metadata and source/download inputs; copying only these sources does not produce a working offline translator.
-
-Upstream projects: [Bergamot](https://github.com/browsermt/bergamot-translator), [Node.js](https://github.com/nodejs/node). Their component notices and licenses remain separate from the application's licensing status.
-
-## Record and make smaller copies
-
-Choose microphone and system-audio devices separately. Recording currently produces H.264/AAC MP4 up to **1920 × 1080 at 15 fps**, with larger areas scaled proportionally.
-
-Recording review offers play, copy, save, trim, and **Make smaller**. Choose 720p, 480p, or a target file size to save a separate copy while preserving the original. Targets are estimates; actual output size is reported, and email/chat attachment limits vary. Smaller exports trade image detail for file size.
-
-Taskbar hiding applies to screenshots and video. Hide taskbars and Keep main monitor taskbar visible default On for new or previously unconfigured profiles; Settings can change either choice. Hidden taskbars are restored after the snapshot or recording ends. Live multi-monitor timing is not established by source or component checks.
-
-## Install, close, and build
-
-Requires Windows 10 or 11 and .NET Framework 4.8. Use a complete signed per-user release installer or extract a portable ZIP. Setup does not launch the app. Its optional sign-in component is unchecked by default. Save work and choose **Exit Snip Studio** before an upgrade; the installer does not force-close running copies.
-
-The installer asks permission before requesting that an in-use copy close. **No** is the default. Only **Yes** allows a normal close request; unsaved-work, recording, or text-draft prompts may still need attention, and canceling closure blocks the update. Silent installs and read-only **CHECKREADY/CHECKBROKER** diagnostics never request closure. Older copies may require a manual **Exit Snip Studio**. The installer stays blocked while files remain in use and never force-closes an application.
-
-Closing an editor closes that snip. **Keep capture shortcuts after closing** is on by default, leaving a small notification-area listener for Ctrl+Alt+S and Print Screen. Choose **Exit** from its menu to stop the listener, or disable that preference to exit with the last editor. Keeping the full editor hidden in the notification area is a separate opt-in. Windows can reserve Print Screen; Snip Studio does not silently change Windows' routing.
-
-Build the application in PowerShell on Windows:
-
-```powershell
-.\build.ps1 -UseExistingIcons
-```
-
-The C# 5 build uses the installed, timestamp-signed Windows Framework compiler and WinRT metadata, without NuGet packages. Output defaults to `dist`; compilation creates an unsigned staging binary that must be signed and verified before execution. Normal builds reuse the checked-in icons and run no checks. The legacy `-Check` switch refuses the former unsigned execution path. Explicit `-RebuildIcons` requires an already signed icon utility. Read [checks/README.md](checks/README.md) before preparing separate signed fixtures.
-
-Selected `checks/Verify-*.ps1` sources cover crop frames, taskbar request/task definitions, menu placement, side-toolbar height, removal-selection movement and scrolling with synthetic inputs. Run them separately in Windows PowerShell 5 against a matching, verified signed release, for example:
-
-```powershell
-powershell.exe -STA -NoProfile -File .\checks\Verify-CropFrame.ps1 -ReleaseFolder release-0.5.9-signed -ExpectedVersion 0.5.9.0
-```
-
-The scripts validate the signed assembly before loading it. Their generated reports and images are excluded from Git; these checks do not replace live UI or device acceptance.
-
-The source also includes a Python installer integrity checker. Run `python checks/Verify-InstallerIntegrity.py path/to/Setup.exe` on the compiled Setup before signing and again after signing. It reads the embedded NSIS checksum without launching Setup; a mismatch fails the check. Release verification also requires a valid timestamped Authenticode signature and matching payload hashes. The installer's own integrity checks remain enabled. Python is needed only for this development check, not to run Snip Studio.
-
-See [installer packaging](installer/README.md) for the signed-release inputs. Private signing credentials and the publisher's signing workflow are excluded.
-
-## Files and verification
-
-Original screenshots can save automatically to the chosen folder; Save keeps annotation edits. Editing, OCR, recording, PDF export, compression, and bundled translation run locally. Automatic update checks contact the official GitHub release endpoint by default and can be disabled in Settings; capture content, recognized text, preferences and user identity are not sent. Browser downloads, sharing, external-editor opening and website visits require a selected action. Uninstall preserves captures, recordings, preferences, working copies, and unlisted files.
-
-Current 0.6.5 verification is recorded in [VALIDATION.txt](VALIDATION.txt). The following notes describe older releases and do not establish current live acceptance.
-
-The final 0.5.9 application built without compiler warnings and has a valid timestamped Automation Forge LLC signature. Against its exact signed bytes, **593 signed-library checks passed**: 392 core checks (78 crop frame, 88 translation, 181 zoom frame and 45 removal movement) plus 201 offscreen crop-layout checks across eight toolbar/dimension/scale cases at scales 1, 1.5 and 2. **73 installer source-policy checks** passed separately. Two synthetic offscreen renders were visually inspected for full and adjusted frames with eight handles; those inspections do not add to the automated count. That release's historical validation records its exact application hash and coverage.
-
-The preferences source is byte-identical to 0.5.8 and reuses the existing settings file; the crop feature adds no preference fields or reset. Installer logic is unchanged apart from version metadata. This is source evidence for saved-setting preservation, not an executed upgrade with the user's installed profile.
-
-Physical mouse/keyboard/DPI behavior, capture of open snips, cross-monitor restoration, native taskbar/cache behavior, browser download/notification acceptance, installed upgrades and endpoint-security acceptance still require live checks. Component/offscreen checks and synthetic render inspection do not establish those outcomes; package signatures, payload hashes and readiness evidence are recorded separately. No new own-host update or approved-close trial is claimed for 0.5.9.
-
-Historically, the signed **0.5.8** application passed 689 signed-library checks and 73 installer source-policy checks. Its exact product host also completed a live HTTPS metadata request with .NET Framework 4.8/Windows TLS defaults, UpToDate status, exit 0 and preferences unchanged. This was actual product-host evidence rather than a PowerShell substitute, but does not identify the earlier 0.5.7 failure's exact cause or prove behavior on every network. These historical checks do not add to the current 0.5.9 totals.
-
-Historically, the signed 0.5.7 application passed **418 component checks** and **73 installer source-policy checks**. A user-approved **CHECKCLOSE** diagnostic on a signed candidate with an older payload closed the installed 0.5.6 listener without changing its executable or installing files. This does not identify the earlier reported 0.5.5 tray-close failure's cause or prove the final full upgrade. No native close trial was repeated for 0.5.8.
-
-Historically, the signed 0.5.6 application passed **272 signed-library checks**, plus **35 in-memory native Windows Shell-link/property round trips** and **39 installer source-policy checks**. Those objects were held only in memory: no shortcut was saved and no application entry point, recent-history API, Jump List update or association helper was called. These counts do not add to the current 0.5.7 totals.
-
-Historically, the 0.5.5 application had a valid timestamped Automation Forge LLC signature. Against those exact signed bytes, **590 component checks passed**: 181 wheel-frame/anchor, 34 cooperative-exit protocol/lifetime, 25 view-motion, 10 view-preservation, 207 side-toolbar layout, 45 removal-box movement, and 88 shortcut/lifetime/text-replacement checks. They loaded the application as a library using controlled synthetic inputs, without capturing a desktop, displaying an editor or menu, injecting native input, requesting native shutdown, or changing user preferences or the registry. That release's historical validation records those results and the separately recorded installer source-policy checks; source checks do not establish interactive installer behavior.
-
-Historically, 658 focused checks passed against signed **0.5.4**; earlier release results do not verify 0.5.9. Physical wheel smoothness, monitor/DPI placement, pointer dragging, native scrolling, Share, audio/taskbar behavior, approved-close/save-cancel interaction, legacy close behavior, and full installation/upgrade/uninstall still need live acceptance. HDR correction remains experimental.
-
-An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository.
+An independent Automation Forge app; not affiliated with Microsoft. No open-source license has been added to this repository. Retain the supplied third-party notices and original publisher attributions when distributing a verified package.

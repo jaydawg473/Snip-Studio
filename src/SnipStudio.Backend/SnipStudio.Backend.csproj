@@ -21,9 +21,13 @@
     <Compile Include="../../RichTextLayout.cs" Link="Legacy/RichTextLayout.cs" />
     <Compile Include="../../RichEditFormatting.cs" Link="Legacy/RichEditFormatting.cs" />
     <Compile Include="../../PdfExportService.cs" Link="Legacy/PdfExportService.cs" />
+    <Compile Include="../../NativeMethods.cs" Link="Legacy/NativeMethods.cs" />
     <EmbeddedResource Include="../../assets/emoji/*.png" Link="Emoji/%(Filename)%(Extension)" LogicalName="SnipStudio.Emoji.%(Filename)%(Extension)" />
     <Content Include="../../assets/emoji/LICENSE.txt" Link="licenses/FluentEmoji-LICENSE.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../assets/emoji/ATTRIBUTION.txt" Link="licenses/FluentEmoji-ATTRIBUTION.txt" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="../../assets/emoji/manifest.json" Link="licenses/FluentEmoji-manifest.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
+  <!-- Each port owns its reviewed legacy dependency list. Keep service adapters
+       in this assembly so the document/native contracts retain their ownership. -->
+  <Import Project="*.Port.props" />
 </Project>

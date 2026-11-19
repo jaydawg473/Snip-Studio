@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <SupportedOSPlatformVersion>10.0.19041.0</SupportedOSPlatformVersion>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>SnipStudio.Migration.Checks</AssemblyName>
+    <Company>Automation Forge LLC</Company>
+    <Product>Snip Studio Migration Checks</Product>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../src/SnipStudio.Backend/SnipStudio.Backend.csproj" />
+    <Compile Include="../../src/SnipStudio.WinUI/DesktopPreferences.cs" Link="Frontend/DesktopPreferences.cs" />
+  </ItemGroup>
+</Project>

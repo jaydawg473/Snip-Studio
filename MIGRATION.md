@@ -1,38 +1,54 @@
 # Snip Studio WinUI 3 migration
 
-Started November 18, 2026 from Snip Studio 0.6.24, commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`.
+Updated November 19, 2026 for `0.7.0-preview.2` (`0.7.0.2`). The workflow surfaces below are implemented. Migration acceptance remains in progress; production release status is **INSUFFICIENT EVIDENCE** until required native/device checks are completed.
 
-The migration has its own repository and preserves the original Git history. GitHub's self-fork request returned the original repository, so this is a separate repository rather than a GitHub fork-network entry. The stable repository is [jaydawg473/Snip-Studio](https://github.com/jaydawg473/Snip-Studio).
+This repository preserves the Git history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting at 0.6.24 commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. GitHub's self-fork request returned the original repository, so the migration has a separate repository rather than a fork-network entry. Preview identity, settings, startup entry, global shortcuts and update metadata are deliberately isolated from the stable application.
 
-## First milestone
+## Implemented scope
 
-Build a native WinUI 3 image editor around the existing Windows document/rendering engine. The initial workflow is Open/Paste, Fit/manual zoom and pan, Pen/Highlighter/Rectangle, Undo/Redo, and atomic Save As to PNG/JPEG/BMP/PDF. A native XAML viewport replaces the WinForms viewport for this workflow.
+The first preview supplied a small image-editor slice. Preview.2 now connects the broader application workflows in source:
 
-The backend links the reviewed legacy document, shape, emoji, rich-text and PDF sources. It retains a Windows Desktop dependency for GDI+ and native RichEdit; it is not a platform-independent core. Rendering/text operations stay on the owning STA thread. Detached image encoding runs in bounded background work. Existing files start clean; pasted images start unsaved. Save results retain the captured revision so a late completion cannot mark newer work as saved.
+| Surface | Current implementation | Remaining acceptance |
+| --- | --- | --- |
+| Main editor | Native WinUI commands, overflow menus, context tools, image viewport, text draft editor, Help and status/cancellation feedback. | Native keyboard/pointer, clipboard, file pickers, text scale, narrow windows and physical DPI/monitor behavior. |
+| Editing backend | Existing document/rendering engine behind public session/snapshot APIs; drawing, shapes, emoji, selection, move/resize, text, eraser, crop/remove area, history and atomic export. | Complete native workflows, including the supplied OCR/text/window regressions. |
+| OCR and translation | Windows OCR adapters, raw output/recovery rows, original row indices, reviewed source-style conversion, word selection, local translation and explicit configured-server review. Text activates after conversion. | Actual supplied-image OCR accuracy, visual font/color/position, native drag/copy/edit and translation services/runtime behavior. |
+| Capture | Rectangle/freeform/window/monitor/all-monitor and scrolling coordinators, delay, cancellation, HDR option and partial-capture review. | Real pixels, scrolling controls, capture exclusion, HDR and device-specific failures. |
+| Recording and review | Native WinUI area/audio choices, Start/Stop, local playback, trim, copy and MP4 export; recording-boundary overlay. | Real video/audio, endpoint changes, output playback/codec correctness, capture exclusion and stop/recovery behavior. Pause/Resume remains unavailable. |
+| Desktop integration | Preview preferences/recent history, Share/Print, trusted external-editor copies, optional tray/startup/global shortcuts and manual migration-repository release metadata. | Real Windows Shell, printers, selected external editors, restart, shortcuts/tray, startup, network failures and installed acceptance. |
 
-The preview has a separate application identity. It does not run the stable startup, updater, tray, global hotkey, file-association, preferences or shortcut broker code. Unmigrated features remain in the inherited source for future stages and are not represented as functioning WinUI features.
+Being reachable in source is not equivalent to successful native acceptance. [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md) records exercised checks and the remaining gates.
 
-## Subsequent stages
+## Architecture and ownership
 
-1. Verify the first milestone on signed binaries, including real native pointer/file-picker/clipboard behavior, theme/text scale and multiple DPI settings.
-2. Migrate capture and OCR as independently verified services. Preserve raw OCR, identifiers, duplicate rows, reading order and user edits. Port editable text, selection and source-style matching only with the supplied regression examples.
-3. Migrate the remaining drawing/editing tools, recent snips, video review, scrolling capture and recording/audio.
-4. Introduce deliberate preview preferences and verified Windows integrations, then migrate installation/update/recovery behavior. Stable installations must remain isolated throughout the preview.
-5. Measure startup, large-image preview/encoding, OCR, capture and recording with comparable inputs before making performance claims. Build/sign/package checks do not establish hardware acceptance.
+`src/SnipStudio.WinUI` owns the native main editor, viewport, settings/dialogs and recording/video window. `src/SnipStudio.Backend` adapts the reviewed document, shape, emoji, rich-text, OCR, capture, audio, recording, video and translation implementations. Linked legacy source remains in the repository where it supplies working behavior; it does not imply that a legacy screen is the new frontend.
 
-## Pinned toolchain
+The renderer depends on Windows Desktop/GDI+ and native RichEdit. Document/render/text operations remain on their owning STA. Detached encoding and bounded filesystem/video work run away from the WinUI dispatcher. Sessions, immutable snapshots, revision checks and explicit ownership protect pending saves or selections from applying to a different document. An image opened from disk starts clean; a pasted capture starts unsaved. A completed save marks only its captured revision as saved.
 
-- .NET SDK 10.0.404, released November 10, 2026.
-- Microsoft.WindowsAppSDK 2.7.0, stable release November 17, 2026.
-- Microsoft.Windows.SDK.BuildTools 10.0.28000.2957.
-- Target `net10.0-windows10.0.26100.0`, initial x64 unpackaged, self-contained, multiple-file deployment.
+Capture selectors and scrolling controls use a dedicated STA with a real WinForms message loop. Recording boundaries likewise use an owned STA overlay around the existing boundary implementation, with capture-exclusion capability feedback. This hybrid boundary is intentional for this preview. Its existence does not establish that native capture, HDR, audio or mixed-monitor operation has been tested.
 
-Official references: [Microsoft .NET downloads](https://dotnet.microsoft.com/en-us/download/dotnet/10.0), [Windows App SDK downloads](https://learn.microsoft.com/en-us/windows/apps/windows-app-sdk/downloads), [WinForms migration patterns](https://learn.microsoft.com/en-us/windows/apps/get-started/line-of-business/migrate-winforms-patterns), [deployment options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/deploy-overview).
+The WinUI frontend exposes text drafts and reviewed OCR replacement rather than guessing source corrections. Identifiers, leading zeros, case, quantities and duplicate rows must survive unchanged unless the user edits them. Source font reconstruction is an estimate. OCR review labels recognition unverified and defaults to Close. One supplied dense filename fixture has a confirmed accuracy limit shared with stable 0.6.24; tested pixel preparations did not improve it, and the recognizer remains unchanged. Translation keeps source rows for review and requires one reviewed replacement per source row before applying.
 
-Restore uses only NuGet.org and requires package signatures. Package signatures do not replace Authenticode checks on executed tools and delivered binaries. Every executed helper/application must be signed and timestamped; Automation Forge signs our outputs and valid third-party publisher signatures remain intact. Builds do not launch the unsigned output. Sign and verify the complete executable dependency closure before native checks.
+Image/PDF exports are flattened. Editable annotation objects and history are session state, not a new project-file format. Video-copy saving preserves the original extension and uses a temporary file plus replacement; actual video decoding/encoding is a separate acceptance concern.
 
-## Verification status
+## Preview integration and privacy
 
-Implementation is in progress. The application has built and published successfully. Signed component checks passed 77 backend assertions and 1,335 viewport assertions; nine signed manifest assertions and a safe override-priority fixture also passed. An initial signed launch exposed missing published application XAML resources. Adding those exact resources with executable bytes unchanged produced a window and accessible controls. The publish target now includes and validates them automatically; its output matches the compiled resource hashes.
+Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The concurrent public API regression passed 64 writes and 128 reads without errors. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
 
-Windows was locked during the native observation. No rendered application screenshot, Open/Draw/Undo/Save input sequence, native picker, clipboard, theme, physical DPI or monitor acceptance is claimed. See [verification details](VERIFICATION-WINUI.md). The old 0.6.24 totals remain historical evidence and are not added to WinUI results. No installation, stable-channel replacement or public GitHub Release was performed.
+The manual update service queries only this WinUI repository's release endpoint, bounds the response and timeout, rejects redirected or out-of-repository release links, and displays reported metadata for review. A different tag alone is not treated as proof of a newer signed release. The service has no installer-download or execution path.
+
+Local image/OCR/recording work does not require upload. Configured translation discloses the destination and sends selected text only on an explicit Translate action; its API key is dialog-local. External-editor execution and the local translation runtime have signature/hash trust gates. A signing failure must block execution rather than trigger an unsigned fallback. Native privacy/security acceptance remains outstanding.
+
+## Build and distribution
+
+The repository pins .NET SDK 10.0.404, Microsoft.WindowsAppSDK 2.7.0 and Microsoft.Windows.SDK.BuildTools 10.0.28000.2957. The application targets `net10.0-windows10.0.26100.0`, declares a platform floor of `10.0.19041.0`, and uses an x64 unpackaged, self-contained, multiple-file deployment. Those declarations are not device compatibility results.
+
+NuGet restore requires package signatures. Authenticode validation separately covers executed tools/helpers and delivered executable dependencies: Automation Forge signs our outputs with timestamps; valid original third-party signatures remain intact. A precompiled, signed manifest build task avoids execution of an unsigned generated inline task. Compiled applications are not executed before signing.
+
+The publish target explicitly requires the application's PRI and compiled App/MainWindow/EditorViewport/RecordingWindow XAML resources. The first preview's missing-resource launch failure established why dependency/PE checks alone do not cover application resource closure. Preview.2 needs its own build, signature, resource, notice, privacy and archive audit; historical preview.1 artifacts do not satisfy those gates.
+
+Installation, stable-channel replacement and public GitHub Release publication require separate authorization and are not performed by this preview's update check. Source commits and packages must identify their exact source freeze and verification scope.
+
+## Remaining work
+
+The current signed suites passed 1,673 unique component assertions; manifest-task, local translation and generated-media results are documented separately. Package-specific source/signature/hash and audit evidence belongs with the delivered candidate. Required native checks remain blocked by the locked desktop: supplied OCR examples, selection/edit/history, enlarge/shrink/Fit, mixed DPI, scrolling capture, recording/audio/video, clipboard/print/share, preferences/recovery, Shell/startup and installation. Measure startup, real capture/recording and longer-running memory with stated inputs before claiming a performance improvement. Component timings, compilation and package verification do not close native/device acceptance.

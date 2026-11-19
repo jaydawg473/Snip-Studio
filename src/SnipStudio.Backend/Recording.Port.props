@@ -1,0 +1,9 @@
+<Project>
+  <ItemGroup>
+    <Compile Include="../../ScreenRecorder.cs" Link="Legacy/ScreenRecorder.cs" />
+    <Compile Include="../../AudioCaptureMixer.cs" Link="Legacy/AudioCaptureMixer.cs" />
+    <Compile Include="../../MediaFoundationVideoWriter.cs" Link="Legacy/MediaFoundationVideoWriter.cs" />
+    <Compile Include="../../VideoTrimService.cs" Link="Legacy/VideoTrimService.cs" />
+    <Compile Include="../../RecordingBoundaryForm.cs" Link="Legacy/RecordingBoundaryForm.cs" />
+  </ItemGroup>
+</Project>
