@@ -27,13 +27,14 @@ public sealed partial class MainWindow : Window
     private string? displayPath;
     private uint penColor = 0xFFE24046, highlighterColor = 0xFFFFE33B, textColor = 0xFF000000;
     private PreviewTool selectedTool = PreviewTool.Pen;
+    private bool contextDismissed = true;
     private bool PreviewIsCurrent => session.HasImage && displayedRevision == session.Revision;
 
     public MainWindow()
     {
         InitializeComponent();
         ConfigureTextSizeFormatter();
-        AppWindow.Resize(new Windows.Graphics.SizeInt32(1100, 760));
+        AppWindow.Resize(new Windows.Graphics.SizeInt32(900, 650));
         string icon = Path.Combine(AppContext.BaseDirectory, "Assets", "SnipStudio.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         AppWindow.Closing += OnWindowClosing;
@@ -46,15 +47,18 @@ public sealed partial class MainWindow : Window
         Viewport.DraftChanged += (_, _) => UpdateTextDraftCommands();
         Viewport.ViewChanged += (_, _) => UpdateViewStatus();
         ConfigureAccelerators();
-        SetTool(PreviewTool.Pen);
+        SetTool(PreviewTool.Pen, revealOptions: false);
         InitializeDesktopIntegration();
+        InitializeWindowSizing();
+        Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => CancelPendingSnipResize()), true);
+        Root.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => CancelPendingSnipResize()), true);
         UpdateCommands();
     }
 
     private void ConfigureAccelerators()
     {
         AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, OpenAsync);
-        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, () => CaptureAsync(CaptureKind.Rectangle, false));
+        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, () => CaptureAsync(selectedCaptureKind, false));
         AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => { OpenRecordingWindow(); return Task.CompletedTask; });
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control, CopyAsync, respectsTextInput: true);
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => RecognizeAsync(copyOnly: true));
@@ -272,6 +276,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnGestureCommitted(object? sender, DrawGestureEventArgs args)
     {
+        CancelPendingSnipResize();
         await RunActionAsync("Rendering edit…", async () =>
         {
             long beforeRevision = session.Revision;
@@ -284,6 +289,7 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshPreviewAsync(bool resetView)
     {
+        long sizingIntent = WindowSizingIntentVersion;
         // All callers are serialized by busy. A canceled native PNG encode cannot
         // be interrupted, so no replacement worker starts before this one returns.
         previewCancellation?.Cancel();
@@ -307,15 +313,18 @@ public sealed partial class MainWindow : Window
         var bitmap = new BitmapImage();
         await bitmap.SetSourceAsync(stream);
         if (closed || token.IsCancellationRequested || generation != previewGeneration || preview.Revision != session.Revision) return;
+        bool resizeForSnip = resetPreviewViewPending;
         Viewport.SetImage(bitmap, session.ImageWidth, session.ImageHeight, resetPreviewViewPending);
         resetPreviewViewPending = false;
         displayedRevision = preview.Revision;
         UpdateViewStatus();
+        if (resizeForSnip) ScheduleResizeForSnip(sizingIntent);
     }
 
     private async Task<bool> RunActionAsync(string message, Func<Task<bool>> action, bool commitDraft = true)
     {
         if (busy || closed) return false;
+        CancelPendingSnipResize();
         busy = true;
         actionCancellation = new CancellationTokenSource();
         Viewport.CancelGesture();
@@ -344,7 +353,12 @@ public sealed partial class MainWindow : Window
             busy = false;
             actionCancellation?.Dispose();
             actionCancellation = null;
-            if (!closed) { UpdateCommands(); if (!commitDraft && Viewport.IsTextEditing) Viewport.RestoreTextFocus(); }
+            if (!closed)
+            {
+                UpdateCommands();
+                if (!commitDraft && Viewport.IsTextEditing) Viewport.RestoreTextFocus();
+                ResumePendingSnipResize();
+            }
         }
     }
 
@@ -360,7 +374,7 @@ public sealed partial class MainWindow : Window
         UpdateCommands();
     }
 
-    private void SetTool(PreviewTool next, bool whileBusy = false)
+    private void SetTool(PreviewTool next, bool whileBusy = false, bool revealOptions = true)
     {
         if ((busy && !whileBusy) || closed) return;
         selectedTool = next;
@@ -368,7 +382,6 @@ public sealed partial class MainWindow : Window
         PanButton.IsChecked = next == PreviewTool.Pan;
         PenButton.IsChecked = next == PreviewTool.Pen;
         HighlighterButton.IsChecked = next == PreviewTool.Highlighter;
-        SnapHighlighterButton.Visibility = next == PreviewTool.Highlighter ? Visibility.Visible : Visibility.Collapsed;
         RectangleButton.IsChecked = next == PreviewTool.Rectangle;
         SelectButton.IsChecked = next == PreviewTool.Select;
         TextButton.IsChecked = next == PreviewTool.Text;
@@ -380,13 +393,42 @@ public sealed partial class MainWindow : Window
         EmojiButton.IsChecked = next == PreviewTool.Emoji;
         RemoveAreaButton.IsChecked = next == PreviewTool.RemoveArea;
         OcrSelectButton.IsChecked = next == PreviewTool.OcrSelect;
-        ContextBar.Visibility = next == PreviewTool.Text || Viewport.IsTextEditing ? Visibility.Visible : Visibility.Collapsed;
+        ShapesButton.IsChecked = next is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse or PreviewTool.Emoji;
+        contextDismissed = !revealOptions;
+        UpdateToolContext();
         uint color = next == PreviewTool.Highlighter ? highlighterColor : next == PreviewTool.Text ? textColor : penColor;
         Viewport.InkArgb = color;
         changingColor = true;
         InkColorPicker.Color = Windows.UI.Color.FromArgb((byte)(color >> 24), (byte)(color >> 16), (byte)(color >> 8), (byte)color);
         changingColor = false;
         if (session.HasImage) SetStatus(ToolInstruction());
+    }
+
+    private void UpdateToolContext()
+    {
+        bool text = selectedTool == PreviewTool.Text || Viewport.IsTextEditing;
+        bool ink = selectedTool is PreviewTool.Pen or PreviewTool.Highlighter or PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse;
+        bool eraser = selectedTool == PreviewTool.Eraser;
+        ContextBar.Visibility = text ? Visibility.Visible : Visibility.Collapsed;
+        InkContextBar.Visibility = ink || text || eraser ? Visibility.Visible : Visibility.Collapsed;
+        ColorButton.Visibility = ink || text ? Visibility.Visible : Visibility.Collapsed;
+        StrokeWidthContainer.Visibility = ink ? Visibility.Visible : Visibility.Collapsed;
+        SnapHighlighterButton.Visibility = selectedTool == PreviewTool.Highlighter ? Visibility.Visible : Visibility.Collapsed;
+        EraseAllButton.Visibility = eraser ? Visibility.Visible : Visibility.Collapsed;
+        ContextRow.Visibility = session.HasImage && !contextDismissed && (ink || text || eraser) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnContextCloseClicked(object sender, RoutedEventArgs args)
+    {
+        contextDismissed = true;
+        UpdateToolContext();
+    }
+
+    private void OnShapesClicked(object sender, RoutedEventArgs args)
+    {
+        if (busy || closed) return;
+        ShapesButton.IsChecked = selectedTool is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse or PreviewTool.Emoji;
+        Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.ShowAttachedFlyout(ShapesButton);
     }
 
     private void OnInkColorChanged(ColorPicker sender, ColorChangedEventArgs args)
@@ -430,6 +472,7 @@ public sealed partial class MainWindow : Window
     private void ChangeView(Action action)
     {
         if (busy || closed || !PreviewIsCurrent) return;
+        CancelPendingSnipResize();
         action();
         UpdateViewStatus();
     }
@@ -441,8 +484,12 @@ public sealed partial class MainWindow : Window
         if (closed) return;
         bool enabled = !busy && !applicationExitPending;
         FileBar.IsEnabled = enabled;
+        CaptureBar.IsEnabled = enabled;
         ToolBar.IsEnabled = enabled;
+        ToolBar.Visibility = session.HasImage ? Visibility.Visible : Visibility.Collapsed;
         ContextBar.IsEnabled = enabled;
+        InkContextBar.IsEnabled = enabled;
+        ContextCloseButton.IsEnabled = enabled;
         HelpButton.IsEnabled = enabled;
         Viewport.IsEnabled = enabled && PreviewIsCurrent;
         SaveButton.IsEnabled = !busy && session.HasImage;
@@ -454,6 +501,7 @@ public sealed partial class MainWindow : Window
         DeleteObjectButton.IsEnabled = !busy && (selectedAnnotationIndex >= 0 || selectedTool == PreviewTool.OcrSelect && ocrSelection?.Text.Length > 0);
         EraseAllButton.IsEnabled = !busy && session.HasImage && session.AnnotationCount > 0;
         UpdateTextDraftCommands();
+        UpdateToolContext();
         ZoomOutButton.IsEnabled = FitButton.IsEnabled = ActualSizeButton.IsEnabled = ZoomInButton.IsEnabled = !busy && PreviewIsCurrent;
         RetryPreviewButton.Visibility = session.HasImage && !PreviewIsCurrent ? Visibility.Visible : Visibility.Collapsed;
         RetryPreviewButton.IsEnabled = !busy;
@@ -462,7 +510,7 @@ public sealed partial class MainWindow : Window
         BusyRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         CancelActionButton.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
         string filename = displayPath is null ? "" : " — " + Path.GetFileName(displayPath);
-        Title = (session.IsDirty ? "• " : "") + "Snip Studio — WinUI 3 Preview" + filename;
+        Title = (session.IsDirty ? "• " : "") + "Snip Studio" + filename;
         UpdateViewStatus();
     }
 
@@ -471,23 +519,43 @@ public sealed partial class MainWindow : Window
         if (closed || ZoomText is null) return;
         DimensionsText.Text = session.HasImage ? $"{session.ImageWidth:N0} × {session.ImageHeight:N0} px" : "";
         ZoomText.Text = !PreviewIsCurrent ? "—" : (Viewport.IsFit ? "Fit · " : "") + Viewport.ZoomPercent.ToString("0.#") + "%";
+        ActualSizeButton.Content = !PreviewIsCurrent ? "100%" : Viewport.ZoomPercent.ToString("0.#") + "%";
+        if (ActualSizeButton.Flyout is MenuFlyout presets)
+            foreach (var item in presets.Items.OfType<ToggleMenuFlyoutItem>())
+                item.IsChecked = PreviewIsCurrent && item.Tag is string value && int.TryParse(value, out int percent) && Math.Abs(Viewport.ZoomPercent - percent) < 0.05;
     }
 
-    private void SetStatus(string message) { if (!closed) StatusText.Text = message; }
+    private void OnZoomPresetClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is not ToggleMenuFlyoutItem { Tag: string value } || !int.TryParse(value, out int percent) || percent <= 0) return;
+        ChangeView(() =>
+        {
+            if (percent == 100) Viewport.ActualPixels();
+            else Viewport.ZoomBy(percent / Viewport.ZoomPercent);
+        });
+    }
+
+    private void SetStatus(string message)
+    {
+        if (closed) return;
+        StatusText.Text = message;
+        ToolTipService.SetToolTip(StatusText, message);
+    }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs args)
     {
         if (ZoomPanel is null) return;
-        bool narrow = args.NewSize.Width < 760;
+        FileBar.MaxWidth = Math.Clamp(args.NewSize.Width - 490, 44, 228);
+        bool narrow = args.NewSize.Width < 560;
         Grid.SetRow(ZoomPanel, narrow ? 1 : 0);
         Grid.SetColumn(ZoomPanel, narrow ? 0 : 1);
         Grid.SetColumnSpan(ZoomPanel, narrow ? 2 : 1);
         Grid.SetColumnSpan(StatusInfo, narrow ? 2 : 1);
-        // Long status text wraps within the available width instead of enlarging
-        // its StackPanel and forcing the zoom actions outside a compact window.
-        StatusText.MaxWidth = Math.Max(80, args.NewSize.Width - (narrow ? 64 : 490));
+        // Bound the status line so it cannot push zoom actions off a compact window.
+        StatusText.MaxWidth = Math.Max(80, args.NewSize.Width - (narrow ? 64 : 340));
         DimensionsText.Visibility = args.NewSize.Width < 420 ? Visibility.Collapsed : Visibility.Visible;
-        ActualSizeButton.Visibility = ZoomText.Visibility = args.NewSize.Width < 320 ? Visibility.Collapsed : Visibility.Visible;
+        ActualSizeButton.Visibility = args.NewSize.Width < 320 ? Visibility.Collapsed : Visibility.Visible;
+        ZoomText.Visibility = Visibility.Collapsed;
     }
 
     private async Task ShowHelpAsync()
@@ -505,7 +573,7 @@ public sealed partial class MainWindow : Window
                     Content = new TextBlock
                     {
                         TextWrapping = TextWrapping.Wrap,
-                        Text = "Snip Studio · Automation Forge\n\nNew snip captures a rectangle. Capture options includes freeform, window, monitor, all monitors and scrolling capture. Escape cancels a capture; the scrolling controller also offers Finish to keep the frames collected so far. Record opens recording, microphone/system audio, playback, trimming and export.\n\nDraw with Pen, Highlighter, Line, Arrow, Rectangle or Ellipse. Highlighter can snap to recognized words; hold Shift for freehand. Select moves annotations. Object properties changes geometry, shape outline/fill, or emoji size/rotation. Crop and Remove image area show a review before applying. Eraser removes annotations while keeping screenshot pixels. Undo restores edits.\n\nText creates or edits an annotation on the canvas. Select text inside its editor to change font, image-pixel size, color, bold, italic or underline. Ctrl+Enter applies the draft; Escape cancels it. Image to text shows original recognition output and selectable rows before conversion, then selects Text. OCR may misread characters and source font matching is approximate: review identifiers, quantities and duplicate rows. Recognized-word selection copies in reading order. Translation is offline by default; a configured server receives text only after you choose it and click Translate. Review translated rows before applying them.\n\nUse Fit to center the image in the visible canvas. At 100%, one image pixel maps to one physical display pixel. Move view or middle-drag pans. Wheel pans and Ctrl+wheel zooms unless changed in Settings. Controls that do not fit move into the toolbar's overflow menu.\n\nCtrl+N: New snip\nCtrl+Shift+N: Recording\nCtrl+O: Open image\nCtrl+V: Paste\nCtrl+C: Copy selected text or image\nCtrl+Shift+C: Recognize and copy all text\nCtrl+S: Save as\nCtrl+P: Print\nCtrl+Z: Undo\nCtrl+Y or Ctrl+Shift+Z: Redo\nCtrl+F: Fit\nCtrl+0: 100%\nCtrl+plus/minus: Zoom\nDelete: Remove selection\nF11: Full screen\n\nThe file menu includes recent files, Share, Print, signed external-editor copies, new editor windows, Settings and release information. Optional notification-area, Windows startup and global shortcuts are explicit Settings choices for this WinUI build. Stable Snip Studio settings remain separate. Global shortcuts, when enabled, are Ctrl+Alt+Shift+S/R.\n\nSaving produces flattened PNG, JPEG, BMP or PDF files. Keep the editor open to retain editable annotation history; the exported file does not contain project objects. Your images are processed locally unless you deliberately Share or choose a configured translation server."
+                        Text = "Snip Studio · Automation Forge\n\nNew captures the selected shape. The Rectangle menu also offers freeform, window, monitor, all monitors and scrolling capture. Choose Off or a timed delay beside the capture shape. Escape cancels a capture; the scrolling controller also offers Finish to keep the frames collected so far. Record opens recording, microphone/system audio, playback, trimming and export.\n\nDraw with Pen, Highlighter, Line, Arrow, Rectangle or Ellipse. Highlighter can snap to recognized words; hold Shift for freehand. Select moves annotations. Object properties changes geometry, shape outline/fill, or emoji size/rotation. Crop and Remove image area show a review before applying. Eraser removes annotations while keeping screenshot pixels. Undo restores edits.\n\nText creates or edits an annotation on the canvas. Select text inside its editor to change font, image-pixel size, color, bold, italic or underline. Ctrl+Enter applies the draft; Escape cancels it. Image to text shows original recognition output and selectable rows before conversion, then selects Text. OCR may misread characters and source font matching is approximate: review identifiers, quantities and duplicate rows. Recognized-word selection copies in reading order. Translation is offline by default; a configured server receives text only after you choose it and click Translate. Review translated rows before applying them.\n\nUse Fit to center the image in the visible canvas. At 100%, one image pixel maps to one physical display pixel. Move view or middle-drag pans. Wheel pans and Ctrl+wheel zooms unless changed in Settings. Controls that do not fit move into the toolbar's overflow menu.\n\nCtrl+N: New snip\nCtrl+Shift+N: Recording\nCtrl+O: Open image\nCtrl+V: Paste\nCtrl+C: Copy selected text or image\nCtrl+Shift+C: Recognize and copy all text\nCtrl+S: Save as\nCtrl+P: Print\nCtrl+Z: Undo\nCtrl+Y or Ctrl+Shift+Z: Redo\nCtrl+F: Fit\nCtrl+0: 100%\nCtrl+plus/minus: Zoom\nDelete: Remove selection\nF11: Full screen\n\nThe file menu includes recent files, Share, Print, signed external-editor copies, new editor windows, Settings and release information. Optional notification-area, Windows startup and global shortcuts are explicit Settings choices for this WinUI build. Stable Snip Studio settings remain separate. Global shortcuts, when enabled, are Ctrl+Alt+Shift+S/R.\n\nSaving produces flattened PNG, JPEG, BMP or PDF files. Keep the editor open to retain editable annotation history; the exported file does not contain project objects. Your images are processed locally unless you deliberately Share or choose a configured translation server."
                     }
                 }
             };

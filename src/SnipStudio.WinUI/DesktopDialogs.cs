@@ -16,6 +16,7 @@ public static class DesktopDialogs
         foreach (string item in new[] { "System", "Light", "Dark" }) theme.Items.Add(item);
         theme.SelectedItem = draft.Theme;
         var ctrlWheel = Toggle("Require Ctrl when using the wheel to zoom", draft.RequireCtrlForWheelZoom);
+        var resizeToSnip = Toggle("Resize the window to fit a new snip", draft.ResizeToSnip);
         var delay = new NumberBox { Header = "Capture delay (seconds)", Minimum = 0, Maximum = 10, Value = draft.CaptureDelaySeconds, SmallChange = 1, LargeChange = 1, SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Compact };
         var captureInNewWindow = Toggle("Open captures in a new editor window", draft.CaptureInNewWindow);
         var hdr = Toggle("Use HDR color correction for captures", draft.UseHdrColorCorrection);
@@ -37,6 +38,8 @@ public static class DesktopDialogs
         content.Children.Add(new TextBlock { Text = "Settings apply to this WinUI build. Your stable Snip Studio settings stay separate.", TextWrapping = TextWrapping.Wrap });
         content.Children.Add(theme);
         content.Children.Add(ctrlWheel);
+        content.Children.Add(resizeToSnip);
+        content.Children.Add(new TextBlock { Text = "Fits new images to the current display. Manually resizing the editor keeps your chosen window size.", FontSize = 12, TextWrapping = TextWrapping.Wrap });
         content.Children.Add(delay);
         content.Children.Add(captureInNewWindow);
         content.Children.Add(hdr);
@@ -81,6 +84,7 @@ public static class DesktopDialogs
                 if (!double.IsFinite(delay.Value) || delay.Value != Math.Truncate(delay.Value)) throw new ArgumentException("Capture delay must be a whole number from 0 to 10.");
                 draft.Theme = theme.SelectedItem as string ?? "System";
                 draft.RequireCtrlForWheelZoom = ctrlWheel.IsOn;
+                draft.ResizeToSnip = resizeToSnip.IsOn;
                 draft.CaptureDelaySeconds = checked((int)delay.Value);
                 draft.CaptureInNewWindow = captureInNewWindow.IsOn;
                 draft.UseHdrColorCorrection = hdr.IsOn;

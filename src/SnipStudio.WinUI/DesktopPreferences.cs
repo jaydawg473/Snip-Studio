@@ -19,6 +19,7 @@ public sealed class DesktopPreferences
     public bool HideTaskbars { get; set; } = true;
     public bool KeepPrimaryTaskbarVisible { get; set; } = true;
     public bool RequireCtrlForWheelZoom { get; set; } = true;
+    public bool ResizeToSnip { get; set; } = true;
     public bool DefaultMicrophone { get; set; } = true;
     public bool DefaultSystemAudio { get; set; } = true;
     public bool HotkeysEnabled { get; set; }

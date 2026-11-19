@@ -21,6 +21,7 @@ public sealed partial class MainWindow
     private bool explicitExit;
     private bool desktopVisualInitialized;
     private string? externalSnapshotPath;
+    private CaptureKind selectedCaptureKind = CaptureKind.Rectangle;
     private nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
 
     private void InitializeDesktopIntegration()
@@ -63,7 +64,8 @@ public sealed partial class MainWindow
             StrokeWidthBox.Value = preferences.StrokeWidth;
         }
         Viewport.RequireCtrlForWheelZoom = preferences.RequireCtrlForWheelZoom;
-        SetTool(selectedTool, whileBusy: true);
+        UpdateCaptureControls();
+        SetTool(selectedTool, whileBusy: true, revealOptions: !contextDismissed);
     }
 
     private async void OnSettingsClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Settings", async () =>
@@ -139,10 +141,45 @@ public sealed partial class MainWindow
         }
     }
 
-    private async void OnCaptureClicked(object sender, RoutedEventArgs args) => await CaptureAsync(CaptureKind.Rectangle, false);
-    private async void OnCaptureModeClicked(object sender, RoutedEventArgs args)
+    private async void OnCaptureClicked(object sender, RoutedEventArgs args) => await CaptureAsync(selectedCaptureKind, false);
+    private void OnScreenshotModeClicked(object sender, RoutedEventArgs args)
     {
-        if (sender is MenuFlyoutItem { Tag: string tag } && Enum.TryParse(tag, out CaptureKind mode)) await CaptureAsync(mode, false);
+        UpdateCaptureControls();
+        SetStatus("Screenshot mode. Choose a capture shape, then select New.");
+    }
+    private void OnCaptureModeSelected(object sender, RoutedEventArgs args)
+    {
+        if (busy || closed) return;
+        if (sender is MenuFlyoutItem { Tag: string tag } && Enum.TryParse(tag, out CaptureKind mode))
+        {
+            selectedCaptureKind = mode;
+            UpdateCaptureControls();
+            SetStatus(CaptureOptionsButton.Label + " capture ready. Select New to start.");
+        }
+    }
+    private async void OnCaptureDelayClicked(object sender, RoutedEventArgs args)
+    {
+        if (sender is not MenuFlyoutItem { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
+        await RunActionAsync("Saving capture delay…", () =>
+        {
+            DesktopPreferences draft = preferences.Clone();
+            draft.CaptureDelaySeconds = seconds;
+            preferencesStore.Save(draft);
+            preferences = preferencesStore.Load();
+            foreach (MainWindow editor in editorWindows)
+            {
+                editor.preferences = preferences.Clone();
+                editor.ApplyVisualPreferences(initializeInk: false);
+            }
+            SetStatus(seconds == 0 ? "Capture delay off." : $"Capture starts after {seconds} seconds.");
+            return Task.FromResult(true);
+        }, commitDraft: false);
+    }
+    private void UpdateCaptureControls()
+    {
+        CaptureOptionsButton.Label = selectedCaptureKind == CaptureKind.AllMonitors ? "All monitors" : selectedCaptureKind.ToString();
+        DelayButton.Label = preferences.CaptureDelaySeconds == 0 ? "Off" : preferences.CaptureDelaySeconds + " s";
+        ScreenshotModeButton.IsChecked = true;
     }
     private async void OnScrollingClicked(object sender, RoutedEventArgs args) => await CaptureAsync(CaptureKind.Rectangle, true);
 

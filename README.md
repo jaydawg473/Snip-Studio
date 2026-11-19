@@ -4,7 +4,9 @@
 
 Snip Studio brings capture, image editing, text extraction, recording and video review into a native WinUI 3 desktop interface. This separate Automation Forge repository preserves the history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`.
 
-**Current source: `0.7.0-preview.2`, file version `0.7.0.2`. Production release status: INSUFFICIENT EVIDENCE.** Signed component checks passed 1,673 assertions, including concurrent settings reads/writes. Native observation covers the supplied snip's OCR/Text/edit/history/PNG save sequence and compact resizing. A fresh instance also passed F11 full-screen/restore, the full Convert text label and precise font-size display/edit round trips. Shortcut routing after picker/system-sizing interactions remains inconclusive; capture, recording/audio, physical DPI and installation remain unverified. The supplied OCR example retains a measured accuracy limit shared with stable 0.6.24; no guessed corrections were added. See [verification and measurements](VERIFICATION-WINUI.md).
+**Current source: `0.7.0-preview.3`, file version `0.7.0.3`. Production release status: INSUFFICIENT EVIDENCE.** This update restores Snip Studio's familiar layout, spacing and tool placement while keeping the new icons: two compact toolbar rows, blue New button, grouped Shapes, contextual palette, canvas and bottom zoom presets. Fresh signed checks passed 1,673 component assertions against the final source. An earlier signed reference candidate rendered the restored controls, automatically sized a small snip with balanced canvas margins, showed readable Text options and accepted 125% zoom. Final-source build/package evidence and native retesting of the launcher/context-sizing corrections remain pending. Preview.2 results remain historical. See [current verification status](VERIFICATION-WINUI.md).
+
+The requested layout restoration preserves the product's identity and existing workflows. It does not claim improved OCR accuracy or faster capture/recording. The supplied dense filename example retains a measured recognition limit shared with stable 0.6.24; no identifiers are guessed or silently corrected.
 
 ## Available workflows in the current source
 
@@ -14,7 +16,7 @@ Snip Studio brings capture, image editing, text extraction, recording and video 
 | Image editing | Open/Paste, multiple editor windows, Select and Move view, Pen, Highlighter, Line, Arrow, Rectangle, Ellipse and emoji. Selected-object properties, resize/move, annotation erasing, crop, source-area removal, Undo and Redo. |
 | Editable text | On-canvas text drafts, font family, image-pixel size, color, bold, italic and underline. Apply/Cancel retains a clear draft boundary. |
 | OCR and translation | Local Windows OCR, original recognition output, selectable rows, source-style conversion and recognized-word selection. Conversion selects Text. Translation offers local processing or an explicitly chosen HTTPS server, with reviewed rows before applying. Font recovery remains approximate; review identifiers, leading zeros and duplicate rows. |
-| View | Fit, 100%, zoom, pan, full screen and toolbar overflow. The viewport uses physical-pixel/DIP geometry; real mixed-DPI behavior still needs device checks. |
+| View | Fit, zoom presets, pan, full screen and toolbar overflow. Resize to snip is enabled by default with a Settings choice; source sizing preserves a window the user manually resized and clamps automatic sizing to the monitor work area. Native checks cover one small-image autosize and 125% preset; 100%/Ctrl+0 and physical mixed-DPI behavior remain unverified. |
 | Recording and video | Native WinUI recording/review window; display, region or window selection; microphone/system-audio device choices, pointer inclusion, 5–30 fps, recording boundaries and Stop and save. Local playback, playhead-based trim, original-copy saving and smaller MP4 exports. Recording is scaled to fit 1920 × 1080. Pause/Resume controls are not implemented. |
 | Files and Windows | Flattened PNG/JPEG/BMP/PDF Save As, image/text clipboard actions, Windows Share, printing, recent snips/recordings, external-editor working copies, keyboard shortcuts and Help. Settings offer separate preview tray, startup and global-shortcut choices. |
 | Recovery and release information | Cancellation and failure feedback, dirty-document prompts, atomic image/video-copy writes and recoverable preview preferences. Manual update checks read this migration repository's release information; they do not download or execute an installer. |
@@ -29,16 +31,16 @@ The preview has its own application identity and stores preferences at `%LocalAp
 
 Images, OCR, drawing and recording are processed locally. Sharing and a configured translation server are explicit actions; the server receives selected text only when Translate is chosen. Manual update checks contact GitHub. Local startup diagnostics are bounded and redact known application/profile paths; they do not deliberately record images, clipboard contents or document text.
 
-Native acceptance is partial and tied to the observed candidate. One sequence does not establish all shortcuts, tools or device integrations. Installation and public GitHub Release publication have not been performed. Use [the verification checklist](VERIFICATION-WINUI.md) to distinguish source coverage from exercised behavior.
+Preview.3 native evidence is partial and tied to the observed signed candidate. The latest empty-launcher and Text-context sizing adjustments still need retesting; manual-size retention, broader zoom/navigation and device integrations need their own checks. Real capture/scrolling, recording/audio, physical DPI and installation remain unverified. Use [the verification checklist](VERIFICATION-WINUI.md) to distinguish source coverage from exercised behavior.
 
 ## Source and development
 
 - [Migration design and remaining work](MIGRATION.md)
-- [Preview.2 release notes](release-notes-0.7.0-preview.2.md)
+- [Preview.3 release notes](release-notes-0.7.0-preview.3.md)
 - [Native WinUI frontend](src/SnipStudio.WinUI)
 - [Windows backend adapters](src/SnipStudio.Backend)
 - [Backend checks](tests/SnipStudio.Backend.Checks), [viewport checks](tests/SnipStudio.Viewport.Checks), [migration checks](tests/SnipStudio.Migration.Checks)
-- [Historical preview.1 notes](release-notes-0.7.0-preview.1.md) and [stable 0.6.24 notes](release-notes-0.6.24.md)
+- [Historical preview.2 notes](release-notes-0.7.0-preview.2.md), [preview.1 notes](release-notes-0.7.0-preview.1.md) and [stable 0.6.24 notes](release-notes-0.6.24.md)
 
 The pinned toolchain is .NET SDK 10.0.404, Windows App SDK 2.7.0 and Windows SDK BuildTools 10.0.28000.2957. The x64 application targets `net10.0-windows10.0.26100.0` and publishes as an unpackaged, self-contained folder. Build/test/signing steps must preserve the signature requirements; never substitute `dotnet run` or an unsigned helper for the verified workflow. Signing credentials and private verification outputs are not included in this repository.
 

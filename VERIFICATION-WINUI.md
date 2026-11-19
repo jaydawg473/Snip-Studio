@@ -1,8 +1,28 @@
 # WinUI preview verification
 
-Updated November 19, 2026 for `0.7.0-preview.2`, application file version `0.7.0.2`. **Production release status: INSUFFICIENT EVIDENCE.** Native acceptance is partial: a supplied-image text/edit/save and compact-resize sequence was observed, followed by successful fresh-instance F11 and label/font-size retests. Broader workflows, post-dialog shortcut routing and device/installation checks remain incomplete.
+Updated November 19, 2026 for `0.7.0-preview.3`, application file version `0.7.0.3`. **Production release status: INSUFFICIENT EVIDENCE.** The previous compact layout/spacing/tool placement is restored in source while retaining the new icons. Fresh final-source component checks pass; native evidence is partial, and the latest sizing-fix retests, final build and package acceptance remain pending. Earlier preview evidence is explicitly version-scoped below.
 
-## Current component results
+## Preview.3 current gates
+
+| Gate | Current status |
+| --- | --- |
+| Compact capture/file row, annotation tools, contextual controls, canvas and bottom status/zoom | Source uses 54/46-DIP rows without the large header, blue New, grouped Shapes and bottom zoom presets. Signed reference candidate rendered without New clipping/extra capture overflow. |
+| Autosize and Text context | One 301 × 169 snip opened with an automatically reduced window and visually balanced canvas margins; Text context was visible/readable. No precise outer-window measurement is claimed. Latest empty-launcher and 40-DIP options-reserve fixes await signed native retest. Manual-size retention and monitor bounds are source contracts awaiting broader checks. |
+| Zoom and shortcuts | Native 125% preset observed. Later 100% and Ctrl+0 attempts were inconclusive when the tool captured another foreground application; neither a pass nor an application regression is established. |
+| Signed component suites | PASS: 77 backend + 1,335 viewport + 261 migration = 1,673 unique assertions at 21:24 UTC against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. These are fresh preview.3 runs; historical counts are not added. |
+| Build, publication and package closure | Build/publication and static signed closure passed for reference freeze `A02F23EBD50CDBA68AA723CFCBE67A44CBFD813B4F1E445FE40CD80F41E56D43`. Final-source build/package results are pending and are not inferred from that earlier candidate. |
+| OCR/font controls, save/history and broader action access | Preview.2 results remain historical; fresh restored-layout workflow checks are incomplete. |
+| Real capture/scrolling, recording/audio, clipboard/print/share, physical DPI/monitors and installation | Unverified; earlier partial editor checks do not establish these workflows. |
+
+The private native reference observation recorded at 21:24 UTC binds the signed A02 reference candidate. Its static audit reports 358 signed PE files, preserved vendor bytes and required dependency/XAML/translation resources. That is file-closure evidence, not final archive/installer or device acceptance. Native interaction used a byte-identical renamed signed host with matching PRI to select the application reliably in the desktop tool. The canonical shipping host remains unchanged; the observation does not independently prove launch through every canonical entry path.
+
+Native checks also exposed a clipped empty-launcher hint and Fit changing from 100% to 76.3% when Text options opened. Source now uses a smaller empty layout and reserves 40 DIP for options during autosizing. Those repairs are pending signed native retest; their success is not assumed from source or compilation.
+
+The UI restoration does not claim improved OCR accuracy or faster capture/recording. Preserve the supplied-input uncertainty, exact user edits, raw extraction output and the signing requirements described below. Package-specific receipts must identify the delivered preview.3 bytes and results.
+
+## Preview.2 historical component results
+
+All evidence from this section onward describes preview.2 candidates and source freezes. It is retained for traceability and does not verify the restored preview.3 layout.
 
 The signed run completed November 19 at 17:42 UTC against source freeze `6C33D7561681E844A21DAE1427FCCADC67122599DD19B165C658483DD5CF326E`. Its execution receipt verified valid timestamped signatures on all executed tools and own/dependency assemblies. **1,673 unique component assertions passed**:
 
@@ -18,7 +38,7 @@ At 17:43:25 UTC, two separately launched signed/preverified worker processes wit
 
 Nine structural assertions for the signed manifest task and a separate competing-task registration-priority fixture passed against the same source freeze. They are separate build-tool evidence and are not added to the 1,673 workflow assertions.
 
-## Additional adapter checks
+## Preview.2 historical adapter checks
 
 The following signed runs completed at 17:33 UTC against prior freeze `2A49E0B2D37C040102080D51E97DF31761F9EEEB10A5E4F6F487966ED92F6C6A`. Comparing the freezes shows only settings production/test C# changed afterward; the tested media, backend and translation source is unchanged. These results are reported separately from the component total.
 
@@ -29,9 +49,9 @@ The following signed runs completed at 17:33 UTC against prior freeze `2A49E0B2D
 
 The 64,190-byte compact MP4 was rejected by the smaller-export budget rule without replacing the destination. Positive export used an explicitly labeled owned copy with an artificial 512 KiB MP4 free box. A smaller padded result does not prove improved compression of the compact original. Opaque non-video copy fixtures in the component suite establish transaction behavior only; they are distinct from the generated-media codec tests.
 
-## Controlled image measurements
+## Preview.2 historical image measurements
 
-The current passing migration run used an opaque 4096 × 2160 PNG with a 16 × 12 colored-panel grid, 175,789 input bytes. These are backend operations within the check process, not application startup or native UI latency.
+The preview.2 passing migration run used an opaque 4096 × 2160 PNG with a 16 × 12 colored-panel grid, 175,789 input bytes. These are backend operations within the check process, not application startup or native UI latency.
 
 | Operation | Actual measurement |
 | --- | --- |
@@ -51,7 +71,7 @@ Whole-process working-set samples were 107.60 MB before the session, 179.65 MB a
 
 The earlier supplied-snippet run measured 659.68 ms for recognition and 5,668.56 ms for source-style conversion, one sample rather than a general latency guarantee. OCR review labels strings unverified, says conversion keeps them verbatim and defaults to Close. Font recovery remains approximate. Later native observation confirmed Text activation and in-editor character drag-selection on one candidate; it did not establish exact source font/color/position recovery or correct the character-accuracy limit. Supplied filenames, typed test strings and images are kept out of these public documents.
 
-## Partial native evidence and remaining gates
+## Preview.2 partial native evidence and remaining gates
 
 An accessible desktop became available after the earlier locked-screen observations. The private native receipt recorded at 18:34 UTC binds signed candidate executable `B11E3E49328536304AE1CDFDC061B0AD976D01726F6A0CD36B237CA2DCF92AA9`, source commit `1b92653d680ab52580361156d7d7d586b733499a`. It records a rendered frontend opening the supplied 301 × 169 image, six-row OCR review, conversion selecting Text, RichEditBox character drag-selection, Ctrl+A and an exactly retained typed replacement on Apply. Undo/Redo were visually observed before later unattributed input made subsequent state changes unsuitable as agent evidence.
 
@@ -61,7 +81,7 @@ Ctrl+O, Ctrl+S, Ctrl+0 and F11 on the older instance after picker/system-sizing 
 
 The earlier sequence exposed a clipped conversion label and excessive recovered-font decimals. Source freeze `71948BDA4063784C15B30653F101913D57F232D700373F7688698DE30C7992E7` shortens the action to Convert text and adds a precision-preserving two-decimal display formatter. Build/publish passed with zero warnings/errors. Native retesting at 18:49 UTC bound frontend SHA256 `00154685D0DDE7596227DCCBA41E5C0BFFB89421DAF9F2ED0274B81A61FFD930` and confirmed the complete Convert text label visible and conversion selecting Text. For a recovered `NumberBox.Value` of `11.333333015441895`, displayed text was `11.33`; leaving the field with focus/Tab retained the exact underlying `11.333333015441895`. Explicitly entering `12.5` and tabbing committed `12.5`. These UX checks pass on the updated frontend; the broader native sequence above was on its predecessor. Backend, viewport and settings source is unchanged by the three frontend edits, so existing component evidence retains that limited scope.
 
-| Gate | Current evidence boundary |
+| Gate | Preview.2 evidence boundary |
 | --- | --- |
 | Application rendering, native input and file pickers | PARTIAL: Open, text drag/type/Apply, Save As and fresh-instance F11 full-screen/restore observed. Post-dialog shortcut routing, text scaling and broader input/pickers remain unverified. |
 | Supplied OCR examples, icon preservation, visual text/font/color/size/position, Text activation and native drag/copy/edit | PARTIAL: six-row review, visible conversion action, Text activation, in-editor selection/edit and exact size-display round trips observed; exact OCR strings failed as above. Visual source matching and OCR-band copy remain unverified. |
@@ -72,7 +92,7 @@ The earlier sequence exposed a clipped conversion label and excessive recovered-
 | Preferences/restart, recent paths on real storage, tray/startup/global shortcuts, Help, release metadata and configured translation server | Controlled settings/local-translation checks PASS; Windows Shell/network/native/service acceptance NOT TESTED. |
 | Install, upgrade/uninstall and other-PC compatibility | NOT TESTED. No installation or public GitHub Release is established by these checks. |
 
-## Build, signing and package evidence
+## Build, signing and package evidence boundaries
 
 A clean modern .NET/WinUI Release build completed at 17:45 UTC against the same source freeze with **zero warnings and zero errors**. The compiler reported 18.44 seconds; this is build duration, not application startup. The build receipt records no application launch or installer execution. Earlier publication verified application-resource closure, but the clean build alone does not verify the final published installer or portable archive. A delivered candidate's included `VALIDATION.txt`, `SOURCE`, `SIGNATURES` and hash manifest must identify the exact package bytes, source binding, verified executable closure, compiled PRI/XAML, notices and audit outcomes. Package-specific receipts are the authority for that artifact; this source document does not predeclare their success.
 

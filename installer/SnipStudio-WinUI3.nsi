@@ -7,10 +7,10 @@ Unicode true
 !include "x64.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.7.0-preview.2"
+  !define APP_VERSION "0.7.0-preview.3"
 !endif
 !ifndef APP_VERSION_NUMERIC
-  !define APP_VERSION_NUMERIC "0.7.0.2"
+  !define APP_VERSION_NUMERIC "0.7.0.3"
 !endif
 !define APP_NAME "Snip Studio WinUI 3 Preview"
 !define APP_EXE "SnipStudio.WinUI3.Preview.exe"

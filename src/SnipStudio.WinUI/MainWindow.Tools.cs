@@ -78,8 +78,17 @@ public sealed partial class MainWindow
     private async Task ChooseToolAsync(PreviewTool next)
     {
         if (busy || closed) return;
-        if (next == selectedTool && Viewport.IsTextEditing) return;
-        if (Viewport.IsTextEditing && !await ApplyTextDraftAsync()) return;
+        CancelPendingSnipResize();
+        if (next == selectedTool && Viewport.IsTextEditing)
+        {
+            SetTool(selectedTool);
+            return;
+        }
+        if (Viewport.IsTextEditing && !await ApplyTextDraftAsync())
+        {
+            SetTool(selectedTool);
+            return;
+        }
         SetTool(next);
     }
 
@@ -225,7 +234,8 @@ public sealed partial class MainWindow
         finally { changingTextFormat = false; }
         Viewport.SetSelection(null);
         Viewport.BeginTextEdit(draft);
-        ContextBar.Visibility = Visibility.Visible;
+        contextDismissed = false;
+        UpdateToolContext();
         UpdateTextDraftCommands();
     }
 
@@ -251,7 +261,7 @@ public sealed partial class MainWindow
         Viewport.EndTextEdit();
         ocrSelection = null;
         Viewport.SetRecognizedBands(null);
-        ContextBar.Visibility = selectedTool == PreviewTool.Text ? Visibility.Visible : Visibility.Collapsed;
+        UpdateToolContext();
         UpdateSelection();
     }
 

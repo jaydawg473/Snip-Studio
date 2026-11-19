@@ -32,10 +32,10 @@
                 <RichEditBox x:Name="InlineEditor" AcceptsReturn="True" TextWrapping="Wrap" Padding="0" BorderThickness="0" MinWidth="0" MinHeight="0" Background="White" Foreground="Black" KeyDown="OnInlineKeyDown" TextChanged="OnInlineTextChanged" />
             </Border>
         </Canvas>
-        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="8" Margin="24" IsHitTestVisible="False">
-            <FontIcon Glyph="&#xE91B;" FontSize="36" HorizontalAlignment="Center" />
-            <TextBlock x:Name="EmptyTitle" Text="Your snip starts here" FontSize="20" FontWeight="SemiBold" HorizontalAlignment="Center" TextWrapping="Wrap" />
-            <TextBlock x:Name="EmptyHint" Text="Open an image or paste one from the clipboard." HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
+        <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="4" Margin="12" IsHitTestVisible="False">
+            <FontIcon Glyph="&#xE91B;" FontSize="24" HorizontalAlignment="Center" />
+            <TextBlock x:Name="EmptyTitle" Text="Your snip starts here" FontSize="18" FontWeight="SemiBold" HorizontalAlignment="Center" TextWrapping="Wrap" />
+            <TextBlock x:Name="EmptyHint" Text="Open an image or paste one from the clipboard." FontSize="12" HorizontalAlignment="Center" TextWrapping="Wrap" TextAlignment="Center" />
         </StackPanel>
     </Grid>
 </UserControl>

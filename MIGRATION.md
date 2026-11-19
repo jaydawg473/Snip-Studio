@@ -1,12 +1,20 @@
 # Snip Studio WinUI 3 migration
 
-Updated November 19, 2026 for `0.7.0-preview.2` (`0.7.0.2`). The workflow surfaces below are implemented. Migration acceptance remains in progress; production release status is **INSUFFICIENT EVIDENCE** until required native/device checks are completed.
+Updated November 19, 2026 for `0.7.0-preview.3` (`0.7.0.3`). The restored compact layout has partial signed-candidate native evidence; final sizing retests and release checks remain in progress. Production release status remains **INSUFFICIENT EVIDENCE**.
 
 This repository preserves the Git history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting at 0.6.24 commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. GitHub's self-fork request returned the original repository, so the migration has a separate repository rather than a fork-network entry. Preview identity, settings, startup entry, global shortcuts and update metadata are deliberately isolated from the stable application.
 
-## Implemented scope
+## Compact editor restoration
 
-The first preview supplied a small image-editor slice. Preview.2 now connects the broader application workflows in source:
+Preview.3 restores the previous layout, spacing and tool placement while retaining the new icons. The source uses two 54/46-DIP toolbar rows, removes the large header, retains the blue New button, groups shape choices and puts zoom presets at the bottom. Contextual options and the canvas keep the established arrangement. Existing editing, OCR, capture and recording adapters remain the architecture; this change does not replace the OCR engine or establish a performance improvement.
+
+A signed reference-layout candidate rendered the main controls without a clipped New label or extra capture overflow, automatically shrank around the supplied 301 × 169 image with visually balanced canvas margins, exposed readable Text options and accepted 125% zoom. No precise outer-window measurement is claimed. Subsequent 100%/Ctrl+0 attempts were inconclusive because the desktop tool repeatedly observed another foreground application; no successful result or application regression is inferred from them.
+
+Resize to snip defaults on and has a Settings toggle. Source sizing retains a user's manual size per window and clamps automatic sizing to the monitor work area. Native testing exposed a clipped empty-launcher hint and Fit dropping from 100% to 76.3% when Text options appeared. The smaller empty layout and a 40-DIP options reserve are implemented; final signed retesting is pending. The earlier preview.2 tests and observations below remain historical and are not new preview.3 results.
+
+## Workflow scope
+
+The first preview supplied a small image-editor slice; preview.2 connected the broader workflows retained in the current source. Native observations in this table apply to preview.2 only:
 
 | Surface | Current implementation | Remaining acceptance |
 | --- | --- | --- |
@@ -33,7 +41,7 @@ Image/PDF exports are flattened. Editable annotation objects and history are ses
 
 ## Preview integration and privacy
 
-Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The concurrent public API regression passed 64 writes and 128 reads without errors. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
+Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The preview.2 concurrent public API regression passed 64 writes and 128 reads without errors; a current preview.3 run is pending. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
 
 The manual update service queries only this WinUI repository's release endpoint, bounds the response and timeout, rejects redirected or out-of-repository release links, and displays reported metadata for review. A different tag alone is not treated as proof of a newer signed release. The service has no installer-download or execution path.
 
@@ -45,14 +53,16 @@ The repository pins .NET SDK 10.0.404, Microsoft.WindowsAppSDK 2.7.0 and Microso
 
 NuGet restore requires package signatures. Authenticode validation separately covers executed tools/helpers and delivered executable dependencies: Automation Forge signs our outputs with timestamps; valid original third-party signatures remain intact. A precompiled, signed manifest build task avoids execution of an unsigned generated inline task. Compiled applications are not executed before signing.
 
-The publish target explicitly requires the application's PRI and compiled App/MainWindow/EditorViewport/RecordingWindow XAML resources. The first preview's missing-resource launch failure established why dependency/PE checks alone do not cover application resource closure. Preview.2 needs its own build, signature, resource, notice, privacy and archive audit; historical preview.1 artifacts do not satisfy those gates.
+The publish target explicitly requires the application's PRI and compiled App/MainWindow/EditorViewport/RecordingWindow XAML resources. The first preview's missing-resource launch failure established why dependency/PE checks alone do not cover application resource closure. Preview.3 requires its own build, signature, resource, notice, privacy and archive audit; earlier preview artifacts do not satisfy those gates.
 
 Installation, stable-channel replacement and public GitHub Release publication require separate authorization and are not performed by this preview's update check. Source commits and packages must identify their exact source freeze and verification scope.
 
 ## Remaining work
 
-Signed suites passed 1,673 unique component assertions; manifest-task, local translation and generated-media results are documented separately. Native evidence establishes one supplied-image Open/OCR/Text/edit/history/Save As sequence and reduction from 1086 × 754 to 713 × 493 with usable toolbar/status overflow. A fresh instance passed F11 to 1920 × 1080 full screen and back before dialogs. The old instance's Ctrl+O/Ctrl+S/Ctrl+0/F11 results after picker/system-sizing interactions remain inconclusive; a global registration failure is not established.
+Fresh signed preview.3 suites passed 1,673 assertions against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. Retest the latest empty-launcher/options-reserve fixes, zoom/shortcut behavior, manual-size retention and monitor bounds, then complete final-source build and package checks. Current results are recorded in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md) rather than inferred from earlier candidates.
 
-The shortened Convert text label is now natively confirmed fully visible, and conversion activates Text. The two-decimal size display was retested: the precise recovered value displayed as 11.33, survived focus/Tab unchanged, and accepted an explicit 12.5 edit. These are scoped passes for the current UX changes, not a general keyboard or source-font accuracy claim.
+Historically, preview.2 signed suites passed 1,673 unique component assertions; manifest-task, local translation and generated-media results are documented separately. Its native evidence established one supplied-image Open/OCR/Text/edit/history/Save As sequence and reduction from 1086 × 754 to 713 × 493 with usable overflow. A fresh instance passed F11 to 1920 × 1080 full screen and back before dialogs. The old instance's Ctrl+O/Ctrl+S/Ctrl+0/F11 results after picker/system-sizing interactions were inconclusive; no global registration failure was established.
+
+Preview.2 also confirmed the shortened Convert text label, Text activation and precise font-size display/edit round trips. The restored toolbar must retain those behaviors and be checked again; those earlier passes are not a general keyboard or source-font accuracy claim.
 
 Package-specific source/signature/hash and audit evidence belongs with the delivered candidate. Required broader native/device checks remain: Fit/manual zoom, mixed DPI, real capture/scrolling, recording/audio/video, clipboard/print/share, preferences/recovery, Shell/startup and installation. Measure startup, real capture/recording and longer-running memory with stated inputs before claiming a performance improvement. Component timings, compilation, one native sequence and package verification do not close all acceptance gates.
