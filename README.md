@@ -4,7 +4,7 @@
 
 Snip Studio brings capture, image editing, text extraction, recording and video review into a native WinUI 3 desktop interface. This separate Automation Forge repository preserves the history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`.
 
-**Current source: `0.7.0-preview.2`, file version `0.7.0.2`. Production release status: INSUFFICIENT EVIDENCE.** The workflows below are connected in source. All 1,673 current component assertions passed, including the repaired concurrent settings read/write workflow. Local translation and generated-video adapter checks passed separately. Required native/device acceptance remains blocked by the locked desktop. The supplied OCR example has a measured character-accuracy limit shared with stable 0.6.24; no guessed corrections were added. See [verification and measurements](VERIFICATION-WINUI.md); preview.1 artifacts remain historical.
+**Current source: `0.7.0-preview.2`, file version `0.7.0.2`. Production release status: INSUFFICIENT EVIDENCE.** Signed component checks passed 1,673 assertions, including concurrent settings reads/writes. Native observation covers the supplied snip's OCR/Text/edit/history/PNG save sequence and compact resizing. A fresh instance also passed F11 full-screen/restore, the full Convert text label and precise font-size display/edit round trips. Shortcut routing after picker/system-sizing interactions remains inconclusive; capture, recording/audio, physical DPI and installation remain unverified. The supplied OCR example retains a measured accuracy limit shared with stable 0.6.24; no guessed corrections were added. See [verification and measurements](VERIFICATION-WINUI.md).
 
 ## Available workflows in the current source
 
@@ -29,7 +29,7 @@ The preview has its own application identity and stores preferences at `%LocalAp
 
 Images, OCR, drawing and recording are processed locally. Sharing and a configured translation server are explicit actions; the server receives selected text only when Translate is chosen. Manual update checks contact GitHub. Local startup diagnostics are bounded and redact known application/profile paths; they do not deliberately record images, clipboard contents or document text.
 
-Native workflows have not yet been accepted on an unlocked desktop. Installation and public GitHub Release publication have not been performed. Use [the verification checklist](VERIFICATION-WINUI.md) to distinguish source coverage from exercised behavior.
+Native acceptance is partial and tied to the observed candidate. One sequence does not establish all shortcuts, tools or device integrations. Installation and public GitHub Release publication have not been performed. Use [the verification checklist](VERIFICATION-WINUI.md) to distinguish source coverage from exercised behavior.
 
 ## Source and development
 

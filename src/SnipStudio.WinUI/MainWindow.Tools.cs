@@ -1,6 +1,7 @@
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using SnipStudio.WinUI.Backend;
+using Windows.Globalization.NumberFormatting;
 
 namespace SnipStudio.WinUI;
 
@@ -8,6 +9,51 @@ public sealed partial class MainWindow
 {
     private int selectedAnnotationIndex = -1;
     private bool changingTextFormat;
+    private readonly FontSizeDisplayFormatter textSizeFormatter = new();
+
+    private void ConfigureTextSizeFormatter()
+    {
+        textSizeFormatter.SetExactValue(TextSizeBox.Value);
+        TextSizeBox.NumberFormatter = textSizeFormatter;
+    }
+
+    /// <summary>
+    /// NumberBox reparses its formatted text on focus loss. Retain the exact
+    /// size for that unchanged display round-trip; only different input changes
+    /// the value. This formatter belongs only to the text-size control.
+    /// </summary>
+    private sealed class FontSizeDisplayFormatter : INumberFormatter2, INumberParser
+    {
+        private readonly DecimalFormatter formatter = new()
+        {
+            IntegerDigits = 1,
+            FractionDigits = 0,
+            IsGrouped = false,
+            NumberRounder = new IncrementNumberRounder { Increment = 0.01, RoundingAlgorithm = RoundingAlgorithm.RoundHalfUp }
+        };
+        private double exactValue, formattedExactValue;
+        private string? formattedText;
+
+        internal void SetExactValue(double value) => exactValue = value;
+
+        public string FormatDouble(double value)
+        {
+            // NumberBox may round its argument before calling the formatter;
+            // remember the separately supplied exact Value, not that argument.
+            formattedText = formatter.FormatDouble(value);
+            formattedExactValue = exactValue;
+            return formattedText;
+        }
+
+        public double? ParseDouble(string text) => formattedText is not null &&
+            formattedExactValue.Equals(exactValue) && string.Equals(text.Trim(), formattedText.Trim(), StringComparison.Ordinal)
+            ? exactValue : formatter.ParseDouble(text);
+
+        public string FormatInt(long value) => formatter.FormatInt(value);
+        public string FormatUInt(ulong value) => formatter.FormatUInt(value);
+        public long? ParseInt(string text) => formatter.ParseInt(text);
+        public ulong? ParseUInt(string text) => formatter.ParseUInt(text);
+    }
 
     private async void OnSelectClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Select);
     private async void OnTextClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Text);
@@ -260,6 +306,7 @@ public sealed partial class MainWindow
     }
     private void OnTextSizeChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
     {
+        textSizeFormatter.SetExactValue(args.NewValue);
         if (!changingTextFormat && !busy && !closed && Viewport is not null && double.IsFinite(args.NewValue)) Viewport.FormatText(null, (float)Math.Clamp(args.NewValue, 1, 1024), null, null);
     }
 

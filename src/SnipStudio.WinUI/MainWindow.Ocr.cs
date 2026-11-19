@@ -49,7 +49,7 @@ public sealed partial class MainWindow
             var dialog = new ContentDialog
             {
                 XamlRoot = Root.XamlRoot, Title = $"Image to text · {result.Lines.Count} rows", Content = new ScrollViewer { Content = panel, MaxHeight = 510 },
-                PrimaryButtonText = "Convert to editable text", SecondaryButtonText = "Copy text", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
+                PrimaryButtonText = "Convert text", SecondaryButtonText = "Copy text", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
             };
             translateButton.Click += (_, _) => { translateRequested = true; dialog.Hide(); };
             ContentDialogResult answer = await dialog.ShowAsync();

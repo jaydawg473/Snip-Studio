@@ -32,6 +32,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ConfigureTextSizeFormatter();
         AppWindow.Resize(new Windows.Graphics.SizeInt32(1100, 760));
         string icon = Path.Combine(AppContext.BaseDirectory, "Assets", "SnipStudio.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
