@@ -169,18 +169,31 @@ namespace SnipStudio
             return SelectDesktopRegion(selectionMode, hideTaskbars, keepPrimaryVisible, CaptureOverlayPurpose.Recording);
         }
 
+        internal static Rectangle? AdjustRecordingRegion(Rectangle screenRegion)
+        {
+            return SelectDesktopRegion(CaptureMode.Rectangle, false, true, CaptureOverlayPurpose.Recording, screenRegion);
+        }
+
         internal static Rectangle? SelectScrollingRegion(bool hideTaskbars, bool keepPrimaryVisible)
         {
             return SelectDesktopRegion(CaptureMode.Rectangle, hideTaskbars, keepPrimaryVisible, CaptureOverlayPurpose.Scrolling);
         }
 
         private static Rectangle? SelectDesktopRegion(CaptureMode selectionMode, bool hideTaskbars, bool keepPrimaryVisible,
-            CaptureOverlayPurpose purpose)
+            CaptureOverlayPurpose purpose, Rectangle? existingRecordingRegion = null)
         {
             Rectangle desktopBounds = SystemInformation.VirtualScreen;
             if (desktopBounds.Width < 1 || desktopBounds.Height < 1)
                 throw new InvalidOperationException(purpose == CaptureOverlayPurpose.Recording ?
                     "No desktop is available to record." : "No desktop is available to capture.");
+            if (existingRecordingRegion.HasValue)
+            {
+                Rectangle area = Rectangle.Intersect(existingRecordingRegion.Value, desktopBounds);
+                if (area.Width < 2 || area.Height < 2)
+                    throw new InvalidOperationException("The previous recording area is no longer available. Choose a new area in Recording options.");
+                area.Offset(-desktopBounds.Left, -desktopBounds.Top);
+                existingRecordingRegion = area;
+            }
             Bitmap desktop = null;
             List<CaptureWindow> windows = new List<CaptureWindow>();
             try
@@ -198,7 +211,7 @@ namespace SnipStudio
                 throw;
             }
             using (desktop)
-            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, selectionMode, windows, purpose))
+            using (CaptureOverlay overlay = new CaptureOverlay(desktop, desktopBounds, selectionMode, windows, purpose, existingRecordingRegion))
                 return overlay.ShowDialog() == DialogResult.OK ? (Rectangle?)overlay.SelectedScreenBounds : null;
         }
 
@@ -327,7 +340,13 @@ namespace SnipStudio
         private Rectangle selection = Rectangle.Empty;
         private GraphicsPath freeformPath;
         private CaptureWindow hoveredWindow;
+        private readonly Button useRecordingArea;
+        private Rectangle adjustmentOrigin;
+        private AdjustmentEdge adjustmentEdge;
         private bool SelectsWholeTarget { get { return mode == CaptureMode.Window || mode == CaptureMode.FullScreen; } }
+
+        [Flags]
+        private enum AdjustmentEdge { None = 0, Left = 1, Top = 2, Right = 4, Bottom = 8, Move = 16 }
 
         internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows)
             : this(desktop, desktopBounds, mode, windows, false)
@@ -341,7 +360,7 @@ namespace SnipStudio
         }
 
         internal CaptureOverlay(Bitmap desktop, Rectangle desktopBounds, CaptureMode mode, List<CaptureWindow> windows,
-            CaptureOverlayPurpose purpose)
+            CaptureOverlayPurpose purpose, Rectangle? existingRecordingRegion = null)
         {
             this.desktop = desktop;
             this.desktopBounds = desktopBounds;
@@ -364,6 +383,15 @@ namespace SnipStudio
                 instructionTitle = "Select scrolling content";
                 instructionDetail = "Drag around the content to scroll    |    Esc or right-click to cancel";
             }
+            if (existingRecordingRegion.HasValue)
+            {
+                selection = existingRecordingRegion.Value;
+                instructionTitle = "Adjust the recording area";
+                instructionDetail = "Drag inside to move, or drag the edges to resize. Enter to confirm · Esc to cancel.";
+                useRecordingArea = new Button { Text = "Use area", AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
+                useRecordingArea.Click += delegate { if (!dragging) CompleteSelection(); };
+                Controls.Add(useRecordingArea);
+            }
             Text = purpose == CaptureOverlayPurpose.Recording ? "Choose a recording area - Snip Studio" :
                 purpose == CaptureOverlayPurpose.Scrolling ? "Choose scrolling content - Snip Studio" : "Choose a snip - Snip Studio";
             FormBorderStyle = FormBorderStyle.None;
@@ -373,7 +401,7 @@ namespace SnipStudio
             ShowInTaskbar = false;
             TopMost = true;
             KeyPreview = true;
-            Cursor = SelectsWholeTarget ? Cursors.Hand : Cursors.Cross;
+            Cursor = useRecordingArea != null ? Cursors.Default : SelectsWholeTarget ? Cursors.Hand : Cursors.Cross;
             BackColor = Color.Black;
             DoubleBuffered = true;
             SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint |
@@ -471,6 +499,7 @@ namespace SnipStudio
                 else if (mode == CaptureMode.Freeform && freeformPoints.Count > 1)
                     graphics.DrawLines(border, freeformPoints.ToArray());
             }
+            if (useRecordingArea != null) DrawAdjustmentHandles(graphics);
 
             DrawInstructions(graphics);
             if (!selection.IsEmpty)
@@ -519,6 +548,8 @@ namespace SnipStudio
             int width = Math.Min(Math.Max(instructionTitleSize.Width, instructionDetailSize.Width) + 40, Math.Max(180, instructionMonitor.Width - 32));
             int height = instructionTitleSize.Height + instructionDetailSize.Height + 28;
             instructionBox = new Rectangle(instructionMonitor.Left + (instructionMonitor.Width - width) / 2, instructionMonitor.Top + 22, width, height);
+            if (useRecordingArea != null)
+                useRecordingArea.Location = new Point(instructionBox.Left + (width - useRecordingArea.Width) / 2, instructionBox.Bottom + 6);
         }
 
         private void DrawDimensions(Graphics graphics)
@@ -528,6 +559,91 @@ namespace SnipStudio
             DrawBox(graphics, box);
             TextRenderer.DrawText(graphics, dimensionText, detailFont, new Rectangle(box.X + 8, box.Y + 5, box.Width - 16, box.Height - 10),
                 Color.White, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+        }
+
+        private static IEnumerable<Rectangle> AdjustmentHandles(Rectangle area)
+        {
+            int middleX = area.Left + area.Width / 2, middleY = area.Top + area.Height / 2;
+            yield return AdjustmentHandle(area.Left, area.Top);
+            yield return AdjustmentHandle(middleX, area.Top);
+            yield return AdjustmentHandle(area.Right, area.Top);
+            yield return AdjustmentHandle(area.Left, middleY);
+            yield return AdjustmentHandle(area.Right, middleY);
+            yield return AdjustmentHandle(area.Left, area.Bottom);
+            yield return AdjustmentHandle(middleX, area.Bottom);
+            yield return AdjustmentHandle(area.Right, area.Bottom);
+        }
+
+        private static Rectangle AdjustmentHandle(int x, int y) { return new Rectangle(x - 4, y - 4, 9, 9); }
+
+        private void DrawAdjustmentHandles(Graphics graphics)
+        {
+            using (Brush fill = new SolidBrush(accent))
+            using (Pen border = new Pen(Color.FromArgb(24, 32, 44)))
+            {
+                foreach (Rectangle handle in AdjustmentHandles(selection))
+                {
+                    graphics.FillRectangle(fill, handle);
+                    graphics.DrawRectangle(border, handle.X, handle.Y, handle.Width - 1, handle.Height - 1);
+                }
+            }
+        }
+
+        private AdjustmentEdge GetAdjustmentEdge(Point point)
+        {
+            const int tolerance = 9;
+            if (!Rectangle.Inflate(selection, tolerance, tolerance).Contains(point)) return AdjustmentEdge.None;
+            int left = Math.Abs(point.X - selection.Left), right = Math.Abs(point.X - selection.Right);
+            int top = Math.Abs(point.Y - selection.Top), bottom = Math.Abs(point.Y - selection.Bottom);
+            AdjustmentEdge edges = AdjustmentEdge.None;
+            if (Math.Min(left, right) <= tolerance) edges |= left <= right ? AdjustmentEdge.Left : AdjustmentEdge.Right;
+            if (Math.Min(top, bottom) <= tolerance) edges |= top <= bottom ? AdjustmentEdge.Top : AdjustmentEdge.Bottom;
+            return edges == AdjustmentEdge.None ? AdjustmentEdge.Move : edges;
+        }
+
+        private static Cursor AdjustmentCursor(AdjustmentEdge edge)
+        {
+            switch (edge)
+            {
+                case AdjustmentEdge.Left | AdjustmentEdge.Top:
+                case AdjustmentEdge.Right | AdjustmentEdge.Bottom: return Cursors.SizeNWSE;
+                case AdjustmentEdge.Right | AdjustmentEdge.Top:
+                case AdjustmentEdge.Left | AdjustmentEdge.Bottom: return Cursors.SizeNESW;
+                case AdjustmentEdge.Left:
+                case AdjustmentEdge.Right: return Cursors.SizeWE;
+                case AdjustmentEdge.Top:
+                case AdjustmentEdge.Bottom: return Cursors.SizeNS;
+                case AdjustmentEdge.Move: return Cursors.SizeAll;
+                default: return Cursors.Default;
+            }
+        }
+
+        private Rectangle MoveRecordingArea(Rectangle area, int dx, int dy)
+        {
+            return new Rectangle(ClampRecordingCoordinate(area.Left + dx, 0, desktop.Width - area.Width),
+                ClampRecordingCoordinate(area.Top + dy, 0, desktop.Height - area.Height), area.Width, area.Height);
+        }
+
+        private static int ClampRecordingCoordinate(int value, int minimum, int maximum)
+        {
+            return Math.Min(maximum, Math.Max(minimum, value));
+        }
+
+        private void ApplyRecordingAdjustment()
+        {
+            int dx = current.X - start.X, dy = current.Y - start.Y;
+            if (adjustmentEdge == AdjustmentEdge.Move)
+            {
+                selection = MoveRecordingArea(adjustmentOrigin, dx, dy);
+                return;
+            }
+
+            int left = adjustmentOrigin.Left, top = adjustmentOrigin.Top, right = adjustmentOrigin.Right, bottom = adjustmentOrigin.Bottom;
+            if ((adjustmentEdge & AdjustmentEdge.Left) != 0) left = ClampRecordingCoordinate(left + dx, 0, right - 2);
+            if ((adjustmentEdge & AdjustmentEdge.Top) != 0) top = ClampRecordingCoordinate(top + dy, 0, bottom - 2);
+            if ((adjustmentEdge & AdjustmentEdge.Right) != 0) right = ClampRecordingCoordinate(right + dx, left + 2, desktop.Width);
+            if ((adjustmentEdge & AdjustmentEdge.Bottom) != 0) bottom = ClampRecordingCoordinate(bottom + dy, top + 2, desktop.Height);
+            selection = Rectangle.FromLTRB(left, top, right, bottom);
         }
 
         private Rectangle GetDimensionBox()
@@ -578,6 +694,16 @@ namespace SnipStudio
             CaptureWindow previousWindow = hoveredWindow;
             current = ClampPoint(e.Location);
             UpdateInstructionLocation();
+            if (useRecordingArea != null)
+            {
+                adjustmentEdge = GetAdjustmentEdge(current);
+                if (adjustmentEdge == AdjustmentEdge.None) return;
+                adjustmentOrigin = selection;
+                start = current;
+                dragging = true;
+                Capture = true;
+                return;
+            }
             if (SelectsWholeTarget)
             {
                 UpdateHoveredWindow(current);
@@ -614,7 +740,12 @@ namespace SnipStudio
             current = next;
             UpdateInstructionLocation();
             bool freeformChanged = false;
-            if (SelectsWholeTarget)
+            if (useRecordingArea != null)
+            {
+                if (dragging) ApplyRecordingAdjustment();
+                Cursor = AdjustmentCursor(dragging ? adjustmentEdge : GetAdjustmentEdge(current));
+            }
+            else if (SelectsWholeTarget)
                 UpdateHoveredWindow(current);
             else if (dragging)
             {
@@ -645,6 +776,12 @@ namespace SnipStudio
             using (Region dirty = mode == CaptureMode.Freeform
                 ? new Region(Rectangle.Empty) : CreateSelectionRepaintRegion(previousSelection, selection))
             {
+                if (useRecordingArea != null && selectionChanged)
+                {
+                    // The grips extend past the thin outline's normal dirty region.
+                    foreach (Rectangle handle in AdjustmentHandles(previousSelection)) dirty.Union(handle);
+                    foreach (Rectangle handle in AdjustmentHandles(selection)) dirty.Union(handle);
+                }
                 if (mode == CaptureMode.Freeform && freeformChanged)
                 {
                     if (HasArea(previousFreeform)) dirty.Union(previousFreeform);
@@ -738,6 +875,16 @@ namespace SnipStudio
             CaptureWindow previousWindow = hoveredWindow;
             current = ClampPoint(e.Location);
             UpdateInstructionLocation();
+            if (useRecordingArea != null)
+            {
+                if (dragging) ApplyRecordingAdjustment();
+                dragging = false;
+                Capture = false;
+                adjustmentEdge = AdjustmentEdge.None;
+                Cursor = AdjustmentCursor(GetAdjustmentEdge(current));
+                InvalidateOverlayChange(previousSelection, previousFreeform, previousDimensions, previousInstructions, false, false);
+                return;
+            }
             if (SelectsWholeTarget)
             {
                 UpdateHoveredWindow(current);
@@ -777,7 +924,15 @@ namespace SnipStudio
             if (dragging && !Capture)
             {
                 dragging = false;
-                ResetSelection();
+                if (useRecordingArea != null)
+                {
+                    Rectangle previous = selection;
+                    Rectangle dimensions = GetDimensionBox();
+                    selection = adjustmentOrigin;
+                    adjustmentEdge = AdjustmentEdge.None;
+                    InvalidateOverlayChange(previous, Rectangle.Empty, dimensions, instructionBox, false, false);
+                }
+                else ResetSelection();
             }
         }
 
@@ -877,9 +1032,27 @@ namespace SnipStudio
 
         protected override bool ProcessCmdKey(ref Message message, Keys keyData)
         {
-            if ((keyData & Keys.KeyCode) == Keys.Escape)
+            Keys key = keyData & Keys.KeyCode;
+            if (key == Keys.Escape)
             {
                 CancelSelection();
+                return true;
+            }
+            if (key == Keys.Enter && useRecordingArea != null)
+            {
+                if (!dragging) CompleteSelection();
+                return true;
+            }
+            if (useRecordingArea != null && !dragging &&
+                (key == Keys.Left || key == Keys.Right || key == Keys.Up || key == Keys.Down))
+            {
+                Rectangle previous = selection;
+                Rectangle dimensions = GetDimensionBox();
+                int step = (keyData & Keys.Shift) != 0 ? 10 : 1;
+                int dx = key == Keys.Left ? -step : key == Keys.Right ? step : 0;
+                int dy = key == Keys.Up ? -step : key == Keys.Down ? step : 0;
+                selection = MoveRecordingArea(selection, dx, dy);
+                InvalidateOverlayChange(previous, Rectangle.Empty, dimensions, instructionBox, false, false);
                 return true;
             }
             return base.ProcessCmdKey(ref message, keyData);

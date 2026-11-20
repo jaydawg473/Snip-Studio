@@ -274,10 +274,13 @@ public sealed partial class MainWindow
                 if (await dialog.ShowAsync() != ContentDialogResult.Primary) { SetStatus("Partial capture discarded. Your previous snip is kept."); return false; }
             }
             string captureName = "Snip Studio " + DateTime.Now.ToString("yyyy-MM-dd HHmmss");
+            MainWindow capturedEditor = this;
+            long clipboardIntent = preferences.AutoCopyCaptures ? DesktopImageActions.BeginClipboardWrite() : 0;
             if (newWindow)
             {
-                var editor = new MainWindow(); editor.Activate();
-                await editor.OpenCapturedImageAsync(capture.PngBytes, captureName);
+                capturedEditor = new MainWindow();
+                capturedEditor.Activate();
+                if (!await capturedEditor.OpenCapturedImageAsync(capture.PngBytes, captureName)) return false;
             }
             else
             {
@@ -287,6 +290,21 @@ public sealed partial class MainWindow
                 await RefreshPreviewAsync(resetView: true);
             }
             string feedback = capture.Warning ?? "";
+            if (clipboardIntent != 0 && !capturedEditor.closed)
+            {
+                long revision = capturedEditor.session.Revision;
+                try
+                {
+                    if (await DesktopImageActions.CopyPngAsync(capture.PngBytes, clipboardIntent, () =>
+                        !capturedEditor.closed && capturedEditor.preferences.AutoCopyCaptures && capturedEditor.session.Revision == revision))
+                        feedback += " Copied to the clipboard.";
+                }
+                catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+                {
+                    capturedEditor.ShowAutomaticCopyWarning(exception);
+                    feedback += " Automatic copy could not finish. Use Copy image to retry.";
+                }
+            }
             if (preferences.AutoSaveOriginalCaptures)
             {
                 try
@@ -297,11 +315,6 @@ public sealed partial class MainWindow
                     AddRecentSafely(destination);
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException) { feedback += " Original capture could not be saved automatically: " + exception.Message; }
-            }
-            if (preferences.AutoCopyCaptures)
-            {
-                try { await DesktopImageActions.CopyPngAsync(capture.PngBytes); }
-                catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { feedback += " Automatic copy could not finish: " + exception.Message; }
             }
             SetStatus((scrolling ? $"Captured {capture.FrameCount} scrolling frames. " : "Capture ready. ") + feedback + " " + ToolInstruction());
             return true;
@@ -389,19 +402,59 @@ public sealed partial class MainWindow
         return true;
     }
 
-    private async void OnCopyClicked(object sender, RoutedEventArgs args) => await CopyAsync();
-    private async Task CopyAsync()
+    private async void OnCopyClicked(object sender, RoutedEventArgs args) => await CopyAsync(imageOnly: true);
+
+    private async Task CopyEditedPreviewAsync(PreviewSnapshot image, long clipboardIntent)
     {
-        if (busy || !session.HasImage) return;
-        string selectedText = Viewport.SelectedInlineText;
-        if (selectedText.Length > 0) { SetClipboardText(selectedText); SetStatus("Selected text copied."); return; }
+        try
+        {
+            await DesktopImageActions.CopyPngAsync(image.PngBytes, clipboardIntent, () =>
+                !closed && preferences.AutoCopyCaptures && session.Revision == image.Revision);
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            ShowAutomaticCopyWarning(exception);
+        }
+    }
+
+    private void ShowAutomaticCopyWarning(Exception exception)
+    {
+        if (closed) return;
+        PreviewNotice.Title = "Automatic copy could not finish";
+        PreviewNotice.Message = "Your image is kept. Use Copy image to retry. " + exception.Message;
+        PreviewNotice.IsOpen = true;
+    }
+
+    private Task CopyAsync() => CopyAsync(imageOnly: false);
+
+    private async Task CopyAsync(bool imageOnly)
+    {
+        if (closed || busy || !session.HasImage) return;
+        long intent = DesktopImageActions.BeginClipboardWrite();
         await RunActionAsync("Copying…", async () =>
         {
-            if (ocrSelection is not null && ocrSelection.Text.Length > 0 && ocrSnapshot is not null && session.IsOcrSnapshotCurrent(ocrSnapshot))
-            { SetClipboardText(ocrSelection.Text); SetStatus("Selected recognized text copied in reading order."); }
-            else { var image = await session.RenderPreviewAsync(ActionToken); await DesktopImageActions.CopyPngAsync(image.PngBytes); SetStatus("Image copied to the clipboard."); }
-            return true;
-        });
+            if (!imageOnly)
+            {
+                string selectedText = Viewport.SelectedInlineText;
+                if (selectedText.Length == 0 && CurrentRecognition() is not null)
+                    selectedText = ocrSelection?.Text ?? "";
+                if (selectedText.Length > 0)
+                {
+                    SetClipboardText(selectedText, intent);
+                    SetStatus("Selected text copied.");
+                    return true;
+                }
+            }
+            if (Viewport.IsTextEditing)
+            {
+                CommitTextDraft();
+                await RefreshPreviewAsync(resetView: false, allowAutoCopy: false);
+            }
+            var image = await session.RenderPreviewAsync(ActionToken);
+            bool copied = await DesktopImageActions.CopyPngAsync(image.PngBytes, intent, () => !closed && session.Revision == image.Revision);
+            if (!closed) SetStatus(copied ? "Image copied to the clipboard." : "Copy skipped because a newer clipboard action is active.");
+            return copied;
+        }, commitDraft: false);
     }
 
     private async void OnShareClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Preparing Windows Share…", async () =>

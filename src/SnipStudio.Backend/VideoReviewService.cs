@@ -1,5 +1,7 @@
 #nullable enable
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -38,6 +40,43 @@ public static class VideoReviewService
 
     private static async Task ObserveAsync(Task pending)
     { try { await pending.ConfigureAwait(false); } catch (Exception) { } }
+
+    /// <summary>Returns evenly spaced thumbnails as PNGs without moving the playback position.</summary>
+    public static async Task<byte[][]> ReadFilmstripAsync(string path, CancellationToken cancellationToken = default)
+    {
+        using var request = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        CancellationToken token = request.Token;
+        Task<byte[][]> pending = Task.Run(async () =>
+        {
+            Bitmap[] frames = await global::SnipStudio.VideoTrimService.ReadFilmstripAsync(
+                path, 12, new Size(176, 100), token).ConfigureAwait(false);
+            try
+            {
+                var thumbnails = new byte[frames.Length][];
+                for (int index = 0; index < frames.Length; index++)
+                {
+                    token.ThrowIfCancellationRequested();
+                    using var png = new MemoryStream();
+                    frames[index].Save(png, ImageFormat.Png);
+                    thumbnails[index] = png.ToArray();
+                }
+                return thumbnails;
+            }
+            finally
+            {
+                foreach (Bitmap frame in frames) frame.Dispose();
+            }
+        }, token);
+
+        try { return await pending.WaitAsync(TimeSpan.FromSeconds(12), cancellationToken).ConfigureAwait(false); }
+        catch (TimeoutException)
+        {
+            request.Cancel();
+            _ = ObserveAsync(pending);
+            throw new TimeoutException("Windows did not finish decoding filmstrip thumbnails within twelve seconds.");
+        }
+        catch { _ = ObserveAsync(pending); throw; }
+    }
 
     public static Task TrimAsync(string source, string destination, TimeSpan start, TimeSpan end) => Task.Run(() =>
         global::SnipStudio.VideoTrimService.TrimAsync(source, destination, start, end));

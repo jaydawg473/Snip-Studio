@@ -25,7 +25,7 @@ public static class DesktopDialogs
         var keepPrimaryTaskbar = Toggle("Keep the primary taskbar visible", draft.KeepPrimaryTaskbarVisible);
         keepPrimaryTaskbar.IsEnabled = hideTaskbars.IsOn;
         hideTaskbars.Toggled += (_, _) => keepPrimaryTaskbar.IsEnabled = hideTaskbars.IsOn;
-        var copyCaptures = Toggle("Copy new captures to the clipboard", draft.AutoCopyCaptures);
+        var copyCaptures = Toggle("Copy captures and edits to the clipboard", draft.AutoCopyCaptures);
         var saveOriginals = Toggle("Save original captures before editing", draft.AutoSaveOriginalCaptures);
         var microphone = Toggle("Use microphone for new recordings", draft.DefaultMicrophone);
         var systemAudio = Toggle("Use system audio for new recordings", draft.DefaultSystemAudio);

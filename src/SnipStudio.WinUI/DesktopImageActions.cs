@@ -12,11 +12,20 @@ public static class DesktopImageActions
     private static readonly Dictionary<nint, SharePayload> shares = new();
     private static readonly Guid ManagerInterface = new("A5CAEE9B-8708-49D1-8D36-67D25A8DA00C");
     private static ClipboardPayload? pendingClipboard;
+    private static long clipboardWriteIntent;
 
-    public static async Task CopyPngAsync(byte[] png)
+    internal static long BeginClipboardWrite() => Interlocked.Increment(ref clipboardWriteIntent);
+    internal static bool IsCurrentClipboardWrite(long intent) => intent == Interlocked.Read(ref clipboardWriteIntent);
+
+    internal static async Task<bool> CopyPngAsync(byte[] png, long intent, Func<bool>? isCurrent = null)
     {
         Validate(png);
         InMemoryRandomAccessStream stream = await CreateStreamAsync(png);
+        if (!IsCurrentClipboardWrite(intent) || isCurrent?.Invoke() == false)
+        {
+            stream.Dispose();
+            return false;
+        }
         var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
         data.Properties.Title = "Snip Studio image";
         data.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
@@ -41,6 +50,7 @@ public static class DesktopImageActions
             // references even after an uncertain persistence failure.
             if (ReferenceEquals(pendingClipboard, payload)) pendingClipboard = null;
             payload.Dispose();
+            return true;
         }
         finally
         {

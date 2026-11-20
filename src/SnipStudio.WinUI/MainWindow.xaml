@@ -128,7 +128,7 @@
                 <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" LabelPosition="Collapsed" Click="OnOpenClicked" ToolTipService.ToolTip="Open an image (Ctrl+O)" />
                 <AppBarButton x:Name="PasteButton" Icon="Paste" Label="Paste" LabelPosition="Collapsed" Click="OnPasteClicked" ToolTipService.ToolTip="Paste an image (Ctrl+V)" />
                 <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save as" LabelPosition="Collapsed" Click="OnSaveClicked" ToolTipService.ToolTip="Save image (Ctrl+S)" IsEnabled="False" />
-                <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy image or selected text" LabelPosition="Collapsed" Click="OnCopyClicked" ToolTipService.ToolTip="Copy image or selected text (Ctrl+C)" />
+                <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy image" LabelPosition="Collapsed" Click="OnCopyClicked" ToolTipService.ToolTip="Copy the current image" />
                 <AppBarButton x:Name="ShareButton" Icon="Share" Label="Share image" LabelPosition="Collapsed" Click="OnShareClicked" ToolTipService.ToolTip="Share image" />
                 <AppBarButton x:Name="RetryPreviewButton" Icon="Refresh" Label="Retry preview" LabelPosition="Collapsed" Click="OnRetryPreviewClicked" Visibility="Collapsed" />
                 <CommandBar.SecondaryCommands>
@@ -151,16 +151,17 @@
                 <AppBarToggleButton x:Name="SelectButton" Label="Move" LabelPosition="Collapsed" Click="OnSelectClicked" ToolTipService.ToolTip="Select and move annotations"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="PenButton" Icon="Edit" Label="Pen" LabelPosition="Collapsed" IsChecked="True" Click="OnPenClicked" ToolTipService.ToolTip="Pen" />
                 <AppBarToggleButton x:Name="HighlighterButton" Icon="Highlight" Label="Highlight" LabelPosition="Collapsed" Click="OnHighlighterClicked" ToolTipService.ToolTip="Highlight text; hold Shift for freehand" />
-                <AppBarToggleButton x:Name="ShapesButton" Label="Shapes" LabelPosition="Collapsed" Click="OnShapesClicked" ToolTipService.ToolTip="Shapes and emoji">
-                    <AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon>
+                <AppBarToggleButton x:Name="ShapesButton" Label="Shapes" LabelPosition="Collapsed" Click="OnShapesClicked" ToolTipService.ToolTip="Shapes: rectangle, ellipse, line and arrow">
+                    <AppBarToggleButton.Icon><PathIcon Data="F0 M 1,1 H 12 V 6 H 10.5 V 2.5 H 2.5 V 10.5 H 6 V 12 H 1 Z M 17,12 A 5,5 0 1 1 7,12 A 5,5 0 1 1 17,12 Z M 15.5,12 A 3.5,3.5 0 1 0 8.5,12 A 3.5,3.5 0 1 0 15.5,12 Z" /></AppBarToggleButton.Icon>
                     <FlyoutBase.AttachedFlyout><MenuFlyout>
                         <ToggleMenuFlyoutItem x:Name="RectangleButton" Text="Rectangle" Click="OnRectangleClicked" />
+                        <ToggleMenuFlyoutItem x:Name="EllipseButton" Text="Ellipse" Click="OnEllipseClicked" />
                         <ToggleMenuFlyoutItem x:Name="LineButton" Text="Line" Click="OnLineClicked" />
                         <ToggleMenuFlyoutItem x:Name="ArrowButton" Text="Arrow" Click="OnArrowClicked" />
-                        <ToggleMenuFlyoutItem x:Name="EllipseButton" Text="Ellipse" Click="OnEllipseClicked" />
-                        <MenuFlyoutSeparator />
-                        <ToggleMenuFlyoutItem x:Name="EmojiButton" Text="Emoji" Click="OnEmojiClicked" />
                     </MenuFlyout></FlyoutBase.AttachedFlyout>
+                </AppBarToggleButton>
+                <AppBarToggleButton x:Name="EmojiButton" Label="Emoji" LabelPosition="Collapsed" Click="OnEmojiClicked" ToolTipService.ToolTip="Choose an emoji sticker, then click the image to place it">
+                    <AppBarToggleButton.Icon><FontIcon Glyph="&#xE76E;" /></AppBarToggleButton.Icon>
                 </AppBarToggleButton>
                 <AppBarToggleButton x:Name="TextButton" Label="Add text" LabelPosition="Collapsed" Click="OnTextClicked" ToolTipService.ToolTip="Add or edit text"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="EraserButton" Label="Eraser" LabelPosition="Collapsed" Click="OnEraserClicked" ToolTipService.ToolTip="Erase annotations"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
@@ -169,7 +170,7 @@
                 <AppBarSeparator />
                 <AppBarButton x:Name="UndoButton" Icon="Undo" Label="Undo" LabelPosition="Collapsed" Click="OnUndoClicked" ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False" />
                 <AppBarButton x:Name="RedoButton" Icon="Redo" Label="Redo" LabelPosition="Collapsed" Click="OnRedoClicked" ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False" />
-                <AppBarButton x:Name="OcrButton" Label="Text actions" LabelPosition="Collapsed" Click="OnOcrClicked" ToolTipService.ToolTip="Image to text"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
+                <AppBarToggleButton x:Name="OcrButton" Label="Text actions" LabelPosition="Collapsed" Click="OnOcrClicked" ToolTipService.ToolTip="Text actions (image to text)"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarSeparator />
                 <AppBarElementContainer><Button x:Name="ExternalEditorButton" Style="{StaticResource StudioCaptureActionStyle}" MinWidth="132" Click="OnExternalEditorClicked" ToolTipService.ToolTip="Open a copy in an external image editor"><StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><FontIcon Glyph="&#xE70F;" FontSize="18"/><TextBlock Text="Edit in app" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 <CommandBar.SecondaryCommands>
@@ -202,6 +203,19 @@
                     <AppBarToggleButton x:Name="UnderlineButton" Icon="Underline" Label="Underline" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Underline" />
                     <AppBarElementContainer><Button x:Name="ApplyTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnApplyTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE73E;" FontSize="16"/><TextBlock Text="Apply" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                     <AppBarElementContainer><Button x:Name="CancelTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnCancelTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE711;" FontSize="16"/><TextBlock Text="Cancel" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
+                </CommandBar>
+                <CommandBar x:Name="OcrContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" Background="Transparent" Padding="0">
+                    <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
+                    <AppBarButton Label="Copy all text" Icon="Copy" Click="OnCopyAllOcrClicked" />
+                    <AppBarButton x:Name="CopySelectedOcrButton" Label="Copy selection" Icon="Copy" Click="OnCopySelectedOcrClicked" />
+                    <AppBarButton x:Name="EditOcrButton" Label="Edit line" Icon="Edit" Click="OnEditOcrClicked" ToolTipService.ToolTip="Edit the selected line (F2)" />
+                    <AppBarButton Label="Translate" Click="OnTranslateOcrClicked" />
+                    <AppBarButton x:Name="DeleteSelectedOcrButton" Label="Delete selection" Icon="Delete" Click="OnDeleteObjectClicked" />
+                    <CommandBar.SecondaryCommands>
+                        <AppBarButton Label="Convert to text…" Click="OnConvertOcrClicked" />
+                        <AppBarButton Label="Review recognized text…" Click="OnReviewOcrClicked" />
+                        <AppBarButton Label="Done" Icon="Accept" Click="OnCloseOcrClicked" />
+                    </CommandBar.SecondaryCommands>
                 </CommandBar>
                 <Button x:Name="ContextCloseButton" Grid.Column="2" Width="28" MinWidth="0" Height="28" Padding="0" Background="Transparent" BorderThickness="0" Content="×" FontSize="16" Click="OnContextCloseClicked" AutomationProperties.Name="Close tool options" ToolTipService.ToolTip="Close tool options" VerticalAlignment="Center" />
             </Grid>

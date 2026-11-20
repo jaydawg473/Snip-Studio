@@ -1,5 +1,6 @@
 using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media.Imaging;
@@ -40,6 +41,8 @@ public sealed partial class MainWindow : Window
         AppWindow.Closing += OnWindowClosing;
         Closed += OnWindowClosed;
         Viewport.GestureCommitted += OnGestureCommitted;
+        Viewport.RecognizedSelectionPreview = PreviewOcrSelection;
+        Viewport.RecognizedSelectionDismissed += (_, _) => CloseTextActions();
         Viewport.SelectionTransformCommitted += OnSelectionTransformCommitted;
         Viewport.GestureFeedback += (_, message) => SetStatus(message);
         Viewport.TextApplyRequested += async (_, _) => await ApplyTextDraftAsync();
@@ -64,6 +67,14 @@ public sealed partial class MainWindow : Window
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => RecognizeAsync(copyOnly: true));
         AddShortcut(VirtualKey.P, VirtualKeyModifiers.Control, PrintAsync);
         AddShortcut(VirtualKey.Delete, VirtualKeyModifiers.None, DeleteSelectedAsync, respectsTextInput: true);
+        var editRecognized = new KeyboardAccelerator { Key = VirtualKey.F2 };
+        editRecognized.Invoked += async (_, args) =>
+        {
+            if (busy || closed || applicationExitPending || selectedTool != PreviewTool.OcrSelect) return;
+            args.Handled = true;
+            await EditSelectedOcrLineAsync();
+        };
+        Root.KeyboardAccelerators.Add(editRecognized);
         AddShortcut(VirtualKey.F11, VirtualKeyModifiers.None, () => { ToggleFullScreen(); return Task.CompletedTask; });
         AddShortcut(VirtualKey.V, VirtualKeyModifiers.Control, PasteAsync, respectsTextInput: true);
         AddShortcut(VirtualKey.S, VirtualKeyModifiers.Control, () => RunActionAsync("Saving image…", SaveWithPickerAsync, commitDraft: false));
@@ -85,7 +96,11 @@ public sealed partial class MainWindow : Window
         var shortcut = new KeyboardAccelerator { Key = key, Modifiers = modifiers };
         shortcut.Invoked += async (_, args) =>
         {
-            if (respectsTextInput && FocusManager.GetFocusedElement(Root.XamlRoot) is TextBox or RichEditBox) return;
+            if (respectsTextInput && FocusManager.GetFocusedElement(Root.XamlRoot) is TextBox or RichEditBox)
+            {
+                if (key == VirtualKey.C) DesktopImageActions.BeginClipboardWrite();
+                return;
+            }
             if (busy || closed || applicationExitPending) return;
             args.Handled = true;
             await action();
@@ -277,7 +292,7 @@ public sealed partial class MainWindow : Window
     private async void OnGestureCommitted(object? sender, DrawGestureEventArgs args)
     {
         CancelPendingSnipResize();
-        await RunActionAsync("Rendering edit…", async () =>
+        await RunActionAsync(args.Tool == PreviewTool.OcrSelect ? "Reading selection…" : "Rendering edit…", async () =>
         {
             long beforeRevision = session.Revision;
             await CommitGestureAsync(args);
@@ -287,9 +302,12 @@ public sealed partial class MainWindow : Window
         });
     }
 
-    private async Task RefreshPreviewAsync(bool resetView)
+    private async Task RefreshPreviewAsync(bool resetView, bool allowAutoCopy = true)
     {
         long sizingIntent = WindowSizingIntentVersion;
+        bool copyEdit = allowAutoCopy && !resetView && !resetPreviewViewPending && displayedRevision >= 0 &&
+            displayedRevision != session.Revision && preferences.AutoCopyCaptures;
+        long clipboardIntent = copyEdit ? DesktopImageActions.BeginClipboardWrite() : 0;
         // All callers are serialized by busy. A canceled native PNG encode cannot
         // be interrupted, so no replacement worker starts before this one returns.
         previewCancellation?.Cancel();
@@ -319,6 +337,7 @@ public sealed partial class MainWindow : Window
         displayedRevision = preview.Revision;
         UpdateViewStatus();
         if (resizeForSnip) ScheduleResizeForSnip(sizingIntent);
+        if (copyEdit) await CopyEditedPreviewAsync(preview, clipboardIntent);
     }
 
     private async Task<bool> RunActionAsync(string message, Func<Task<bool>> action, bool commitDraft = true)
@@ -356,7 +375,7 @@ public sealed partial class MainWindow : Window
             if (!closed)
             {
                 UpdateCommands();
-                if (!commitDraft && Viewport.IsTextEditing) Viewport.RestoreTextFocus();
+                if (Viewport.IsTextEditing) Viewport.RestoreTextFocus();
                 ResumePendingSnipResize();
             }
         }
@@ -377,6 +396,7 @@ public sealed partial class MainWindow : Window
     private void SetTool(PreviewTool next, bool whileBusy = false, bool revealOptions = true)
     {
         if ((busy && !whileBusy) || closed) return;
+        if (selectedTool == PreviewTool.OcrSelect && next != PreviewTool.OcrSelect) ClearOcrSelection();
         selectedTool = next;
         Viewport.Tool = next;
         PanButton.IsChecked = next == PreviewTool.Pan;
@@ -384,7 +404,7 @@ public sealed partial class MainWindow : Window
         HighlighterButton.IsChecked = next == PreviewTool.Highlighter;
         RectangleButton.IsChecked = next == PreviewTool.Rectangle;
         SelectButton.IsChecked = next == PreviewTool.Select;
-        TextButton.IsChecked = next == PreviewTool.Text;
+        TextButton.IsChecked = next is PreviewTool.Text or PreviewTool.OcrSelect;
         EraserButton.IsChecked = next == PreviewTool.Eraser;
         CropButton.IsChecked = next == PreviewTool.Crop;
         LineButton.IsChecked = next == PreviewTool.Line;
@@ -393,7 +413,7 @@ public sealed partial class MainWindow : Window
         EmojiButton.IsChecked = next == PreviewTool.Emoji;
         RemoveAreaButton.IsChecked = next == PreviewTool.RemoveArea;
         OcrSelectButton.IsChecked = next == PreviewTool.OcrSelect;
-        ShapesButton.IsChecked = next is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse or PreviewTool.Emoji;
+        ShapesButton.IsChecked = next is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse;
         contextDismissed = !revealOptions;
         UpdateToolContext();
         uint color = next == PreviewTool.Highlighter ? highlighterColor : next == PreviewTool.Text ? textColor : penColor;
@@ -407,19 +427,26 @@ public sealed partial class MainWindow : Window
     private void UpdateToolContext()
     {
         bool text = selectedTool == PreviewTool.Text || Viewport.IsTextEditing;
+        bool textActions = selectedTool == PreviewTool.OcrSelect;
         bool ink = selectedTool is PreviewTool.Pen or PreviewTool.Highlighter or PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse;
         bool eraser = selectedTool == PreviewTool.Eraser;
         ContextBar.Visibility = text ? Visibility.Visible : Visibility.Collapsed;
+        OcrContextBar.Visibility = textActions ? Visibility.Visible : Visibility.Collapsed;
         InkContextBar.Visibility = ink || text || eraser ? Visibility.Visible : Visibility.Collapsed;
         ColorButton.Visibility = ink || text ? Visibility.Visible : Visibility.Collapsed;
         StrokeWidthContainer.Visibility = ink ? Visibility.Visible : Visibility.Collapsed;
         SnapHighlighterContainer.Visibility = selectedTool == PreviewTool.Highlighter ? Visibility.Visible : Visibility.Collapsed;
         EraseAllContainer.Visibility = eraser ? Visibility.Visible : Visibility.Collapsed;
-        ContextRow.Visibility = session.HasImage && !contextDismissed && (ink || text || eraser) ? Visibility.Visible : Visibility.Collapsed;
+        ContextRow.Visibility = session.HasImage && !contextDismissed && (ink || text || eraser || textActions) ? Visibility.Visible : Visibility.Collapsed;
+        string closeLabel = textActions ? "Close text actions" : "Close tool options";
+        AutomationProperties.SetName(ContextCloseButton, closeLabel);
+        ToolTipService.SetToolTip(ContextCloseButton, closeLabel);
+        UpdateOcrCommands();
     }
 
     private void OnContextCloseClicked(object sender, RoutedEventArgs args)
     {
+        if (selectedTool == PreviewTool.OcrSelect) { CloseTextActions(); return; }
         contextDismissed = true;
         UpdateToolContext();
     }
@@ -427,7 +454,7 @@ public sealed partial class MainWindow : Window
     private void OnShapesClicked(object sender, RoutedEventArgs args)
     {
         if (busy || closed) return;
-        ShapesButton.IsChecked = selectedTool is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse or PreviewTool.Emoji;
+        ShapesButton.IsChecked = selectedTool is PreviewTool.Rectangle or PreviewTool.Line or PreviewTool.Arrow or PreviewTool.Ellipse;
         Microsoft.UI.Xaml.Controls.Primitives.FlyoutBase.ShowAttachedFlyout(ShapesButton);
     }
 
@@ -464,8 +491,8 @@ public sealed partial class MainWindow : Window
         PreviewTool.Line => "Line: drag between the endpoints. Select and Object properties can change the endpoints.",
         PreviewTool.Arrow => "Arrow: drag from tail to arrowhead. Select and Object properties can change the endpoints.",
         PreviewTool.Ellipse => "Ellipse: drag its bounding rectangle. Object properties changes outline and fill.",
-        PreviewTool.Emoji => "Emoji: drag a rectangle, then choose a sticker. Object properties resizes or rotates it.",
-        PreviewTool.OcrSelect => "Select recognized text: drag across words, then Ctrl+C to copy the selected text in reading order.",
+        PreviewTool.Emoji => $"Click to place a {activeEmoji?.DisplayName ?? "selected"} sticker. Use Move to adjust it.",
+        PreviewTool.OcrSelect => "Text actions: click a line to edit, or drag across words to select and copy.",
         _ => "Pen: drag to draw. Middle-drag pans; Ctrl+wheel zooms."
     };
 
@@ -502,6 +529,7 @@ public sealed partial class MainWindow : Window
         UndoButton.IsEnabled = !busy && (Viewport.IsTextEditing ? Viewport.TextCanUndo : session.CanUndo);
         RedoButton.IsEnabled = !busy && (Viewport.IsTextEditing ? Viewport.TextCanRedo : session.CanRedo);
         OcrButton.IsEnabled = !busy && session.HasImage;
+        OcrButton.IsChecked = OcrSelectButton.IsChecked = selectedTool == PreviewTool.OcrSelect;
         CopyButton.IsEnabled = ShareButton.IsEnabled = PrintButton.IsEnabled = !busy && session.HasImage;
         ObjectPropertiesButton.IsEnabled = !busy && selectedAnnotationIndex >= 0;
         DeleteObjectButton.IsEnabled = !busy && (selectedAnnotationIndex >= 0 || selectedTool == PreviewTool.OcrSelect && ocrSelection?.Text.Length > 0);
@@ -584,7 +612,7 @@ public sealed partial class MainWindow : Window
                     Content = new TextBlock
                     {
                         TextWrapping = TextWrapping.Wrap,
-                        Text = "Snip Studio · Automation Forge\n\nChoose photo or video mode, then New. Photo mode offers rectangle, freeform, window, full screen, all monitors and scrolling capture. Video mode selects a rectangle or window first, then shows audio choices and Start recording. This capture workflow saves a unique MP4 in the recording folder from Settings; Stop and save opens the video for review, trimming and export. Open video review is a separate file-menu action. Photo mode offers Off or a timed capture delay beside the shape. The timer is unavailable in video mode. Escape cancels selection and keeps the previous snip; the scrolling controller also offers Finish to keep collected frames.\n\nDraw with Pen, Highlighter, Line, Arrow, Rectangle or Ellipse. Highlighter can snap to recognized words; hold Shift for freehand. Select moves annotations. Object properties changes geometry, shape outline/fill, or emoji size/rotation. Crop and Remove image area show a review before applying. Eraser removes annotations while keeping screenshot pixels. Undo restores edits.\n\nText creates or edits an annotation on the canvas. Select text inside its editor to change font, image-pixel size, color, bold, italic or underline. Ctrl+Enter applies the draft; Escape cancels it. Image to text shows original recognition output and selectable rows before conversion, then selects Text. OCR may misread characters and source font matching is approximate: review identifiers, quantities and duplicate rows. Recognized-word selection copies in reading order. Translation is offline by default; a configured server receives text only after you choose it and click Translate. Review translated rows before applying them.\n\nUse Fit to center the image in the visible canvas. At 100%, one image pixel maps to one physical display pixel. Move view or middle-drag pans. Wheel pans and Ctrl+wheel zooms unless changed in Settings. Controls that do not fit move into the toolbar's overflow menu.\n\nCtrl+N: New in selected photo/video mode\nCtrl+Shift+N: Choose recording area\nCtrl+O: Open image\nCtrl+V: Paste\nCtrl+C: Copy selected text or image\nCtrl+Shift+C: Recognize and copy all text\nCtrl+S: Save as\nCtrl+P: Print\nCtrl+Z: Undo\nCtrl+Y or Ctrl+Shift+Z: Redo\nCtrl+F: Fit\nCtrl+0: 100%\nCtrl+plus/minus: Zoom\nDelete: Remove selection\nF11: Full screen\n\nThe file menu includes recent files, Share, Print, signed external-editor copies, new editor windows, Settings and release information. Optional notification-area, Windows startup and global shortcuts are explicit Settings choices for this WinUI build. Stable Snip Studio settings remain separate. Global shortcuts, when enabled, are Ctrl+Alt+Shift+S/R.\n\nSaving produces flattened PNG, JPEG, BMP or PDF files. Keep the editor open to retain editable annotation history; the exported file does not contain project objects. Your images are processed locally unless you deliberately Share or choose a configured translation server."
+                        Text = "Snip Studio · Automation Forge\n\nChoose photo or video mode, then New. Photo mode offers rectangle, freeform, window, full screen, all monitors and scrolling capture. Video mode selects a rectangle or window first, then shows audio choices and Start recording. This capture workflow saves a unique MP4 in the recording folder from Settings; Stop and save opens the video for review, trimming and export. Open video review is a separate file-menu action. Photo mode offers Off or a timed capture delay beside the shape. The timer is unavailable in video mode. Escape cancels selection and keeps the previous snip; the scrolling controller also offers Finish to keep collected frames.\n\nDraw with Pen, Highlighter, Line, Arrow, Rectangle or Ellipse. Highlighter can snap to recognized words; hold Shift for freehand. Select moves annotations. Object properties changes geometry, shape outline/fill, or emoji size/rotation. Crop and Remove image area show a review before applying. Eraser removes annotations while keeping screenshot pixels. Undo restores edits.\n\nText creates or edits an annotation on the canvas. Select text inside its editor to change font, image-pixel size, color, bold, italic or underline. Ctrl+Enter applies the draft; Escape cancels it. Text actions works directly on the snip. Click a recognized line to edit it, or drag across words and choose Copy selection. F2 edits a selected line. Done closes Text actions and leaves the Text tool selected. The Text actions menu offers Convert to text and Review recognized text. Conversion keeps recognized strings in order and estimates their original style. Review identifiers, quantities and duplicate rows for OCR errors. Translation is offline by default; a configured server receives text only after you choose it and click Translate. Review translated rows before applying them.\n\nUse Fit to center the image in the visible canvas. At 100%, one image pixel maps to one physical display pixel. Move view or middle-drag pans. Wheel pans and Ctrl+wheel zooms unless changed in Settings. Controls that do not fit move into the toolbar's overflow menu.\n\nCtrl+N: New in selected photo/video mode\nCtrl+Shift+N: Choose recording area\nCtrl+O: Open image\nCtrl+V: Paste\nCtrl+C: Copy selected text or image\nCtrl+Shift+C: Recognize and copy all text\nCtrl+S: Save as\nCtrl+P: Print\nCtrl+Z: Undo\nCtrl+Y or Ctrl+Shift+Z: Redo\nCtrl+F: Fit\nCtrl+0: 100%\nCtrl+plus/minus: Zoom\nDelete: Remove selection\nF11: Full screen\n\nThe file menu includes recent files, Share, Print, signed external-editor copies, new editor windows, Settings and release information. Optional notification-area, Windows startup and global shortcuts are explicit Settings choices for this WinUI build. Stable Snip Studio settings remain separate. Global shortcuts, when enabled, are Ctrl+Alt+Shift+S/R.\n\nSaving produces flattened PNG, JPEG, BMP or PDF files. Keep the editor open to retain editable annotation history; the exported file does not contain project objects. Your images are processed locally unless you deliberately Share or choose a configured translation server."
                     }
                 }
             };

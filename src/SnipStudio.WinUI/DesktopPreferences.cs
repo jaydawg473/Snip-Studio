@@ -25,7 +25,7 @@ public sealed class DesktopPreferences
     public bool HotkeysEnabled { get; set; }
     public bool KeepRunningInTray { get; set; }
     public bool StartupWithWindows { get; set; }
-    public bool AutoCopyCaptures { get; set; }
+    public bool AutoCopyCaptures { get; set; } = true;
     public bool AutoSaveOriginalCaptures { get; set; }
     public string ScreenshotFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Snip Studio WinUI3");
     public string RecordingFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Snip Studio WinUI3");

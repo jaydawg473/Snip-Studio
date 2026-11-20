@@ -14,6 +14,10 @@ internal static partial class Program
         var second = new DesktopPreferencesStore(path);
         DesktopPreferences firstEdit = first.Load(), secondEdit = second.Load();
         Check(!File.Exists(path) && first.LoadWarning is null && firstEdit.Theme == "System" && firstEdit.StrokeWidth == 3, "Reading fresh settings uses defaults without writing a file");
+        Check(firstEdit.AutoCopyCaptures, "New profiles automatically copy captures and committed edits");
+        string clipboardPath = Path.Combine(folder, "clipboard-choice.json");
+        File.WriteAllText(clipboardPath, "{\"Preferences\":{\"AutoCopyCaptures\":false},\"RecentPaths\":[]}");
+        Check(!new DesktopPreferencesStore(clipboardPath).Load().AutoCopyCaptures, "An existing clipboard opt-out survives the new default");
         firstEdit.Theme = "Dark";
         Check(first.Load().Theme == "System", "Unsaved settings clone cannot change stored preferences");
         first.Save(firstEdit);

@@ -9,6 +9,7 @@ public sealed partial class MainWindow
 {
     private int selectedAnnotationIndex = -1;
     private bool changingTextFormat;
+    private EmojiStickerSnapshot? activeEmoji;
     private readonly FontSizeDisplayFormatter textSizeFormatter = new();
 
     private void ConfigureTextSizeFormatter()
@@ -62,13 +63,37 @@ public sealed partial class MainWindow
     private async void OnLineClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Line);
     private async void OnArrowClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Arrow);
     private async void OnEllipseClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Ellipse);
-    private async void OnEmojiClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.Emoji);
+    private async void OnEmojiClicked(object sender, RoutedEventArgs args)
+    {
+        EmojiButton.IsChecked = selectedTool == PreviewTool.Emoji;
+        if (!session.HasImage) return;
+        await RunActionAsync("Choose an emoji sticker…", async () =>
+        {
+            EmojiStickerSnapshot? chosen = await ChooseEmojiAsync();
+            if (chosen is null)
+            {
+                if (!closed) SetStatus(ToolInstruction());
+                return false;
+            }
+            ActionToken.ThrowIfCancellationRequested();
+            if (closed) return false;
+            if (Viewport.IsTextEditing)
+            {
+                CommitTextDraft();
+                await RefreshPreviewAsync(resetView: false);
+            }
+            activeEmoji = chosen;
+            selectedAnnotationIndex = -1;
+            UpdateSelection();
+            SetTool(PreviewTool.Emoji, whileBusy: true);
+            return true;
+        }, commitDraft: false);
+    }
     private async void OnRemoveAreaClicked(object sender, RoutedEventArgs args) => await ChooseToolAsync(PreviewTool.RemoveArea);
     private async void OnOcrSelectClicked(object sender, RoutedEventArgs args)
     {
-        if (ocrSnapshot is null || !session.IsOcrSnapshotCurrent(ocrSnapshot))
-            await RecognizeAsync(copyOnly: false, selectOnly: true);
-        else await ChooseToolAsync(PreviewTool.OcrSelect);
+        if (selectedTool == PreviewTool.OcrSelect) CloseTextActions();
+        else await RecognizeAsync(copyOnly: false);
     }
     private async void OnDeleteObjectClicked(object sender, RoutedEventArgs args) => await DeleteSelectedAsync();
     private async void OnApplyTextClicked(object sender, RoutedEventArgs args) => await ApplyTextDraftAsync();
@@ -96,9 +121,9 @@ public sealed partial class MainWindow
     {
         selectedAnnotationIndex = -1;
         ocrSnapshot = null;
-        ocrSelection = null;
+        ocrTextNavigation = false;
         Viewport.SetSelection(null);
-        Viewport.SetRecognizedBands(null);
+        ClearOcrSelection();
     }
 
     private void UpdateSelection()
@@ -122,14 +147,12 @@ public sealed partial class MainWindow
                 break;
             }
             case PreviewTool.Text:
+                if (Math.Abs(last.X - first.X) < 2 && Math.Abs(last.Y - first.Y) < 2 &&
+                    await TryNavigateRecognizedTextAsync(first)) return;
                 BeginTextDraft(first, last);
                 return;
             case PreviewTool.OcrSelect:
-                if (ocrSnapshot is null || !session.IsOcrSnapshotCurrent(ocrSnapshot))
-                    throw new InvalidOperationException("Recognize this image again before selecting its text.");
-                ocrSelection = session.SelectRecognizedText(ocrSnapshot, first, last);
-                Viewport.SetRecognizedBands(ocrSelection.Bands);
-                SetStatus(ocrSelection.Text.Length == 0 ? "No recognized words in that selection." : "Text selected. Ctrl+C copies it in reading order.");
+                await CommitOcrGestureAsync(args);
                 return;
             case PreviewTool.Eraser:
                 session.ErasePath(args.Points, Math.Max(3, args.Width));
@@ -144,7 +167,11 @@ public sealed partial class MainWindow
                 ResetDocumentSelection();
                 break;
             case PreviewTool.Emoji:
-                if (!await ChooseEmojiAsync(first, last)) return;
+                if (activeEmoji is null) return;
+                bool placed = Math.Abs(last.X - first.X) >= 0.5 && Math.Abs(last.Y - first.Y) >= 0.5
+                    ? session.AddEmoji(activeEmoji.Key, first, last)
+                    : session.PlaceEmoji(activeEmoji.Key, first);
+                if (!placed) return;
                 selectedAnnotationIndex = session.AnnotationCount - 1;
                 break;
             case PreviewTool.Rectangle:
@@ -213,6 +240,13 @@ public sealed partial class MainWindow
             draft = new(-1, "", session.CreateTextRtf("", family, size, style, textColor), family, style,
                 new ImagePoint(Math.Min(first.X, last.X), Math.Min(first.Y, last.Y)), textColor, size, Math.Max(8, width), 0);
         }
+        BeginTextDraft(draft);
+    }
+
+    private void BeginTextDraft(TextEditDraft draft, OcrLineEditSnapshot? recognizedLine = null)
+    {
+        ocrLineDraft = recognizedLine;
+        if (recognizedLine is not null) selectedAnnotationIndex = -1;
         changingTextFormat = true;
         try
         {
@@ -233,7 +267,7 @@ public sealed partial class MainWindow
         }
         finally { changingTextFormat = false; }
         Viewport.SetSelection(null);
-        Viewport.BeginTextEdit(draft);
+        Viewport.BeginTextEdit(draft, recognizedLine);
         contextDismissed = false;
         UpdateToolContext();
         UpdateTextDraftCommands();
@@ -251,13 +285,16 @@ public sealed partial class MainWindow
         if (draft is null) return;
         if (!Viewport.TextDraftWithinLimit)
             throw new InvalidOperationException("Text is longer than 16,000 native characters. Your draft is kept. Shorten it or split it into text objects before applying.");
-        if (draft.AnnotationIndex >= 0)
+        if (ocrLineDraft is OcrLineEditSnapshot recognizedLine)
+            selectedAnnotationIndex = session.ApplyRecognizedLineEdit(recognizedLine, draft.Text, draft.Rtf, draft.Argb, draft.FontSize);
+        else if (draft.AnnotationIndex >= 0)
         {
             session.UpdateText(draft.AnnotationIndex, draft.Text, draft.Argb, draft.FontSize, draft.LayoutWidth, draft.Rtf, draft.MinimumHeight);
             if (draft.Text.Length == 0) selectedAnnotationIndex = -1;
         }
         else if (draft.Text.Length > 0)
             selectedAnnotationIndex = session.AddText(draft.Text, draft.Location, draft.Argb, draft.FontSize, draft.LayoutWidth, draft.Rtf, draft.MinimumHeight);
+        ocrLineDraft = null;
         Viewport.EndTextEdit();
         ocrSelection = null;
         Viewport.SetRecognizedBands(null);
@@ -276,6 +313,7 @@ public sealed partial class MainWindow
     private void CancelTextDraft()
     {
         if (busy || !Viewport.IsTextEditing) return;
+        ocrLineDraft = null;
         Viewport.EndTextEdit();
         UpdateSelection();
         UpdateTextDraftCommands();
@@ -379,14 +417,33 @@ public sealed partial class MainWindow
         return true;
     }
 
-    private async Task<bool> ChooseEmojiAsync(ImagePoint first, ImagePoint last)
+    private async Task<EmojiStickerSnapshot?> ChooseEmojiAsync()
     {
-        var chooser = new ComboBox { Header = "Sticker", HorizontalAlignment = HorizontalAlignment.Stretch };
-        foreach (EmojiStickerSnapshot sticker in session.EmojiCatalog) chooser.Items.Add(new ComboBoxItem { Content = sticker.Glyph + "  " + sticker.DisplayName, Tag = sticker.Key });
-        chooser.SelectedIndex = 0;
-        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Choose emoji", Content = chooser, PrimaryButtonText = "Add emoji", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Primary };
-        if (await dialog.ShowAsync() != ContentDialogResult.Primary || chooser.SelectedItem is not ComboBoxItem item || item.Tag is not string key) return false;
-        return session.AddEmoji(key, first, last);
+        var picker = new GridView
+        {
+            SelectionMode = ListViewSelectionMode.None,
+            IsItemClickEnabled = true,
+            MaxHeight = 260,
+            MaxWidth = 360
+        };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(picker, "Emoji stickers");
+        var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Choose an emoji", Content = picker, CloseButtonText = "Cancel" };
+        foreach (EmojiStickerSnapshot sticker in session.EmojiCatalog)
+        {
+            var tile = new GridViewItem { Content = new TextBlock { Text = sticker.Glyph, FontSize = 26 }, Tag = sticker };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(tile, sticker.DisplayName);
+            ToolTipService.SetToolTip(tile, sticker.DisplayName);
+            picker.Items.Add(tile);
+        }
+        EmojiStickerSnapshot? chosen = null;
+        picker.ItemClick += (_, args) =>
+        {
+            if (args.ClickedItem is not GridViewItem { Tag: EmojiStickerSnapshot sticker }) return;
+            chosen = sticker;
+            dialog.Hide();
+        };
+        await dialog.ShowAsync();
+        return chosen;
     }
 
     private async Task ShowObjectPropertiesAsync()

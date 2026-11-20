@@ -89,7 +89,7 @@ internal static partial class Program
                 ExpectedInputSHA256 = VideoSmokeFixtureSha256,
                 FixtureProvenance = "WriterChecks.cs: 30 generated 640x360/15fps painted frames, red top-left/lime bottom-left markers, and a generated 440Hz stereo tone; no hardware recording.",
                 ExportFixtureNote = "The original 64190-byte file is already too compact for the export planner's overhead/budget rule. Positive export uses an owned byte-identical media copy with one explicit 512 KiB MP4 free box appended. A smaller result proves removal/re-encoding of this padded copy, not improved compression of the compact original.",
-                Scope = "Actual public VideoReviewService metadata, copy, trim and export adapter; public ported video-frame decoder for orientation/color checks; exact source/copy hashes and rejected/canceled transaction preservation. AAC stream presence is checked through metadata, not decoded audio samples. No native WinUI playback or desktop interaction, capture, device audio, recording, installation or physical monitor acceptance. Waits share a fifty-second budget; synchronous native codec calls are not forcibly aborted by cancellation or timeout.",
+                Scope = "Actual public VideoReviewService metadata, filmstrip, copy, trim and export adapter; public ported video-frame decoder for orientation/color checks; exact source/copy hashes and rejected/canceled transaction preservation. AAC stream presence is checked through metadata, not decoded audio samples. No native WinUI playback or desktop interaction, capture, device audio, recording, installation or physical monitor acceptance. Waits share a fifty-second budget; synchronous native codec calls are not forcibly aborted by cancellation or timeout.",
                 Observations = observed,
                 Failure = failure
             }, new JsonSerializerOptions { WriteIndented = true });
@@ -111,6 +111,7 @@ internal static partial class Program
         double durationTolerance = 2.0 / original.FramesPerSecond + .001;
         Check(Math.Abs(original.Duration.TotalSeconds - 2) <= durationTolerance, "Generated source duration is two seconds within two frames");
         double originalBoxCenter = await CheckVideoSmokePreviewAsync(input, "original", TimeSpan.FromSeconds(.4), original, output, observed, budget).ConfigureAwait(false);
+        await CheckFilmstripAsync(input, observed, budget).ConfigureAwait(false);
 
         string copy = Path.Combine(output, "exact-copy.mp4");
         await VideoSmokeStepAsync("Save byte-exact original copy", () => VideoReviewService.SaveCopyAsync(input, copy, budget), observed, budget).ConfigureAwait(false);
@@ -188,6 +189,8 @@ internal static partial class Program
         canceled.Cancel();
         await ExpectAsync<OperationCanceledException>(() => VideoSmokeStepAsync("Pre-canceled metadata request",
             () => VideoReviewService.InspectAsync(input, canceled.Token), observed, budget), "Pre-canceled inspection is rejected").ConfigureAwait(false);
+        await ExpectAsync<OperationCanceledException>(() => VideoSmokeStepAsync("Pre-canceled filmstrip request",
+            () => VideoReviewService.ReadFilmstripAsync(input, canceled.Token), observed, budget), "Pre-canceled filmstrip decoding is rejected").ConfigureAwait(false);
         await ExpectAsync<OperationCanceledException>(() => VideoSmokeStepAsync("Pre-canceled save copy preserves destination",
             () => VideoReviewService.SaveCopyAsync(input, preserved, canceled.Token), observed, budget), "Pre-canceled copy is rejected").ConfigureAwait(false);
         await ExpectAsync<OperationCanceledException>(() => VideoSmokeStepAsync("Pre-canceled export preserves destination",
@@ -209,6 +212,31 @@ internal static partial class Program
         Check(VideoSmokeHash(input) == VideoSmokeFixtureSha256, "Every successful and failed workflow preserves the original generated MP4");
         RecordVideoSmokeFile(preserved, "Opaque failure/cancellation sentinel, not video", observed);
         observed.MemorySamples.Add(SampleMemory("After local synthetic video workflows; sampled, not peak memory"));
+    }
+
+    private static async Task CheckFilmstripAsync(string path, VideoSmokeEvidence observed, CancellationToken budget)
+    {
+        byte[][] thumbnails = await VideoSmokeStepAsync("Decode the twelve filmstrip thumbnails",
+            () => VideoReviewService.ReadFilmstripAsync(path, budget), observed, budget).ConfigureAwait(false);
+        Check(thumbnails.Length == 12, "Filmstrip contains one thumbnail for each time segment");
+        var centers = new List<double>(thumbnails.Length);
+        foreach (byte[] png in thumbnails)
+        {
+            using var stream = new MemoryStream(png, writable: false);
+            using var thumbnail = new Bitmap(stream);
+            Color top = thumbnail.GetPixel(3, 3), bottom = thumbnail.GetPixel(3, thumbnail.Height - 4);
+            Check(thumbnail.Width == 176 && thumbnail.Height == 99 && top.R > 150 && top.G < 110 &&
+                bottom.G > 130 && bottom.R < 110, "Filmstrip thumbnail preserves the expected scaled size and orientation");
+            var bluePixels = Enumerable.Range(0, thumbnail.Width).Where(x =>
+            {
+                Color color = thumbnail.GetPixel(x, 66);
+                return color.B > 150 && color.G > 65 && color.G < 200 && color.R < 90;
+            }).ToArray();
+            Check(bluePixels.Length >= 12, "Filmstrip thumbnail contains the moving box");
+            centers.Add(bluePixels.Average());
+        }
+        Check(centers.Zip(centers.Skip(1)).All(pair => pair.Second > pair.First) && centers[^1] - centers[0] > 35,
+            "Filmstrip thumbnails follow source time and cover the clip instead of repeating one frame");
     }
 
     private static async Task<double> CheckVideoSmokePreviewAsync(string path, string label, TimeSpan position, VideoMetadata metadata,

@@ -41,7 +41,19 @@ public static class CaptureCoordinator
         }, cancellationToken);
     }
 
-    public static Task<CaptureRectangle?> SelectRecordingRegionAsync(CaptureRequest request, CancellationToken cancellationToken = default)
+    public static Task<CaptureRectangle?> SelectRecordingRegionAsync(CaptureRequest request, CancellationToken cancellationToken = default) =>
+        SelectRecordingRegionAsync(request, null, cancellationToken);
+
+    public static Task<CaptureRectangle?> AdjustRecordingRegionAsync(nint ownerWindow, RecordingRegion initialRegion,
+        CancellationToken cancellationToken = default)
+    {
+        if (initialRegion.Width < 2 || initialRegion.Height < 2)
+            throw new ArgumentException("Select a recording area at least 2 × 2 pixels.", nameof(initialRegion));
+        return SelectRecordingRegionAsync(new CaptureRequest { OwnerWindow = ownerWindow }, initialRegion, cancellationToken);
+    }
+
+    private static Task<CaptureRectangle?> SelectRecordingRegionAsync(CaptureRequest request, RecordingRegion? initialRegion,
+        CancellationToken cancellationToken)
     {
         Validate(request, recording: true);
         return RunOnCaptureThreadAsync<CaptureRectangle?>(async token =>
@@ -51,8 +63,10 @@ public static class CaptureCoordinator
             await SettleCompositorAsync(token);
             using var options = new CaptureOptionScope(request, token);
             ValidateDesktopSize();
-            Rectangle? bounds = global::SnipStudio.CaptureService.SelectRecordingRegion(ToLegacyMode(request.Kind),
-                request.HideTaskbars, request.KeepPrimaryTaskbarVisible);
+            Rectangle? bounds = initialRegion is { } selected
+                ? global::SnipStudio.CaptureService.AdjustRecordingRegion(selected.Rectangle)
+                : global::SnipStudio.CaptureService.SelectRecordingRegion(ToLegacyMode(request.Kind),
+                    request.HideTaskbars, request.KeepPrimaryTaskbarVisible);
             token.ThrowIfCancellationRequested();
             return bounds is { } region ? new CaptureRectangle(region.X, region.Y, region.Width, region.Height) : null;
         }, cancellationToken);

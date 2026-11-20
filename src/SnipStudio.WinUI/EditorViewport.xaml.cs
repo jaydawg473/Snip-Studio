@@ -20,7 +20,7 @@ internal sealed record SelectionTransformEventArgs(AnnotationSnapshot Selection,
     IReadOnlyList<ImagePoint>? Endpoints, float? RotationDegrees);
 
 internal sealed class DrawGestureEventArgs(PreviewTool tool, IReadOnlyList<ImagePoint> points,
-    uint argb, float width, bool reachedPointLimit = false, bool freehand = false) : EventArgs
+    uint argb, float width, bool reachedPointLimit = false, bool freehand = false, bool isDrag = false) : EventArgs
 {
     internal PreviewTool Tool { get; } = tool;
     internal IReadOnlyList<ImagePoint> Points { get; } = points;
@@ -28,6 +28,7 @@ internal sealed class DrawGestureEventArgs(PreviewTool tool, IReadOnlyList<Image
     internal float Width { get; } = width;
     internal bool ReachedPointLimit { get; } = reachedPointLimit;
     internal bool Freehand { get; } = freehand;
+    internal bool IsDrag { get; } = isDrag;
 }
 
 public sealed partial class EditorViewport : UserControl
@@ -38,6 +39,7 @@ public sealed partial class EditorViewport : UserControl
     private PreviewTool tool = PreviewTool.Pen;
     private bool gestureActive, panning;
     private bool gestureFreehand;
+    private bool gestureDragged;
     private uint pointerId;
     private CanvasPoint previousPan;
     private uint gestureArgb;
@@ -45,6 +47,8 @@ public sealed partial class EditorViewport : UserControl
     private XamlRoot? observedRoot;
     private ImageRectangle? selectionBounds;
     private IReadOnlyList<OcrBounds> recognizedBands = [];
+    private IReadOnlyList<OcrBounds>? dragRecognizedBands;
+    private OcrBounds? recognizedDraftMask;
     private TextEditDraft? textDraft;
     private bool loadingText;
     private bool draftFormatChanged;
@@ -62,6 +66,8 @@ public sealed partial class EditorViewport : UserControl
     internal event EventHandler? DraftChanged;
     internal event EventHandler<SelectionTransformEventArgs>? SelectionTransformCommitted;
     internal event EventHandler<string>? GestureFeedback;
+    internal event EventHandler? RecognizedSelectionDismissed;
+    internal Func<ImagePoint, ImagePoint, IReadOnlyList<OcrBounds>>? RecognizedSelectionPreview { get; set; }
     internal bool HasImage => view.HasImage;
     internal bool IsFit => view.IsFit;
     internal double ZoomPercent => view.ZoomPercent;
@@ -100,13 +106,27 @@ public sealed partial class EditorViewport : UserControl
     internal void SetRecognizedBands(IReadOnlyList<OcrBounds>? bands)
     {
         recognizedBands = bands ?? [];
-        UpdateScene();
+        UpdateRecognizedBands();
     }
 
-    internal void BeginTextEdit(TextEditDraft draft)
+    internal void BeginTextEdit(TextEditDraft draft, OcrLineEditSnapshot? sourceLine = null)
     {
         CancelGesture();
         textDraft = draft;
+        recognizedDraftMask = sourceLine?.Mask;
+        var editorBackground = new SolidColorBrush(sourceLine is null ? Color.FromArgb(255, 255, 255, 255) : Color.FromArgb(0, 0, 0, 0));
+        TextEditorFrame.Background = InlineEditor.Background = editorBackground;
+        if (sourceLine is not null)
+        {
+            RecognizedDraftMask.Fill = new SolidColorBrush(ToColor(sourceLine.BackgroundArgb));
+            InlineEditor.Resources["TextControlBackgroundFocused"] = editorBackground;
+            InlineEditor.Resources["TextControlBackgroundPointerOver"] = editorBackground;
+        }
+        else
+        {
+            InlineEditor.Resources.Remove("TextControlBackgroundFocused");
+            InlineEditor.Resources.Remove("TextControlBackgroundPointerOver");
+        }
         draftFormatChanged = false;
         loadingText = true;
         try
@@ -165,12 +185,21 @@ public sealed partial class EditorViewport : UserControl
     internal void EndTextEdit()
     {
         textDraft = null;
+        recognizedDraftMask = null;
+        RecognizedDraftMask.Visibility = Visibility.Collapsed;
         TextLayer.Visibility = Visibility.Collapsed;
         InlineEditor.Document.SetText(TextSetOptions.None, "");
         TextDraftWithinLimit = true;
         Focus(FocusState.Programmatic);
     }
     internal void RestoreTextFocus() { if (IsTextEditing) InlineEditor.Focus(FocusState.Programmatic); }
+    internal void SelectInlineText(int start, int length)
+    {
+        if (textDraft is null) return;
+        start = Math.Clamp(start, 0, textDraft.Text.Length);
+        int end = start + Math.Clamp(length, 0, textDraft.Text.Length - start);
+        InlineEditor.Document.Selection.SetRange(start, end);
+    }
 
     internal void FormatTextStyle(TextFontStyle flag, bool enabled)
     {
@@ -248,16 +277,20 @@ public sealed partial class EditorViewport : UserControl
     internal void CancelGesture()
     {
         bool transformed = transformHandle != 0;
+        bool hadRecognizedPreview = dragRecognizedBands is not null;
         transformHandle = 0;
         proposedEndpoints = null;
         gestureActive = false;
         panning = false;
+        gestureDragged = false;
+        dragRecognizedBands = null;
         gesturePoints.Clear();
         StrokePreview.Points.Clear();
         StrokePreview.Visibility = Visibility.Collapsed;
         RectanglePreview.Visibility = Visibility.Collapsed;
         EllipsePreview.Visibility = Visibility.Collapsed;
         Host.ReleasePointerCaptures();
+        if (hadRecognizedPreview) UpdateRecognizedBands();
         if (transformed)
         {
             selectionBounds = selectedObject?.Bounds;
@@ -313,12 +346,11 @@ public sealed partial class EditorViewport : UserControl
                 SelectionFrame.Visibility = Visibility.Visible;
             }
             else SelectionFrame.Visibility = Visibility.Collapsed;
-            RecognizedBands.Children.Clear();
-            foreach (OcrBounds band in recognizedBands)
+            UpdateRecognizedBands();
+            if (recognizedDraftMask is OcrBounds mask)
             {
-                var rectangle = new Microsoft.UI.Xaml.Shapes.Rectangle { Fill = new SolidColorBrush(Color.FromArgb(75, 0, 120, 215)) };
-                PositionRectangle(rectangle, band.X, band.Y, band.Width, band.Height);
-                RecognizedBands.Children.Add(rectangle);
+                PositionRectangle(RecognizedDraftMask, mask.X, mask.Y, mask.Width, mask.Height);
+                RecognizedDraftMask.Visibility = Visibility.Visible;
             }
             DrawObjectHandles();
             if (textDraft is not null)
@@ -330,6 +362,19 @@ public sealed partial class EditorViewport : UserControl
             }
         }
         ViewChanged?.Invoke(this, EventArgs.Empty);
+    }
+
+    private void UpdateRecognizedBands()
+    {
+        RecognizedBands.Children.Clear();
+        if (!view.HasImage) return;
+        var brush = new SolidColorBrush(Color.FromArgb(75, 0, 120, 215));
+        foreach (OcrBounds band in dragRecognizedBands ?? recognizedBands)
+        {
+            var rectangle = new Microsoft.UI.Xaml.Shapes.Rectangle { Fill = brush };
+            PositionRectangle(rectangle, band.X, band.Y, band.Width, band.Height);
+            RecognizedBands.Children.Add(rectangle);
+        }
     }
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs args)
@@ -346,6 +391,7 @@ public sealed partial class EditorViewport : UserControl
         Focus(FocusState.Pointer);
         pointerId = args.Pointer.PointerId;
         gestureActive = true;
+        gestureDragged = false;
         panning = pan;
         previousPan = position;
         gestureArgb = InkArgb;
@@ -369,7 +415,12 @@ public sealed partial class EditorViewport : UserControl
             var color = Color.FromArgb((byte)(gestureArgb >> 24), (byte)(gestureArgb >> 16),
                 (byte)(gestureArgb >> 8), (byte)gestureArgb);
             double width = gestureWidth * view.Scale;
-            if (IsBoxTool(tool))
+            if (tool == PreviewTool.OcrSelect)
+            {
+                dragRecognizedBands = [];
+                UpdateRecognizedBands();
+            }
+            else if (IsBoxTool(tool))
             {
                 RectanglePreview.Stroke = new SolidColorBrush(color);
                 RectanglePreview.StrokeThickness = width;
@@ -427,6 +478,17 @@ public sealed partial class EditorViewport : UserControl
             {
                 CanvasPoint lineDisplay = view.ViewportAt(image);
                 StrokePreview.Points[1] = new Point(lineDisplay.X, lineDisplay.Y);
+            }
+            else if (tool == PreviewTool.OcrSelect)
+            {
+                const double dragThresholdDip = 3;
+                double dragX = position.X - previousPan.X, dragY = position.Y - previousPan.Y;
+                gestureDragged |= dragX * dragX + dragY * dragY >= dragThresholdDip * dragThresholdDip;
+                if (gestureDragged && RecognizedSelectionPreview is { } preview)
+                {
+                    dragRecognizedBands = preview(gesturePoints[0], next);
+                    UpdateRecognizedBands();
+                }
             }
             else UpdateRectanglePreview(image);
             return;
@@ -501,15 +563,16 @@ public sealed partial class EditorViewport : UserControl
         PreviewTool completedTool = tool;
         uint argb = gestureArgb;
         float width = gestureWidth;
+        bool dragged = gestureDragged;
         CancelGesture();
         if (commit && points.Length > 0 && (!IsAreaTool(completedTool) ||
             (points.Length > 1 && Math.Abs(points[0].X - points[1].X) >= 0.5 && Math.Abs(points[0].Y - points[1].Y) >= 0.5)))
-            GestureCommitted?.Invoke(this, new DrawGestureEventArgs(completedTool, points, argb, width, reachedPointLimit, gestureFreehand));
+            GestureCommitted?.Invoke(this, new DrawGestureEventArgs(completedTool, points, argb, width, reachedPointLimit, gestureFreehand, dragged));
     }
 
     private static bool IsBoxTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Crop or PreviewTool.RemoveArea or PreviewTool.Emoji or PreviewTool.OcrSelect or PreviewTool.Select or PreviewTool.Text;
     private static bool IsTwoPointTool(PreviewTool value) => IsBoxTool(value) || value is PreviewTool.Line or PreviewTool.Arrow;
-    private static bool IsAreaTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Crop or PreviewTool.RemoveArea or PreviewTool.Emoji;
+    private static bool IsAreaTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Crop or PreviewTool.RemoveArea;
 
     private void PositionRectangle(FrameworkElement element, double x, double y, double width, double height)
     {
@@ -642,6 +705,10 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnCanvasKeyDown(object sender, KeyRoutedEventArgs args)
     {
-        if (args.Key == VirtualKey.Escape) { CancelGesture(); args.Handled = true; }
+        if (args.Key != VirtualKey.Escape) return;
+        bool dismissTextActions = tool == PreviewTool.OcrSelect && !gestureActive;
+        CancelGesture();
+        if (dismissTextActions) RecognizedSelectionDismissed?.Invoke(this, EventArgs.Empty);
+        args.Handled = true;
     }
 }

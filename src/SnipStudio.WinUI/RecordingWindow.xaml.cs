@@ -22,6 +22,7 @@ public sealed partial class RecordingWindow : Window
     private readonly TaskCompletionSource<bool> closeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private CancellationTokenSource? operationCancellation;
     private CancellationTokenSource? metadataCancellation;
+    private readonly HashSet<string> trimOriginalPaths = new(StringComparer.OrdinalIgnoreCase);
     private MediaPlayer? player;
     private MediaSource? source;
     private CandidateVideoOpen? pendingVideoOpen;
@@ -48,11 +49,12 @@ public sealed partial class RecordingWindow : Window
 
     private sealed class CandidateVideoOpen
     {
-        public CandidateVideoOpen(string path, MediaPlayer player, MediaSource source, CancellationToken token)
-        { Path = path; Player = player; Source = source; Cancellation = CancellationTokenSource.CreateLinkedTokenSource(token); }
+        public CandidateVideoOpen(string path, MediaPlayer player, MediaSource source, bool isTrimmedCopy, CancellationToken token)
+        { Path = path; Player = player; Source = source; IsTrimmedCopy = isTrimmedCopy; Cancellation = CancellationTokenSource.CreateLinkedTokenSource(token); }
         public string Path { get; }
         public MediaPlayer Player { get; }
         public MediaSource Source { get; }
+        public bool IsTrimmedCopy { get; }
         public CancellationTokenSource Cancellation { get; }
         public bool Opened { get; set; }
         public string? FailureMessage;
@@ -64,6 +66,7 @@ public sealed partial class RecordingWindow : Window
         customRegion = initialRegion;
         this.captureWorkflow = captureWorkflow && initialRegion != null;
         InitializeComponent();
+        ConfigureFilmstrip();
         string icon = Path.Combine(AppContext.BaseDirectory, "Assets", "SnipStudio.ico");
         if (File.Exists(icon)) AppWindow.SetIcon(icon);
         AppWindow.Resize(this.captureWorkflow && string.IsNullOrWhiteSpace(initialVideoPath)
@@ -155,6 +158,33 @@ public sealed partial class RecordingWindow : Window
 
     private async void OnSelectAreaClicked(object sender, RoutedEventArgs args) => await SelectRecordingRegionAsync(CaptureKind.Rectangle);
     private async void OnSelectWindowClicked(object sender, RoutedEventArgs args) => await SelectRecordingRegionAsync(CaptureKind.Window);
+
+    private async void OnAdjustRecordingAreaClicked(object sender, RoutedEventArgs args)
+    {
+        if (closed || busy || recorder.IsActive || stopTask != null || RegionBox.SelectedItem is not RecordingDisplay current) return;
+        AdvancedRecordingFlyout.Hide();
+        await RunAsync("Adjust the recording area. Escape keeps the previous area.", async () =>
+        {
+            CaptureRectangle? selected;
+            try
+            {
+                selected = await CaptureCoordinator.AdjustRecordingRegionAsync(
+                    WinRT.Interop.WindowNative.GetWindowHandle(this), current.Region, lifetime.Token);
+            }
+            finally
+            {
+                if (!closed) { AppWindow.Show(); Activate(); }
+            }
+            if (closed) return;
+            if (selected is { } region)
+            {
+                AddCustomRegion(new(region.X, region.Y, region.Width, region.Height));
+                SetStatus("Recording area updated. Choose Start when ready.");
+            }
+            else SetStatus("Adjustment canceled. The previous recording area is kept.");
+        });
+    }
+
     private Task SelectRecordingRegionAsync(CaptureKind kind)
     {
         AdvancedRecordingFlyout.Hide();
@@ -164,7 +194,11 @@ public sealed partial class RecordingWindow : Window
             {
                 OwnerWindow = WinRT.Interop.WindowNative.GetWindowHandle(this), Kind = kind
             }, lifetime.Token);
-            if (selected is { } region) { AddCustomRegion(new(region.X, region.Y, region.Width, region.Height)); SetStatus("Recording area selected."); }
+            if (selected is { } region)
+            {
+                AddCustomRegion(new(region.X, region.Y, region.Width, region.Height));
+                SetStatus("Area selected. Choose Adjust area to refine it, or Start to record.");
+            }
             else SetStatus("Area selection canceled. The previous area is kept.");
         });
     }
@@ -365,7 +399,7 @@ public sealed partial class RecordingWindow : Window
         else SetStatus("Open canceled. The current video is kept.");
     });
 
-    private async Task LoadVideoAsync(string path)
+    private async Task LoadVideoAsync(string path, bool isTrimmedCopy = false)
     {
         string fullPath = Path.GetFullPath(path);
         if (videoFileRead is { IsCompleted: false })
@@ -396,7 +430,7 @@ public sealed partial class RecordingWindow : Window
         {
             nextSource = MediaSource.CreateFromStorageFile(file);
             nextPlayer = new MediaPlayer { AutoPlay = false };
-            var candidate = new CandidateVideoOpen(fullPath, nextPlayer, nextSource, lifetime.Token);
+            var candidate = new CandidateVideoOpen(fullPath, nextPlayer, nextSource, isTrimmedCopy, lifetime.Token);
             pendingVideoOpen = candidate;
             nextPlayer.MediaFailed += OnMediaFailed;
             nextPlayer.MediaOpened += OnCandidateMediaOpened;
@@ -417,7 +451,9 @@ public sealed partial class RecordingWindow : Window
             }
             throw;
         }
-        SetStatus("Checking the selected video's playback. Save selected file copy is available; the current review is kept until opening succeeds.");
+        SetStatus(isTrimmedCopy
+            ? "Trimmed copy saved. Checking playback before switching the review to it…"
+            : "Checking the selected video's playback. Save selected file copy is available; the current review is kept until opening succeeds.");
     }
 
     private void OnCandidateMediaOpened(MediaPlayer sender, object args)
@@ -490,9 +526,12 @@ public sealed partial class RecordingWindow : Window
         player = candidate.Player;
         source = candidate.Source;
         videoPath = candidate.Path;
+        if (!candidate.IsTrimmedCopy) trimOriginalPaths.Clear();
+        else if (captureWorkflow) RecordingDestinationText.Text = "Reviewing trimmed copy: " + candidate.Path;
         candidateCopyPath = null;
         CandidatePanel.Visibility = Visibility.Collapsed;
         metadata = null;
+        ResetFilmstrip();
         string? cleanupWarning = null;
         Action[] previousCleanup =
         {
@@ -521,12 +560,15 @@ public sealed partial class RecordingWindow : Window
         _ = LoadMetadataAsync(candidate.Path, ++videoGeneration, metadataCancellation.Token);
         UpdateCommands();
         if (captureWorkflow)
+        {
+            if (previousPlayer == null && RecordingRoot.ActualHeight < 550) ExpandForVideoReview();
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
             {
                 if (closed || !ReferenceEquals(player, candidate.Player)) return;
                 RecordingRoot.UpdateLayout();
                 RecordingBodyScroll.ChangeView(null, 0d, null, true);
             });
+        }
         if (cleanupWarning != null)
         {
             VideoNotice.Title = "Video opened";
@@ -599,11 +641,9 @@ public sealed partial class RecordingWindow : Window
             if (info.Duration <= TimeSpan.Zero || info.Width < 2 || info.Height < 2)
                 throw new InvalidOperationException("Windows did not report a usable video size and duration.");
             metadata = info;
-            TrimStartBox.Value = 0;
-            TrimEndBox.Value = info.Duration.TotalSeconds;
-            TrimStartBox.Maximum = TrimEndBox.Maximum = info.Duration.TotalSeconds;
+            BeginFilmstrip(path, generation, token);
             VideoInfoText.Text = Path.GetFileName(path) + $" · {info.Width} × {info.Height} · {FormatDuration(info.Duration)} · {(info.HasAudio ? "Audio" : "No audio")}";
-            if (!busy) SetStatus("Video ready. Playback controls seek and change volume. Save a copy, trim, or export a smaller MP4.");
+            if (!busy) SetStatus("Video ready. Click or drag on the filmstrip to scrub, or drag its blue handles to trim.");
             UpdateCommands();
         }
         catch (OperationCanceledException) { }
@@ -611,6 +651,8 @@ public sealed partial class RecordingWindow : Window
         {
             if (closed || token.IsCancellationRequested || generation != videoGeneration || videoPath != path) return;
             metadata = null;
+            ResetFilmstrip();
+            FilmstripMessage.Text = "Video details unavailable. Playback and Save current video copy remain available.";
             VideoInfoText.Text = Path.GetFileName(path) + " · Metadata unavailable";
             VideoNotice.Title = "Current video details unavailable";
             VideoNotice.Severity = InfoBarSeverity.Warning;
@@ -637,9 +679,9 @@ public sealed partial class RecordingWindow : Window
     }
 
     private void OnSetStartClicked(object sender, RoutedEventArgs args)
-    { if (!busy && player != null && metadata != null) TrimStartBox.Value = Math.Clamp(player.PlaybackSession.Position.TotalSeconds, 0, metadata.Duration.TotalSeconds); }
+    { if (FilmstripAvailable) SetFilmstripTrim(true, filmstripPosition); }
     private void OnSetEndClicked(object sender, RoutedEventArgs args)
-    { if (!busy && player != null && metadata != null) TrimEndBox.Value = Math.Clamp(player.PlaybackSession.Position.TotalSeconds, 0, metadata.Duration.TotalSeconds); }
+    { if (FilmstripAvailable) SetFilmstripTrim(false, filmstripPosition); }
 
     private async void OnCopyVideoClicked(object sender, RoutedEventArgs args) => await CopyVideoPathAsync(videoPath, selected: false);
     private async void OnCopySelectedVideoClicked(object sender, RoutedEventArgs args) => await CopyVideoPathAsync(candidateCopyPath, selected: true);
@@ -648,6 +690,7 @@ public sealed partial class RecordingWindow : Window
         if (sourcePath == null) return;
         string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(sourcePath) + "-copy", Path.GetExtension(sourcePath), "Original video");
         if (destination == null) { SetStatus("Save copy canceled."); return; }
+        ProtectTrimOriginal(destination);
         operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         UpdateCommands();
         SetStatus("Saving the original video copy…");
@@ -658,17 +701,24 @@ public sealed partial class RecordingWindow : Window
 
     private async void OnTrimVideoClicked(object sender, RoutedEventArgs args) => await RunAsync("Choose a filename for the trimmed copy…", async () =>
     {
-        if (videoPath == null || metadata == null) return;
-        if (!double.IsFinite(TrimStartBox.Value) || !double.IsFinite(TrimEndBox.Value) || TrimStartBox.Value < 0 ||
-            TrimEndBox.Value <= TrimStartBox.Value || TrimEndBox.Value > metadata.Duration.TotalSeconds)
+        if (videoPath is not { } original || metadata == null) return;
+        if (!TryGetTrimRange(out var start, out var end))
             throw new ArgumentException("Choose an end after the start, within this video's duration.");
-        string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(videoPath) + "-trimmed", ".mp4", "MP4 video");
+        if (start == TimeSpan.Zero && end == metadata.Duration) { SetStatus("Choose a shorter range to trim. Use Save current video copy for the full clip."); return; }
+        string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(original) + "-trimmed", ".mp4", "MP4 video");
         if (destination == null) { SetStatus("Trim canceled."); return; }
+        ProtectTrimOriginal(destination);
         player?.Pause();
         SetStatus("Saving the exact trim range. Keep this window open until Windows finishes…");
-        await VideoReviewService.TrimAsync(videoPath, destination, TimeSpan.FromSeconds(TrimStartBox.Value), TimeSpan.FromSeconds(TrimEndBox.Value));
+        await VideoReviewService.TrimAsync(original, destination, start, end);
         PublishSaved(destination);
-        SetStatus("Saved trimmed copy " + Path.GetFileName(destination) + ". The original video is kept.");
+        trimOriginalPaths.Add(original);
+        try { await LoadVideoAsync(destination, isTrimmedCopy: true); }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            ShowError("The trimmed copy was saved at " + destination + ", but it could not be opened for review. The current clip is kept. " + exception.Message);
+            SetStatus("Trimmed copy saved. The current clip is kept.");
+        }
     });
 
     private async void OnExportVideoClicked(object sender, RoutedEventArgs args) => await RunAsync("Choose a filename for the smaller MP4…", async () =>
@@ -676,6 +726,7 @@ public sealed partial class RecordingWindow : Window
         if (videoPath == null || metadata == null) return;
         string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(videoPath) + "-smaller", ".mp4", "MP4 video");
         if (destination == null) { SetStatus("Export canceled."); return; }
+        ProtectTrimOriginal(destination);
         player?.Pause();
         var preset = ExportPresetBox.SelectedIndex switch
         {
@@ -694,6 +745,12 @@ public sealed partial class RecordingWindow : Window
         SetStatus($"Saved {Path.GetFileName(result.Path)} · {result.Bytes / 1000000.0:0.##} MB." +
             (result.TargetMet ? "" : " The requested attachment target was exceeded; choose a larger target or trim the duration."));
     });
+
+    private void ProtectTrimOriginal(string destination)
+    {
+        if (trimOriginalPaths.Contains(Path.GetFullPath(destination)))
+            throw new ArgumentException("Choose a different filename to keep the original video.");
+    }
 
     private void OnCancelVideoClicked(object sender, RoutedEventArgs args)
     {
@@ -793,18 +850,21 @@ public sealed partial class RecordingWindow : Window
         bool showReview = hasVideo || hasSelection;
         bool compact = captureWorkflow && !showReview;
         RecordingHeader.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-        RecordingSettingsPanel.Visibility = captureWorkflow ? Visibility.Collapsed : Visibility.Visible;
+        RecordingSettingsPanel.Visibility = captureWorkflow || showReview ? Visibility.Collapsed : Visibility.Visible;
         RecordingBodyScroll.Visibility = compact && !VideoNotice.IsOpen ? Visibility.Collapsed : Visibility.Visible;
         RecordingBodyScroll.MaxHeight = compact ? 96 : double.PositiveInfinity;
         RecordingBodyRow.Height = compact ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
         RecordingRoot.Padding = new Thickness(compact ? 8 : 16);
         RecordingRoot.RowSpacing = compact ? 0 : 12;
         RecordingFooter.Spacing = compact ? 2 : 4;
+        RecordActionsRow.Visibility = showReview && !active ? Visibility.Collapsed : Visibility.Visible;
         SelectedAreaSummary.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
         StartRecordingButton.Content = compact ? "Start" : "Start recording";
         StopRecordingButton.Content = compact ? "Stop" : "Stop and save";
         StartRecordingButton.MinWidth = StopRecordingButton.MinWidth = compact ? 80 : 0;
         StartRecordingButton.Visibility = compact && active ? Visibility.Collapsed : Visibility.Visible;
+        AdjustRecordingAreaButton.Visibility = active || showReview ? Visibility.Collapsed : Visibility.Visible;
+        AdjustRecordingAreaButton.IsEnabled = !busy && !active;
         StopRecordingButton.Visibility = compact && !active ? Visibility.Collapsed : Visibility.Visible;
         VideoStatusText.TextWrapping = compact ? TextWrapping.NoWrap : TextWrapping.Wrap;
         VideoStatusText.TextTrimming = compact ? TextTrimming.CharacterEllipsis : TextTrimming.None;
@@ -827,7 +887,8 @@ public sealed partial class RecordingWindow : Window
         Title = active ? "Snip Studio — Recording" : hasVideo ? "Snip Studio — " + Path.GetFileName(videoPath) : "Snip Studio — Record video";
         PlaybackPanel.Visibility = ReviewOptionsPanel.Visibility = showReview ? Visibility.Visible : Visibility.Collapsed;
         CandidatePanel.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
-        TrimRow.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
+        FilmstripPanel.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
+        TrimRow.Visibility = metadata == null ? Visibility.Collapsed : Visibility.Visible;
         VideoPlayer.AreTransportControlsEnabled = hasVideo;
         UpdateRecordingLayoutBounds(RecordingRoot.ActualHeight);
         UpdateRecordingMinimums();
@@ -840,8 +901,14 @@ public sealed partial class RecordingWindow : Window
         OpenVideoButton.IsEnabled = !busy && !active;
         CopyVideoButton.IsEnabled = !busy && !active && videoPath != null;
         CopySelectedVideoButton.IsEnabled = !busy && !active && candidateCopyPath != null;
-        TrimVideoButton.IsEnabled = ExportVideoButton.IsEnabled = !busy && !active && videoPath != null && metadata != null;
-        TrimStartBox.IsEnabled = TrimEndBox.IsEnabled = SetStartButton.IsEnabled = SetEndButton.IsEnabled = !busy && !active && metadata != null;
+        ExportVideoButton.IsEnabled = !busy && !active && videoPath != null && metadata != null;
+        FilmstripInput.IsEnabled = TrimStartBox.IsEnabled = TrimEndBox.IsEnabled = SetStartButton.IsEnabled = SetEndButton.IsEnabled = FilmstripAvailable;
+        if (!FilmstripAvailable)
+        {
+            EndFilmstripDrag();
+            filmstripSeekPending = false;
+        }
+        UpdateTrimCommand();
         ExportPresetBox.IsEnabled = TargetSizeBox.IsEnabled = !busy && !active;
         CancelVideoButton.IsEnabled = busy && operationCancellation != null && !operationCancellation.IsCancellationRequested || !busy && !active && pendingVideoOpen != null;
         CancelVideoButton.Visibility = operationCancellation != null || pendingVideoOpen != null ? Visibility.Visible : Visibility.Collapsed;
@@ -901,7 +968,13 @@ public sealed partial class RecordingWindow : Window
         UpdateRecordingMinimums();
         bool narrow = args.NewSize.Width < 900;
         Orientation direction = narrow ? Orientation.Vertical : Orientation.Horizontal;
-        TrimRow.Orientation = ExportRow.Orientation = direction;
+        ExportRow.Orientation = direction;
+        bool stackTrimFields = args.NewSize.Width < 500;
+        Grid.SetRow(TrimEndActions, stackTrimFields ? 1 : 0);
+        Grid.SetColumn(TrimEndActions, stackTrimFields ? 0 : 1);
+        Grid.SetColumnSpan(TrimStartActions, stackTrimFields ? 2 : 1);
+        Grid.SetColumnSpan(TrimEndActions, stackTrimFields ? 2 : 1);
+        Grid.SetRow(TrimSaveActions, stackTrimFields ? 2 : 1);
         bool compact = captureWorkflow && videoPath == null && candidateCopyPath == null;
         AudioChecksRow.Orientation = !compact && args.NewSize.Width < 520 ? Orientation.Vertical : Orientation.Horizontal;
         RecordActionsRow.Orientation = !compact && args.NewSize.Width < 430 ? Orientation.Vertical : Orientation.Horizontal;
@@ -913,6 +986,15 @@ public sealed partial class RecordingWindow : Window
         // Setup, playback and editing share one body scroller. Fixed actions
         // and status remain reachable even at the recording window minimum.
         PlaybackPanel.Height = Math.Clamp(height * .40, 120, 400);
+    }
+
+    private void ExpandForVideoReview()
+    {
+        double scale = RecordingRoot.XamlRoot?.RasterizationScale ?? 1;
+        DisplayArea? display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        if (display is null || !double.IsFinite(scale) || scale <= 0) return;
+        AppWindow.Resize(new SizeInt32(Math.Min(display.WorkArea.Width, (int)Math.Ceiling(1040 * scale)),
+            Math.Min(display.WorkArea.Height, (int)Math.Ceiling(820 * scale))));
     }
 
     private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -998,6 +1080,9 @@ public sealed partial class RecordingWindow : Window
         metadataCancellation?.Dispose();
         operationCancellation?.Cancel();
         durationTimer.Stop();
+        filmstripTimer.Stop();
+        filmstripTimer.Tick -= OnFilmstripTick;
+        EndFilmstripDrag();
         recorder.StatusChanged -= OnRecorderStatusChanged;
         recorder.Dispose();
         ClearPlayback();

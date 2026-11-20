@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using System.Drawing;
+using System.Drawing.Imaging;
+using System.Drawing.Text;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -30,6 +33,7 @@ internal static partial class Program
         }
         Directory.CreateDirectory(output);
         var fixtures = new List<object>();
+        object? lineEdit = null;
         bool passed = false;
         string? failure = null;
         Stopwatch clock = Stopwatch.StartNew();
@@ -51,6 +55,7 @@ internal static partial class Program
                 if (new FileInfo(item.InputPath).Length is < 1 or > 128L * 1024 * 1024)
                     throw new ArgumentException("A fixture is empty or exceeds 128 MB.");
             }
+            lineEdit = context.RunWithResult(CheckRecognizedLineDraftAsync());
             bool allPassed = true;
             for (int index = 0; index < manifest.Fixtures.Count; index++)
             {
@@ -84,7 +89,8 @@ internal static partial class Program
                 Passed = passed,
                 FixtureCount = fixtures.Count,
                 ElapsedMilliseconds = clock.Elapsed.TotalMilliseconds,
-                Scope = "Real installed Windows OCR on explicitly supplied local image fixtures, exact ordinal line comparisons, public OCR selection, source-style conversion/render and Undo/Redo. No desktop capture, WinUI Text-tool activation or native pointer/clipboard acceptance. Extraction mismatches remain unchanged and are recorded, never guessed or corrected.",
+                Scope = "Real installed Windows OCR on one generated source-line draft and explicitly supplied local image fixtures. Checks cover draft/apply/Undo, exact ordinal lines, public OCR selection, source-style conversion/render and Undo/Redo. No desktop capture, WinUI Text-tool activation or native pointer/clipboard acceptance. Extraction mismatches remain unchanged and are recorded, never guessed or corrected.",
+                RecognizedLineDraft = lineEdit,
                 Fixtures = fixtures,
                 Failure = failure
             };
@@ -96,6 +102,53 @@ internal static partial class Program
     }
 
     private sealed record OcrFixtureOutcome(bool Passed, bool StopAfterNativeTimeout, object Evidence);
+
+    private static async Task<object> CheckRecognizedLineDraftAsync()
+    {
+        using var image = new Bitmap(500, 100);
+        using (Graphics graphics = Graphics.FromImage(image))
+        using (var font = new Font("Segoe UI", 28, FontStyle.Regular, GraphicsUnit.Pixel))
+        {
+            graphics.Clear(Color.White);
+            graphics.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
+            graphics.DrawString("EDITABLE LINE 42", font, Brushes.Black, 16, 20);
+        }
+        using var png = new MemoryStream();
+        image.Save(png, ImageFormat.Png);
+        using EditorSession session = new();
+        session.OpenImageBytes(png.ToArray());
+        long revision = session.Revision;
+        byte[] original = (await session.RenderPreviewAsync()).PngBytes;
+        using var recognitionBudget = new CancellationTokenSource(TimeSpan.FromSeconds(40));
+        OcrSnapshot recognized = await session.RecognizeTextAsync(recognitionBudget.Token);
+        OcrLineSnapshot line = recognized.Lines.Single(item => item.Words.Count > 0);
+        using var matchingBudget = new CancellationTokenSource(TimeSpan.FromSeconds(95));
+        OcrLineEditSnapshot draft = await session.PrepareRecognizedLineEditAsync(recognized, line.Index, matchingBudget.Token);
+        Check(draft.ExistingAnnotationIndex < 0 && draft.Text == line.Text && draft.Mask.Width > 0,
+            "Preparing a raster text draft keeps the original recognized string and its source mask");
+        Check(session.Revision == revision && !session.CanUndo && session.AnnotationCount == 0 &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original),
+            "Opening a recognized draft leaves pixels, revision and Undo unchanged");
+        Check(session.ApplyRecognizedLineEdit(draft, draft.Text, draft.Rtf, draft.Argb, draft.FontSize) < 0 &&
+            session.Revision == revision && !session.CanUndo,
+            "Applying an unchanged recognized draft does not commit reconstructed text");
+
+        const string replacement = "I";
+        const uint color = 0xFF243982;
+        const float fontSize = 8;
+        string rtf = session.CreateTextRtf(replacement, draft.FontFamily, fontSize, TextFontStyle.Regular, color);
+        int edited = session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize);
+        var note = session.GetAnnotation(edited)?.Text;
+        Check(note is { Text: replacement, Argb: color, FontSize: fontSize } && session.CanUndo,
+            "Applying a changed recognized draft keeps its exact text, color and size");
+        Expect<InvalidOperationException>(() => session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize),
+            "A committed source draft cannot modify a newer revision again");
+        session.Undo();
+        Check(session.Revision == revision && session.AnnotationCount == 0 && !session.CanUndo &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original),
+            "One Undo restores the original image and all pre-draft history");
+        return new { Passed = true, OriginalLine = line.Text, EditedText = replacement, UndoRestoredOriginalPixels = true };
+    }
 
     private static async Task<OcrFixtureOutcome> CheckOcrFixtureAsync(OcrFixtureInput fixture, string output, int index)
     {

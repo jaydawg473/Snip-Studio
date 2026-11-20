@@ -47,9 +47,12 @@ public sealed class OcrLineSnapshot
 /// </summary>
 public sealed class OcrSnapshot
 {
+    private global::SnipStudio.TextOverlaySelection? selectionGeometry;
     internal EditorSession Owner { get; }
     internal object ImageIdentity { get; }
     internal global::SnipStudio.TextRecognitionResult NativeResult { get; }
+    internal global::SnipStudio.TextOverlaySelection SelectionGeometry =>
+        selectionGeometry ??= new(NativeResult.Lines);
     public long Revision { get; }
     public bool Available { get; }
     public string Text { get; }
@@ -119,18 +122,67 @@ public sealed class OcrSelectionSnapshot
     public string Text { get; }
     public IReadOnlyList<OcrBounds> Bands { get; }
     public IReadOnlyList<int> LineIndices { get; }
+    /// <summary>The exact native character range, when the selection maps to a single line.</summary>
+    public int SelectionStart { get; }
+    public int SelectionLength { get; }
 
     internal OcrSelectionSnapshot(OcrSnapshot source, string text, IEnumerable<OcrBounds> bands, IEnumerable<int> lines,
-        IEnumerable<(int LineIndex, int WordIndex)>? words = null)
+        IEnumerable<(int LineIndex, int WordIndex)>? words = null, int selectionStart = 0, int selectionLength = 0)
     {
         Source = source;
         Text = text;
         Bands = new List<OcrBounds>(bands).AsReadOnly();
         LineIndices = new List<int>(lines).AsReadOnly();
         selectedWords = words == null ? new() : new(words);
+        SelectionStart = selectionStart;
+        SelectionLength = selectionLength;
     }
 
     internal bool IncludesWord(int lineIndex, int wordIndex) => selectedWords.Contains((lineIndex, wordIndex));
+}
+
+/// <summary>A source-style draft for one recognized line. Preparation leaves the image and Undo history intact.</summary>
+public sealed class OcrLineEditSnapshot
+{
+    internal OcrSnapshot Source { get; }
+    internal RectangleF SourceInk { get; }
+    internal Rectangle SourceMask { get; }
+    internal RectangleF ProtectedLayout { get; }
+    internal float MinimumHeight { get; }
+
+    public int ExistingAnnotationIndex { get; }
+    public string Text { get; }
+    public string Rtf { get; }
+    public string FontFamily { get; }
+    public TextFontStyle FontStyle { get; }
+    public ImagePoint Location { get; }
+    public uint Argb { get; }
+    public uint BackgroundArgb { get; }
+    public float FontSize { get; }
+    public float LayoutWidth { get; }
+    public OcrBounds Mask => OcrSnapshot.FromRectangle(SourceMask);
+
+    internal OcrLineEditSnapshot(OcrSnapshot source, int existingAnnotationIndex, string text, string rtf,
+        string fontFamily, TextFontStyle fontStyle, PointF location, Color foreground, float fontSize,
+        float layoutWidth, float minimumHeight, RectangleF sourceInk = default, Rectangle sourceMask = default,
+        RectangleF protectedLayout = default, Color background = default)
+    {
+        Source = source;
+        ExistingAnnotationIndex = existingAnnotationIndex;
+        Text = text;
+        Rtf = rtf;
+        FontFamily = fontFamily;
+        FontStyle = fontStyle;
+        Location = new ImagePoint(location.X, location.Y);
+        Argb = unchecked((uint)foreground.ToArgb());
+        BackgroundArgb = unchecked((uint)background.ToArgb());
+        FontSize = fontSize;
+        LayoutWidth = layoutWidth;
+        MinimumHeight = minimumHeight;
+        SourceInk = sourceInk;
+        SourceMask = sourceMask;
+        ProtectedLayout = protectedLayout;
+    }
 }
 
 public sealed record OcrConversionResult(bool Applied, int LastAnnotationIndex, int ConvertedLineCount, string Message);

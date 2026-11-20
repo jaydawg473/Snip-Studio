@@ -9,80 +9,229 @@ public sealed partial class MainWindow
 {
     private OcrSnapshot? ocrSnapshot;
     private OcrSelectionSnapshot? ocrSelection;
+    private OcrLineEditSnapshot? ocrLineDraft;
+    private bool ocrTextNavigation;
     private readonly OfflineTranslationAdapter translation = new();
 
-    private async void OnOcrClicked(object sender, RoutedEventArgs args) => await RecognizeAsync(copyOnly: false);
+    private async void OnOcrClicked(object sender, RoutedEventArgs args)
+    {
+        if (selectedTool == PreviewTool.OcrSelect) CloseTextActions();
+        else await RecognizeAsync(copyOnly: false);
+    }
 
-    private async Task RecognizeAsync(bool copyOnly, bool selectOnly = false)
+    private async Task RecognizeAsync(bool copyOnly)
     {
         if (!session.HasImage) { SetStatus("Capture, open, or paste an image before extracting text."); return; }
-        await RunActionAsync("Recognizing text…", async () =>
+        if (busy || closed) return;
+        long intent = copyOnly ? DesktopImageActions.BeginClipboardWrite() : 0;
+        bool recognized = await RunActionAsync("Recognizing text…", async () =>
         {
-            if (ocrSnapshot is null || !session.IsOcrSnapshotCurrent(ocrSnapshot))
-                ocrSnapshot = await session.RecognizeTextAsync(ActionToken);
-            OcrSnapshot result = ocrSnapshot;
-            if (!result.Available) throw new InvalidOperationException(result.Message.Length == 0 ? "Text recognition is unavailable for this image." : result.Message);
+            if (!copyOnly)
+            {
+                selectedAnnotationIndex = -1;
+                UpdateSelection();
+                SetTool(PreviewTool.OcrSelect, whileBusy: true);
+                SetStatus("Recognizing text…");
+            }
+            OcrSnapshot result = await GetCurrentRecognitionAsync();
             if (copyOnly)
             {
-                SetClipboardText(result.Text);
-                SetStatus("Recognized text copied exactly as returned. Review identifiers and quantities before using it.");
+                if (!SetClipboardText(result.Text, intent))
+                {
+                    SetStatus("Copy skipped because a newer clipboard action is active.");
+                    return false;
+                }
+                SetStatus("All recognized text copied. Review identifiers and quantities for possible misreads.");
                 return true;
             }
-            if (selectOnly)
+            ocrTextNavigation = true;
+            SetStatus(ToolInstruction());
+            return true;
+        }, commitDraft: !copyOnly);
+        if (recognized && !copyOnly && !closed) Viewport.Focus(FocusState.Programmatic);
+    }
+
+    private OcrSnapshot? CurrentRecognition() => ocrSnapshot is { Available: true } snapshot && session.IsOcrSnapshotCurrent(snapshot) ? snapshot : null;
+
+    private async Task<OcrSnapshot> GetCurrentRecognitionAsync()
+    {
+        if (CurrentRecognition() is OcrSnapshot current) return current;
+        ClearOcrSelection();
+        OcrSnapshot result = await session.RecognizeTextAsync(ActionToken);
+        if (!result.Available || string.IsNullOrWhiteSpace(result.Text))
+            throw new InvalidOperationException(result.Message.Length == 0 ? "No text was detected. Try a closer, sharper snip." : result.Message);
+        ocrSnapshot = result;
+        return result;
+    }
+
+    private void ClearOcrSelection()
+    {
+        ocrSelection = null;
+        Viewport.SetRecognizedBands(null);
+    }
+
+    private void CloseTextActions()
+    {
+        if (busy || closed || selectedTool != PreviewTool.OcrSelect) return;
+        SetTool(PreviewTool.Text, revealOptions: false);
+        Viewport.Focus(FocusState.Programmatic);
+        SetStatus("Text actions closed. The Text tool is selected.");
+    }
+
+    private void OnCloseOcrClicked(object sender, RoutedEventArgs args) => CloseTextActions();
+
+    private async void OnCopyAllOcrClicked(object sender, RoutedEventArgs args) => await RecognizeAsync(copyOnly: true);
+
+    private async void OnCopySelectedOcrClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Copying selected text…", () =>
+    {
+        if (CurrentRecognition() is null || ocrSelection is not { Text.Length: > 0 } selection) return Task.FromResult(false);
+        SetClipboardText(selection.Text);
+        SetStatus("Selected text copied.");
+        return Task.FromResult(true);
+    });
+
+    private async void OnEditOcrClicked(object sender, RoutedEventArgs args) => await EditSelectedOcrLineAsync();
+
+    private Task EditSelectedOcrLineAsync()
+    {
+        if (selectedTool != PreviewTool.OcrSelect || CurrentRecognition() is not OcrSnapshot source || ocrSelection?.LineIndices is not { Count: 1 } lines)
+            return Task.CompletedTask;
+        return RunActionAsync("Matching source text…", async () =>
+        {
+            await EditOcrLineAsync(source, lines[0]);
+            return true;
+        });
+    }
+
+    private async Task EditOcrLineAsync(OcrSnapshot source, int lineIndex, bool caretOnly = false)
+    {
+        OcrLineEditSnapshot edit = await session.PrepareRecognizedLineEditAsync(source, lineIndex, ActionToken);
+        AnnotationSnapshot? existing = edit.ExistingAnnotationIndex >= 0 ? session.GetAnnotation(edit.ExistingAnnotationIndex) : null;
+        int selectionStart = ocrSelection is { SelectionLength: > 0 } selection ? selection.SelectionStart : edit.Text.Length;
+        int selectionLength = caretOnly ? 0 : ocrSelection?.SelectionLength ?? 0;
+        ClearOcrSelection();
+        SetTool(PreviewTool.Text, whileBusy: true);
+        if (existing?.Text is { } existingText)
+        {
+            BeginTextDraft(existingText.Location, existingText.Location, existing);
+            SetStatus("Editing the existing text. Apply or press Ctrl+Enter to keep it.");
+            return;
+        }
+        BeginTextDraft(new TextEditDraft(-1, edit.Text, edit.Rtf, edit.FontFamily, edit.FontStyle, edit.Location,
+            edit.Argb, edit.FontSize, edit.LayoutWidth, 0), edit);
+        Viewport.SelectInlineText(selectionStart, selectionLength);
+        SetStatus("Edit this line. Apply or press Ctrl+Enter to keep the edit. Escape cancels.");
+    }
+
+    private async void OnConvertOcrClicked(object sender, RoutedEventArgs args) =>
+        await RunActionAsync("Matching source text color, size and position…", async () =>
+        {
+            OcrSnapshot result = await GetCurrentRecognitionAsync();
+            var selected = ocrSelection?.LineIndices;
+            var confirm = new ContentDialog
             {
-                SetTool(PreviewTool.OcrSelect, whileBusy: true);
-                SetStatus(ToolInstruction()); return true;
-            }
-            var rows = new ListView { SelectionMode = ListViewSelectionMode.Multiple, IsMultiSelectCheckBoxEnabled = true,
-                ItemsSource = result.Lines, DisplayMemberPath = "Text", MaxHeight = 240, MinHeight = 100 };
-            var raw = new TextBox { Text = result.RawText, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 160 };
-            var recovered = new TextBox { Text = result.RecoveryRawText, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 120 };
-            var panel = new StackPanel { Spacing = 10 };
-            panel.Children.Add(new TextBlock { Text = "Choose rows to convert, or leave every row unchecked to convert all. OCR text is unverified: compare identifiers and quantities with the original image. Conversion keeps the recognized strings verbatim and estimates source font appearance.", TextWrapping = TextWrapping.Wrap });
-            panel.Children.Add(rows);
-            panel.Children.Add(new TextBlock { Text = "Original recognition output", FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-            panel.Children.Add(raw);
-            if (result.RecoveryRawText.Length > 0) { panel.Children.Add(new TextBlock { Text = "Additional recognition pass" }); panel.Children.Add(recovered); }
-            var translateButton = new Button { Content = "Translate selected rows…" };
-            panel.Children.Add(translateButton);
-            bool translateRequested = false;
-            var dialog = new ContentDialog
-            {
-                XamlRoot = Root.XamlRoot, Title = $"Image to text · {result.Lines.Count} rows", Content = new ScrollViewer { Content = panel, MaxHeight = 510 },
-                PrimaryButtonText = "Convert text", SecondaryButtonText = "Copy text", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
+                XamlRoot = Root.XamlRoot,
+                Title = selected is { Count: > 0 } ? "Convert selected lines?" : "Convert all recognized text?",
+                Content = "The recognized strings become editable on the image. Review any misreads. Snip Studio estimates the original font and color. Undo restores the original image.",
+                PrimaryButtonText = "Convert", CloseButtonText = "Cancel", DefaultButton = ContentDialogButton.Close
             };
-            translateButton.Click += (_, _) => { translateRequested = true; dialog.Hide(); };
-            ContentDialogResult answer = await dialog.ShowAsync();
-            int[] selected = rows.SelectedItems.Cast<OcrLineSnapshot>().Select(line => line.Index).OrderBy(index => index).ToArray();
-            if (translateRequested)
-            {
-                await ShowTranslationAsync(result, selected.Length == 0 ? result.Lines.Select(line => line.Index).ToArray() : selected);
-                return true;
-            }
-            if (answer == ContentDialogResult.Secondary)
-            {
-                SetClipboardText(selected.Length == 0 ? result.Text : string.Join(Environment.NewLine, result.Lines.Where(line => selected.Contains(line.Index)).Select(line => line.Text)));
-                SetStatus("Recognized text copied. No source text was changed."); return true;
-            }
-            if (answer != ContentDialogResult.Primary) { SetStatus("Text extraction closed. Your image is kept."); return false; }
+            if (await confirm.ShowAsync() != ContentDialogResult.Primary) { SetStatus(ToolInstruction()); return false; }
             SetStatus("Matching source text color, size and position…");
-            OcrConversionResult converted = await session.ConvertRecognizedTextAsync(result, selected.Length == 0 ? null : selected, ActionToken);
+            OcrConversionResult converted = await session.ConvertRecognizedTextAsync(result, selected, ActionToken);
             if (!converted.Applied) throw new InvalidOperationException(converted.Message);
             selectedAnnotationIndex = converted.LastAnnotationIndex;
-            ocrSelection = null; Viewport.SetRecognizedBands(null);
+            ClearOcrSelection();
             await RefreshPreviewAsync(resetView: false);
             SetTool(PreviewTool.Text, whileBusy: true);
             UpdateSelection();
             SetStatus(converted.Message + " Text tool selected. Click a text object to edit it.");
             return true;
         });
+
+    private async void OnTranslateOcrClicked(object sender, RoutedEventArgs args) =>
+        await RunActionAsync("Opening text translation…", async () =>
+        {
+            OcrSnapshot source = await GetCurrentRecognitionAsync();
+            var selected = ocrSelection?.LineIndices;
+            await ShowTranslationAsync(source, selected is { Count: > 0 } ? selected : source.Lines.Select(line => line.Index).ToArray());
+            return true;
+        });
+
+    private async void OnReviewOcrClicked(object sender, RoutedEventArgs args) =>
+        await RunActionAsync("Opening recognized text…", async () =>
+        {
+            OcrSnapshot source = await GetCurrentRecognitionAsync();
+            var panel = new StackPanel { Spacing = 8 };
+            panel.Children.Add(new TextBox { Header = "Recognized text", Text = source.Text, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 210 });
+            if (!string.Equals(source.RawText, source.Text, StringComparison.Ordinal))
+                panel.Children.Add(new TextBox { Header = "Original recognition output", Text = source.RawText, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 130 });
+            if (source.RecoveryRawText.Length > 0)
+                panel.Children.Add(new TextBox { Header = "Additional recognition output", Text = source.RecoveryRawText, IsReadOnly = true, AcceptsReturn = true, TextWrapping = TextWrapping.Wrap, MaxHeight = 130 });
+            var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Text from your snip", Content = new ScrollViewer { Content = panel, MaxHeight = 400 },
+                PrimaryButtonText = "Copy all text", CloseButtonText = "Close", DefaultButton = ContentDialogButton.Close };
+            if (await dialog.ShowAsync() == ContentDialogResult.Primary)
+            {
+                SetClipboardText(source.Text);
+                SetStatus("All recognized text copied.");
+            }
+            else SetStatus(ToolInstruction());
+            return true;
+        });
+
+    private void UpdateOcrCommands()
+    {
+        if (OcrContextBar is null || closed) return;
+        bool active = selectedTool == PreviewTool.OcrSelect && !busy && !applicationExitPending;
+        bool selected = active && CurrentRecognition() is not null && ocrSelection is { Text.Length: > 0 };
+        OcrContextBar.IsEnabled = active;
+        CopySelectedOcrButton.IsEnabled = DeleteSelectedOcrButton.IsEnabled = selected;
+        EditOcrButton.IsEnabled = selected && ocrSelection?.LineIndices.Count == 1;
     }
 
-    private static void SetClipboardText(string text)
+    private IReadOnlyList<OcrBounds> PreviewOcrSelection(ImagePoint start, ImagePoint end) =>
+        CurrentRecognition() is OcrSnapshot snapshot ? session.PreviewRecognizedText(snapshot, start, end) : [];
+
+    private async Task CommitOcrGestureAsync(DrawGestureEventArgs gesture)
     {
+        OcrSnapshot source = await GetCurrentRecognitionAsync();
+        ocrSelection = session.SelectRecognizedText(source, gesture.Points[0], gesture.Points[^1]);
+        Viewport.SetRecognizedBands(ocrSelection.Bands);
+        if (!gesture.IsDrag && ocrSelection.LineIndices is { Count: 1 } lines)
+        {
+            SetStatus("Matching source text…");
+            await EditOcrLineAsync(source, lines[0], caretOnly: true);
+            return;
+        }
+        SetStatus(ocrSelection.Text.Length == 0 ? ToolInstruction() : "Text selected. Choose Copy selection or press Ctrl+C.");
+    }
+
+    private async Task<bool> TryNavigateRecognizedTextAsync(ImagePoint point)
+    {
+        if (!ocrTextNavigation || ocrSnapshot is not OcrSnapshot previous)
+            return false;
+        if (session.GetAnnotation(session.HitTest(point, 3))?.Text is not null)
+            return false;
+        // Check the earlier ink footprint before refreshing a stale OCR result.
+        // Clicking blank canvas with Text still starts a new text note.
+        bool touched = previous.Lines.Any(line => line.Words.Any(word =>
+            point.X >= word.Bounds.X && point.X < word.Bounds.X + word.Bounds.Width &&
+            point.Y >= word.Bounds.Y && point.Y < word.Bounds.Y + word.Bounds.Height));
+        if (!touched) return false;
+        OcrSnapshot source = await GetCurrentRecognitionAsync();
+        ocrSelection = session.SelectRecognizedText(source, point, point);
+        if (ocrSelection.LineIndices is not { Count: 1 } lines) return false;
+        SetStatus("Matching source text…");
+        await EditOcrLineAsync(source, lines[0], caretOnly: true);
+        return true;
+    }
+
+    private static bool SetClipboardText(string text, long? intent = null)
+    {
+        if (!DesktopImageActions.IsCurrentClipboardWrite(intent ?? DesktopImageActions.BeginClipboardWrite())) return false;
         var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
         package.SetText(text);
         Clipboard.SetContent(package);
+        return true;
     }
 
     private async Task ShowTranslationAsync(OcrSnapshot source, IReadOnlyList<int> indices)

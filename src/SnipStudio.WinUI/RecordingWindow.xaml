@@ -33,12 +33,56 @@
                         <TextBlock x:Name="CandidateInfoText" TextWrapping="Wrap"/>
                         <Button x:Name="CopySelectedVideoButton" Content="Save selected file copy" Click="OnCopySelectedVideoClicked" IsEnabled="False" HorizontalAlignment="Left"/>
                     </StackPanel>
-                    <StackPanel x:Name="TrimRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
-                        <NumberBox x:Name="TrimStartBox" Header="Start (seconds)" Value="0" Minimum="0" SmallChange="0.1" SpinButtonPlacementMode="Compact" Width="150"/>
-                        <Button x:Name="SetStartButton" Content="Use playhead" Click="OnSetStartClicked" VerticalAlignment="Bottom"/>
-                        <NumberBox x:Name="TrimEndBox" Header="End (seconds)" Value="0" Minimum="0" SmallChange="0.1" SpinButtonPlacementMode="Compact" Width="150"/>
-                        <Button x:Name="SetEndButton" Content="Use playhead" Click="OnSetEndClicked" VerticalAlignment="Bottom"/>
-                        <Button x:Name="TrimVideoButton" Content="Save trimmed copy" Click="OnTrimVideoClicked" VerticalAlignment="Bottom" IsEnabled="False"/>
+                    <StackPanel x:Name="FilmstripPanel" Spacing="6" Visibility="Collapsed">
+                        <Grid ColumnSpacing="8">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Filmstrip" FontWeight="SemiBold"/>
+                            <TextBlock x:Name="FilmstripTime" Grid.Column="1" AutomationProperties.Name="Video position and duration"/>
+                        </Grid>
+                        <UserControl x:Name="FilmstripInput" IsTabStop="True" UseSystemFocusVisuals="True" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
+                                     AutomationProperties.Name="Video filmstrip"
+                                     AutomationProperties.HelpText="Use Left and Right to seek by a frame, Home and End to jump. Use the Start and End fields to trim with the keyboard."
+                                     ToolTipService.ToolTip="Click or drag to scrub. Drag a blue handle to trim. Left/Right steps a frame, and Escape cancels a drag."
+                                     KeyDown="OnFilmstripKeyDown" PointerPressed="OnFilmstripPressed" PointerMoved="OnFilmstripMoved"
+                                     PointerReleased="OnFilmstripReleased" PointerCanceled="OnFilmstripCanceled" PointerCaptureLost="OnFilmstripCaptureLost">
+                            <Grid Background="Transparent" Padding="10,0">
+                                <Grid x:Name="FilmstripTrack" Height="72" SizeChanged="OnFilmstripTrackSizeChanged"
+                                      Background="{ThemeResource ControlFillColorDefaultBrush}">
+                                    <Grid x:Name="FilmstripFrames" IsHitTestVisible="False" Background="#181818" Visibility="Collapsed"/>
+                                    <TextBlock x:Name="FilmstripMessage" Text="Reading video details…" TextWrapping="Wrap"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" TextAlignment="Center" Margin="12" IsHitTestVisible="False"/>
+                                    <Canvas x:Name="FilmstripMarks" IsHitTestVisible="False" Visibility="Collapsed">
+                                        <Rectangle x:Name="FilmstripBeforeRange" Fill="#A0000000"/>
+                                        <Rectangle x:Name="FilmstripAfterRange" Fill="#A0000000"/>
+                                        <Border x:Name="FilmstripRange" BorderThickness="0,2" BorderBrush="{ThemeResource AccentFillColorDefaultBrush}"/>
+                                        <Border x:Name="FilmstripStartHandle" Width="12" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="3">
+                                            <Rectangle Width="2" Height="18" Fill="White" HorizontalAlignment="Center"/>
+                                        </Border>
+                                        <Border x:Name="FilmstripEndHandle" Width="12" Background="{ThemeResource AccentFillColorDefaultBrush}" CornerRadius="3">
+                                            <Rectangle Width="2" Height="18" Fill="White" HorizontalAlignment="Center"/>
+                                        </Border>
+                                        <Border x:Name="FilmstripPlayhead" Width="3" Background="White" BorderBrush="Black" BorderThickness="0.5"/>
+                                    </Canvas>
+                                </Grid>
+                            </Grid>
+                        </UserControl>
+                        <Grid x:Name="TrimRow" ColumnSpacing="8" RowSpacing="6" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <StackPanel x:Name="TrimStartActions" Orientation="Horizontal" Spacing="6">
+                                <NumberBox x:Name="TrimStartBox" Header="Start (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="128"/>
+                                <Button x:Name="SetStartButton" Content="Set start" ToolTipService.ToolTip="Use the filmstrip playhead as the trim start" Click="OnSetStartClicked" VerticalAlignment="Bottom"/>
+                            </StackPanel>
+                            <StackPanel x:Name="TrimEndActions" Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                                <NumberBox x:Name="TrimEndBox" Header="End (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="128"/>
+                                <Button x:Name="SetEndButton" Content="Set end" ToolTipService.ToolTip="Use the filmstrip playhead as the trim end" Click="OnSetEndClicked" VerticalAlignment="Bottom"/>
+                            </StackPanel>
+                            <Grid x:Name="TrimSaveActions" Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBlock x:Name="TrimRangeText" TextWrapping="Wrap" VerticalAlignment="Center"/>
+                                <Button x:Name="TrimVideoButton" Grid.Column="1" Content="Save trimmed copy" Click="OnTrimVideoClicked" IsEnabled="False"/>
+                            </Grid>
+                        </Grid>
                     </StackPanel>
                     <StackPanel x:Name="ExportRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
                         <Button x:Name="CopyVideoButton" Content="Save current video copy" Click="OnCopyVideoClicked" IsEnabled="False" VerticalAlignment="Bottom"/>
@@ -54,6 +98,8 @@
         <StackPanel x:Name="RecordingFooter" Grid.Row="2" Spacing="4">
             <StackPanel x:Name="RecordActionsRow" Orientation="Horizontal" Spacing="6">
                 <Button x:Name="StartRecordingButton" Content="Start recording" Click="OnStartRecordingClicked" Style="{StaticResource AccentButtonStyle}"/>
+                <Button x:Name="AdjustRecordingAreaButton" Content="Adjust area" Click="OnAdjustRecordingAreaClicked"
+                        ToolTipService.ToolTip="Move or resize the selected recording area before starting"/>
                 <Button x:Name="StopRecordingButton" Content="Stop and save" Click="OnStopRecordingClicked" IsEnabled="False"/>
                 <TextBlock x:Name="ElapsedText" Text="00:00" Width="46" VerticalAlignment="Center" AutomationProperties.Name="Recording duration"/>
                 <ContentControl x:Name="CaptureAudioHost" IsTabStop="False" VerticalAlignment="Center"/>

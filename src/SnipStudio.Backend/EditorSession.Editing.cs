@@ -197,6 +197,23 @@ namespace SnipStudio.WinUI.Backend
             return document.AddEmoji(key, Between(first, last), rotationDegrees);
         }
 
+        public bool PlaceEmoji(string key, ImagePoint center)
+        {
+            VerifyCanMutate();
+            RequireImage();
+            ArgumentNullException.ThrowIfNull(key);
+            PointF point = ConvertPoint(center, nameof(center));
+            float aspect = global::SnipStudio.EmojiArtwork.GetAspectRatio(key);
+            float width = 96 * Math.Min(1, aspect);
+            float height = 96 / Math.Max(1, aspect);
+            float scale = Math.Min(1, Math.Min(ImageWidth / width, ImageHeight / height));
+            width = Math.Clamp(width * scale, 1, ImageWidth);
+            height = Math.Clamp(height * scale, 1, ImageHeight);
+            return document.AddEmoji(key, new RectangleF(
+                Math.Clamp(point.X - width / 2, 0, ImageWidth - width),
+                Math.Clamp(point.Y - height / 2, 0, ImageHeight - height), width, height));
+        }
+
         public bool ResizeAnnotation(int index, ImageRectangle bounds)
         {
             VerifyCanMutate();

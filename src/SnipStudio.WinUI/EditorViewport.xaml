@@ -25,6 +25,7 @@
             <Ellipse x:Name="EllipsePreview" Visibility="Collapsed" />
             <Rectangle x:Name="SelectionFrame" Visibility="Collapsed" Stroke="#FF0078D4" StrokeThickness="1.5" StrokeDashArray="4,2" />
             <Canvas x:Name="RecognizedBands" />
+            <Rectangle x:Name="RecognizedDraftMask" Visibility="Collapsed" />
             <Canvas x:Name="ObjectHandles" />
         </Canvas>
         <Canvas x:Name="TextLayer" Visibility="Collapsed">

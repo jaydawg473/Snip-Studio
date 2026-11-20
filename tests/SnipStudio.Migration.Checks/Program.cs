@@ -90,6 +90,7 @@ internal static partial class Program
         await CheckIndependentMessageLoopLifecycleAsync();
         completedGroups.Add("Rich-text editing survives another STA's bounded message-loop startup and exit");
         await CheckEmojiAndEraseAsync();
+        CheckEmojiClickPlacement();
         completedGroups.Add("Emoji artwork, topmost erasing, delete and erase-all history");
         await CheckSelectionOwnershipAndContinuousEraseAsync();
         completedGroups.Add("Stale selection ownership, resize and continuous eraser transaction");
@@ -240,6 +241,22 @@ internal static partial class Program
         long beforeFailure = session.Revision;
         Expect<ArgumentException>(() => session.UpdateText(index, "different plain value", 0xFF000000, 16, 600, original.Text.Rtf), "Mismatched rich text is rejected");
         Check(session.Revision == beforeFailure && session.GetAnnotation(index)!.Text!.Text == edited, "Failed rich-text replacement preserves the user's current edit and history");
+    }
+
+    private static void CheckEmojiClickPlacement()
+    {
+        using EditorSession session = new();
+        session.OpenImageBytes(CreateImage(62, 34));
+        Check(session.PlaceEmoji("smile", new(0, 0)), "A single image point places the chosen emoji");
+        var first = session.GetAnnotation(0)?.Emoji;
+        Check(first is { Key: "smile", Frame: { X: 0, Y: 0, Width: > 0 and <= 62, Height: > 0 and <= 34 } },
+            "Click placement keeps the sticker inside a small image at the top-left corner");
+        Check(session.PlaceEmoji("smile", new(61, 33)), "The same sticker can be placed again without reselecting it");
+        var last = session.GetAnnotation(1)?.Emoji;
+        Check(last is not null && Math.Abs(last.Frame.X + last.Frame.Width - 62) < 0.01 &&
+            Math.Abs(last.Frame.Y + last.Frame.Height - 34) < 0.01, "Far-edge placement clamps the entire sticker to the image");
+        session.Undo();
+        Check(session.AnnotationCount == 1, "Undo removes only the most recent sticker");
     }
 
     private static async Task CheckEmojiAndEraseAsync()
@@ -521,12 +538,17 @@ internal static partial class Program
         Expect<ArgumentOutOfRangeException>(() => CaptureCoordinator.CaptureAsync(new CaptureRequest { DelaySeconds = -1 }), "Negative capture delay is rejected");
         Expect<ArgumentOutOfRangeException>(() => CaptureCoordinator.CaptureScrollingAsync(new CaptureRequest { DelaySeconds = 11 }), "Out-of-range scrolling capture delay is rejected");
         Expect<ArgumentException>(() => CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest { Kind = CaptureKind.Freeform }), "Recording rejects an unsupported region mode");
+        Expect<ArgumentException>(() => CaptureCoordinator.AdjustRecordingRegionAsync(0, new RecordingRegion(0, 0, 1, 200)),
+            "Recording area adjustment rejects a region too narrow to capture");
         using CancellationTokenSource canceled = new();
         canceled.Cancel();
         var request = new CaptureRequest { OwnerWindow = 0, Kind = CaptureKind.Rectangle };
         await ExpectAsync<OperationCanceledException>(() => CaptureCoordinator.CaptureAsync(request, canceled.Token), "Pre-canceled screenshot capture exits without selecting a region");
         await ExpectAsync<OperationCanceledException>(() => CaptureCoordinator.CaptureScrollingAsync(request, cancellationToken: canceled.Token), "Pre-canceled scrolling capture exits without selecting a region");
         await ExpectAsync<OperationCanceledException>(() => CaptureCoordinator.SelectRecordingRegionAsync(request, canceled.Token), "Pre-canceled recording-region selection exits without selecting a region");
+        await ExpectAsync<OperationCanceledException>(() => CaptureCoordinator.AdjustRecordingRegionAsync(0,
+            new RecordingRegion(-600, -200, 320, 180), canceled.Token),
+            "Pre-canceled adjustment accepts negative desktop coordinates and exits before opening the overlay");
     }
 
     private static async Task CheckVideoCopyAsync(string output)
