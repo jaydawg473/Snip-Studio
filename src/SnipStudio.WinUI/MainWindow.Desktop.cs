@@ -474,7 +474,7 @@ public sealed partial class MainWindow
         var editor = new MainWindow(); editor.Activate();
     }
 
-    private Task OpenCapturedImageAsync(byte[] png, string name) => RunActionAsync("Opening capture…", async () =>
+    private Task<bool> OpenCapturedImageAsync(byte[] png, string name) => RunActionAsync("Opening capture…", async () =>
     {
         session.OpenImageBytes(png); ResetDocumentSelection(); displayPath = null; suggestedName = name;
         await RefreshPreviewAsync(resetView: true); SetStatus("Capture ready. " + ToolInstruction()); return true;
