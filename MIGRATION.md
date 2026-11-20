@@ -1,22 +1,28 @@
 # Snip Studio WinUI 3 migration
 
-Updated November 20, 2026 for `0.7.0-preview.4` (`0.7.0.4`). Current UI fixes are source changes awaiting build and native verification. Production release status remains **INSUFFICIENT EVIDENCE**; earlier preview results are historical.
+Updated November 20, 2026 for `0.7.0-preview.4` (`0.7.0.4`), code commit `c642955339297ad645109d50d6ad7bdf031fd726`. Build/publish, current signed component/media checks and static installer/ZIP verification passed. Full native/device and installation acceptance remain incomplete; production release status is **INSUFFICIENT EVIDENCE**.
 
 This repository preserves the Git history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting at 0.6.24 commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. GitHub's self-fork request returned the original repository, so the migration has a separate repository rather than a fork-network entry. Preview identity, settings, startup entry, global shortcuts and update metadata are deliberately isolated from the stable application.
 
 ## Preview.4 reachability fixes
 
-The compact native capture row uses aligned controls and icons for capture menu entries, retaining the chosen layout and newer icons. Source minimums are 520 × 260 DIP for the empty launcher, 520 × 320 DIP for an image editor, 460 × 128 DIP for the clean recording bar and 640 × 480 DIP for video review. They scale with the display and are clamped to its available work area.
+The compact capture row uses a 58-DIP-wide selected-shape icon dropdown, accessible shape names/menu icons and a simple screenshot/video hint. Image-only commands and zoom stay hidden until an image is loaded. Screenshot delay is disabled in video mode; no recording-area selection delay is added. Source minimums are 520 × 260 DIP for the launcher, 520 × 320 DIP for an editor, 460 × 128 DIP for the recording icon bar and 640 × 480 DIP for review, scaled and work-area clamped.
 
-Opening Settings temporarily requests at least 680 × 640 DIP when possible, with vertically scrollable content and bounded dialog height. Closing restores the prior frame when the user has not resized it; an intentional resize is retained, and a move retains the chosen position. These are source contracts, not observed native results. Current build and minimum/Settings retests are pending.
+Opening Settings temporarily requests at least 680 × 640 DIP when possible, with vertically scrollable content and bounded dialog height. Closing restores the prior frame when the user has not resized it; an intentional resize is retained, and a move retains the chosen position. Current native minimum/Settings retests remain pending; earlier observations are reference-only.
 
-Recording uses the same select-then-New pattern as screenshots. The video icon selects mode only; camera/video states are exclusive. New/Ctrl+N selects Rectangle/Window. Cancel preserves the image/draft and creates no recorder. Successful selection opens the small capture bar: inline Start or Stop, elapsed time, microphone/system-audio boxes and Options, with small area/status rows and the native caption close. The large heading, instructions, Open video button and full setup body are hidden in capture mode.
+Recording uses the same select-then-New pattern as screenshots. The video icon selects mode only; camera/video states are exclusive. New/Ctrl+N selects Rectangle/Window. Cancel preserves the image/draft and creates no recorder. Successful selection opens the 460 × 128-DIP bar with Start or Stop, time, microphone/system-audio icon toggles, Options, small area/status rows and native caption close. Heading/instructions/Open video/setup stay hidden in capture mode.
 
 Options presents one left-aligned advanced form in a flyout; opening it does not raise the parent window's height. Capture warnings expose at most a 96-DIP scrollable details body and temporarily require a 260-DIP height floor. Review uses the larger 640 × 480-DIP minimum. These are source layout contracts awaiting a signed native retest.
 
 Only Start prepares the capture-flow unique MP4 path in the configured folder, then minimizes the bar. Reopen it from the taskbar to Stop; completion opens review. Open video remains a separate action. The user reported the prior controls worked but rejected the large window; that report does not verify this replacement bar or recording/audio hardware.
 
-Folder preparation permits one outstanding request per recording window, with an eight-second UI wait and late-failure observation; a timeout does not claim that synchronous provider work was forcibly stopped. Earlier provisional preview.4 checks predate this clean bar, so its final build, signed checks, native recording and package acceptance remain pending.
+Folder preparation permits one outstanding request per recording window, with an eight-second UI wait and late-failure observation; a timeout does not claim forced termination of synchronous provider work. Current build/publish, 1,673 components, 7 local translation and 47 generated-video assertions passed against the signed current backend. Static package reconciliation passed separately; neither establishes native recording/audio acceptance.
+
+The final bundle excludes six unused upstream shell benchmark utilities. All 107 retained model/runtime/license hashes and model definitions are unchanged. The backend keeps strict manifest, file-count, signature, hash, path and lease checks; translation passed after repinning. No shell utilities are shipped or were executed. The earlier 745-file candidate is held and superseded.
+
+## Reference evidence limits
+
+The Microsoft Snipping Tool 11.2609.15.0 archive received a bounded REA static inventory. That inspected archive structure/content hashes without executing it or establishing native-code semantics. Microsoft runtime views informed visible layout/interaction comparisons only; they do not prove complete internal equivalence, deep native-code analysis or unobserved features. No Microsoft implementation or performance guarantee is inferred from those references.
 
 ## Preview.3 compact editor history
 
@@ -73,6 +79,6 @@ Installation, stable-channel replacement and public GitHub Release publication r
 
 ## Remaining work
 
-Build the current preview.4 source and verify a signed candidate. Native checks must cover video-mode selection, New/region/cancel behavior, automatic recording destination and Stop/review, capture-row/menu access, minimum tracking, Settings scrolling/restore, deliberate resizing/movement and small/mixed-DPI work areas. Prior component/native/package evidence remains version-scoped in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md).
+Complete current native checks for video-mode/New/region/cancel, the icon bar, automatic recording destination and Stop/review, minimum tracking, Settings scrolling/restore, deliberate resizing/movement and mixed-DPI work areas. The signed launcher and chooser opened, but a tool filename-entry failure and foreground mismatch stopped input while the user continued desktop work. No complete file-open or recording-bar pass is claimed. Static installer/ZIP reconciliation passed; installation and public GitHub Release were not performed. Evidence and artifact hashes stay version-scoped in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md).
 
 Package-specific source/signature/hash and audit evidence belongs with the delivered candidate. Required broader native/device checks remain: Fit/manual zoom, mixed DPI, real capture/scrolling, recording/audio/video, clipboard/print/share, preferences/recovery, Shell/startup and installation. Measure startup, real capture/recording and longer-running memory with stated inputs before claiming a performance improvement. Component timings, compilation, one native sequence and package verification do not close all acceptance gates.

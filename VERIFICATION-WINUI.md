@@ -1,20 +1,41 @@
 # WinUI preview verification
 
-Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** The Snip-style recording route now has a new clean capture-bar layout in source. Its build, native and package checks are pending; previous large-window/provisional results are not acceptance of this layout.
+Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** Current build/publish, signed component/media checks and static installer/ZIP verification passed. Full native/device workflows and installation acceptance remain incomplete.
 
 ## Preview.4 current gates
 
 | Change | Evidence and remaining check |
 | --- | --- |
-| Compact native capture row | Source aligns controls and includes capture-menu icons. Render, clipping, focus and menu access await the signed current candidate. |
-| Minimum sizes | Source requests launcher 520 × 260, image editor 520 × 320, clean recording bar 460 × 128 and video review 640 × 480 DIP, scaled and work-area clamped. A capture warning raises the height floor to 260 DIP with a details body bounded at 96 DIP. Final native size tracking and DPI behavior are NOT TESTED. |
+| Build/publish | PASS: code `c642955339297ad645109d50d6ad7bdf031fd726`, source freeze `272C3F9A80C42065628D7ACCA7AF4BBE63F5782C84EF15197E5DE69BE5C4D1CF`, published at 20:04 UTC. This is separate from Git publication. |
+| Component checks | PASS at 20:07 UTC: 77 backend + 1,335 viewport + 261 migration = 1,673 assertions against the current signed backend. Repeated runs are not added. |
+| Local translation / generated video | Separate PASS at 20:07 UTC: 7 local German-to-English assertions and 47 generated-MP4 adapter assertions. Protected values/rows, codec frames/copy/trim/export and failure preservation were checked; no configured server or hardware recording. AAC presence is metadata-only. Positive export uses explicit 512 KiB free-box padding, not proof of better compression of the compact original. |
+| Static executable/resource closure | PASS: 732 pre-metadata files, 358 signed EXE/DLL files including 355 preserved vendor binaries, required dependency/XAML/translation resources. This is not installer/ZIP reconciliation. |
+| Main capture row | Source has a 58-DIP-wide selected-shape icon dropdown and simple mode hint. Image-only actions/zoom stay hidden until an image is loaded. Video mode disables screenshot delay; no recording-area selection delay is claimed. Full current render/focus/action checks remain pending. |
+| Minimum sizes | Source requests launcher 520 × 260, editor 520 × 320, recording icon bar 460 × 128 and review 640 × 480 DIP, scaled and work-area clamped. A warning raises the height floor to 260 DIP with a body bounded at 96 DIP. Final native size/DPI behavior is unverified. |
 | Settings | Source temporarily enlarges the host toward 680 × 640 DIP, bounds the scrollable dialog, then restores prior bounds unless the user resized; manual movement retains its new position. Native Save/Cancel, scrolling and restore/move/resize behavior are NOT TESTED for preview.4. |
-| Clean recording bar | Source shows inline Start or Stop, timer, microphone/system-audio boxes, Options, small selected-area/status rows and native caption close. It hides the capture heading/instructions/Open video/full setup. One left-aligned advanced form opens in a flyout without increasing the parent height. This replacement layout is NOT native-verified. |
+| Recording icon bar | Source shows Start or Stop, timer, microphone/system-audio icon toggles, Options, small area/status rows and caption close. Heading/instructions/Open video/setup stay hidden in capture mode. Advanced controls use a flyout without growing the parent. Current bar interaction is NOT native-verified. |
 | Recording route | Video mode → New/Ctrl+N → Rectangle/Window selection; cancel keeps the image/draft and opens no recorder. Start alone prepares the configured-folder MP4 and minimizes; taskbar restore exposes Stop, then review. The user accepted the previous controls' functionality but rejected the large form; this is not a controlled test of the new bar, audio or recording hardware. |
 | Folder preparation | Source allows one request per recording window with an eight-second await, observes late failure and blocks a duplicate request while it remains pending. This is not proof of provider cancellation or hardware recording. |
-| Current build, signed tests and package | Pending for the clean bar. The prior D51 routing candidate passed 1,673 components, 7 local translation and 47 generated-video assertions plus static closure D721; those results now apply to its old visual candidate, not this replacement. |
+| Native observation before bundle cleanup | PARTIAL on code9a5f7bc: the verified signed launcher reopened and Open displayed a native chooser. UI source is unchanged, but final c642955 binaries were not launched while the user used the desktop. Filename entry failed in the desktop tool, then a refresh showed another foreground app; inputs stopped. The user chose continued package checks while using the desktop. Complete file-open, icon-bar/flyout, Settings and Start/Stop/audio/review remain unverified. |
+| Static installer/ZIP verification | PASS for the cleaned payload: all 739 payload files/738 manifest entries match the installer and portable archive. All 583 PE files have valid timestamped native signatures, including the 358 EXE/DLL files. Complete embedded signed Automation Forge uninstaller equals the signing-hook capture; pre/post-sign NSIS CRC and protected-byte checks passed. |
+| Installation/public release/Git | Setup and Uninstall were not executed; no installation or public GitHub Release was performed. Git push status requires its own receipt and is not established by build/package checks. |
 
-Provisional reference: source freeze `D51C2C5AD4145F8C7F7DA6A88E5612719FC160880F7734815A6001855EBF4957`, static closure SHA256 `D721F21A4B5EC390EEC314F7A65F2D8B1A4E7125C5000AF5C0574FD6E3A07D57`. Earlier Settings/minimum observations remain reference-only. No final clean-bar archive, installation, Start/Stop/audio or device acceptance is claimed.
+The final bundle excludes six unused upstream shell benchmark utilities. All 107 retained model/runtime/license hashes and model definitions are unchanged. The backend keeps strict manifest, file-count, signature, hash, path and lease checks; translation passed after repinning. No shell utilities are shipped or were executed. The earlier 745-file candidate is held and superseded.
+
+Current signed backend SHA256: `7916D6A3979C0C781396647314CA121986A3E1EF3CFADCBD7CB9F2EBB90216DF`. Static closure receipt SHA256: `B1D586A22CAFDC74841A0D80E2A1241703CDA762428C4A83C5B5ACD322AA9FEF`. Earlier D51/7ab4 results remain provisional history and are not added to current counts.
+
+Final package audit SHA256: `09CA3B454BBEAC287BAC50E78FEA127D6D756099899D86701432CD94052F6FDF`. It binds all 461 frozen compile/resource/config inputs and the same code commit. Local delivery: `artifacts/release-0.7.0-preview.4`.
+
+| Artifact | Bytes | SHA256 |
+| --- | ---: | --- |
+| `SnipStudio-WinUI3-0.7.0-preview.4-Setup.exe` | 194,077,656 | `D433CCE165A5BD58A214CEE536C208234C83C670B7D2638F71469860E50964FD` |
+| `SnipStudio-WinUI3-0.7.0-preview.4-signed-portable.zip` | 250,463,868 | `F06B5CB638178792A88A525F7EDE65D6335B1D0A9385045C27613931B17F63E8` |
+
+Sizes were checked against the actual local files. The package audit did not execute the application, installer or uninstaller and did not verify native interaction. Static signatures, CRC and byte equality do not establish installed behavior.
+
+Before that historical native attempt, all three own binaries matched their expected hashes and had valid timestamped signatures. The native filename-field SetValue operation returned desktop-tool error `0x80040201`; the subsequent rendered view belonged to another application despite the target UI Automation tree. This does not establish an application file-open regression. Earlier Escape-only observations remain historical, rather than the cause of the latest pause. No further desktop input was sent after the user's active-use choice.
+
+REA inspected the supplied Microsoft Snipping Tool 11.2609.15.0 ZIP through `inspect_artifact`; its completed substep was static inventory. Its explicit limitation says it does not execute the artifact or claim format-specific semantics. Archive SHA256: `51AC114727D99BA2D95A7BF02D432001D24C6030F8C6C6E3DB1811D0A5FB44B1`. This supports bounded archive/hash observations, not deep native-code analysis. Runtime comparisons are limited visual/interaction references, not complete behavioral or implementation equivalence; no unobserved feature is inferred.
 
 No new OCR accuracy or performance result is claimed. The hybrid WinUI/WinForms/GDI+ boundary and signing requirements remain unchanged. Real capture/recording/audio, physical DPI/monitors and installation still require separate evidence.
 
