@@ -1,6 +1,6 @@
 # Snip Studio WinUI 3 migration
 
-Updated November 19, 2026 for `0.7.0-preview.3` (`0.7.0.3`). The restored compact layout has partial signed-candidate native evidence; final sizing retests and release checks remain in progress. Production release status remains **INSUFFICIENT EVIDENCE**.
+Updated November 19, 2026 for `0.7.0-preview.3` (`0.7.0.3`). The restored compact layout has partial signed-candidate native evidence; clean build/publication, current signed component/media checks and static package verification passed. Final interaction/device retests await an idle desktop. Production release status remains **INSUFFICIENT EVIDENCE**.
 
 This repository preserves the Git history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting at 0.6.24 commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. GitHub's self-fork request returned the original repository, so the migration has a separate repository rather than a fork-network entry. Preview identity, settings, startup entry, global shortcuts and update metadata are deliberately isolated from the stable application.
 
@@ -41,7 +41,7 @@ Image/PDF exports are flattened. Editable annotation objects and history are ses
 
 ## Preview integration and privacy
 
-Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The preview.2 concurrent public API regression passed 64 writes and 128 reads without errors; a current preview.3 run is pending. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
+Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The preview.2 concurrent public API regression passed 64 writes and 128 reads without errors; the current preview.3 component suite also passed concurrent settings validation. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
 
 The manual update service queries only this WinUI repository's release endpoint, bounds the response and timeout, rejects redirected or out-of-repository release links, and displays reported metadata for review. A different tag alone is not treated as proof of a newer signed release. The service has no installer-download or execution path.
 
@@ -59,7 +59,7 @@ Installation, stable-channel replacement and public GitHub Release publication r
 
 ## Remaining work
 
-Fresh signed preview.3 suites passed 1,673 assertions against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. Retest the latest empty-launcher/options-reserve fixes, zoom/shortcut behavior, manual-size retention and monitor bounds, then complete final-source build and package checks. Current results are recorded in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md) rather than inferred from earlier candidates.
+Fresh signed preview.3 suites passed 1,673 assertions against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. Retest the latest empty-launcher/options-reserve fixes, zoom/shortcut behavior, manual-size retention and monitor bounds, Final-source clean build/publication and static installer/ZIP checks have passed. Current results are recorded in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md) rather than inferred from earlier candidates.
 
 Historically, preview.2 signed suites passed 1,673 unique component assertions; manifest-task, local translation and generated-media results are documented separately. Its native evidence established one supplied-image Open/OCR/Text/edit/history/Save As sequence and reduction from 1086 × 754 to 713 × 493 with usable overflow. A fresh instance passed F11 to 1920 × 1080 full screen and back before dialogs. The old instance's Ctrl+O/Ctrl+S/Ctrl+0/F11 results after picker/system-sizing interactions were inconclusive; no global registration failure was established.
 

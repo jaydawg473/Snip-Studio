@@ -1,24 +1,27 @@
 # WinUI preview verification
 
-Updated November 19, 2026 for `0.7.0-preview.3`, application file version `0.7.0.3`. **Production release status: INSUFFICIENT EVIDENCE.** The previous compact layout/spacing/tool placement is restored in source while retaining the new icons. Fresh final-source component checks pass; native evidence is partial, and the latest sizing-fix retests, final build and package acceptance remain pending. Earlier preview evidence is explicitly version-scoped below.
+Updated for `0.7.0-preview.3`, application file version `0.7.0.3`. **Production release status: INSUFFICIENT EVIDENCE.** Clean build/publication, signed component/media checks and static installer/ZIP verification passed. Final native/device acceptance awaits an idle desktop.
 
 ## Preview.3 current gates
 
-| Gate | Current status |
+| Gate | Result |
 | --- | --- |
-| Compact capture/file row, annotation tools, contextual controls, canvas and bottom status/zoom | Source uses 54/46-DIP rows without the large header, blue New, grouped Shapes and bottom zoom presets. Signed reference candidate rendered without New clipping/extra capture overflow. |
-| Autosize and Text context | One 301 × 169 snip opened with an automatically reduced window and visually balanced canvas margins; Text context was visible/readable. No precise outer-window measurement is claimed. Latest empty-launcher and 40-DIP options-reserve fixes await signed native retest. Manual-size retention and monitor bounds are source contracts awaiting broader checks. |
-| Zoom and shortcuts | Native 125% preset observed. Later 100% and Ctrl+0 attempts were inconclusive when the tool captured another foreground application; neither a pass nor an application regression is established. |
-| Signed component suites | PASS: 77 backend + 1,335 viewport + 261 migration = 1,673 unique assertions at 21:24 UTC against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. These are fresh preview.3 runs; historical counts are not added. |
-| Build, publication and package closure | Build/publication and static signed closure passed for reference freeze `A02F23EBD50CDBA68AA723CFCBE67A44CBFD813B4F1E445FE40CD80F41E56D43`. Final-source build/package results are pending and are not inferred from that earlier candidate. |
-| OCR/font controls, save/history and broader action access | Preview.2 results remain historical; fresh restored-layout workflow checks are incomplete. |
-| Real capture/scrolling, recording/audio, clipboard/print/share, physical DPI/monitors and installation | Unverified; earlier partial editor checks do not establish these workflows. |
+| Clean build and publication | PASS: code commit `7af89becf5092265ec65ccd208c175eaa5da7275`, zero warnings/errors. |
+| Component checks | PASS: 77 backend + 1,335 viewport + 261 migration = 1,673 assertions, rerun at 21:55 UTC against the final signed backend. Repeated runs are not added. |
+| Local translation | PASS: 7 assertions using the local German-to-English model, preserving protected identifiers, quantities, duplicate and blank rows. No cloud-provider or packet-traffic acceptance. |
+| Generated video | PASS: 47 assertions for metadata, orientation/decoded frames, exact copy, trim, export and failure/cancellation preservation. AAC presence is metadata-only. Positive smaller export uses a padded fixture; it does not prove better compression of the compact original. No hardware recording or audible playback acceptance. |
+| Static packages | PASS: 745 exact payload paths/hashes; 358 signed EXE/DLL files plus other PE metadata checks; preserved vendor bytes; valid timestamped Setup and complete embedded uninstaller signatures; installer extraction and ZIP entries match the frozen payload. |
+| Native reference layout | PARTIAL: signed A02 reference showed compact 54/46-DIP rows, an uncut New button, no extra capture overflow, a smaller centered image window, readable Text options and a working 125% preset. No precise outer-window measurement is claimed. |
+| Remaining native checks | Final smaller-launcher/options-reserve fixes, 100%/shortcut routing, manual-size retention, compact overflow, capture/scrolling, recording/audio and physical DPI/monitors remain unverified. The user confirmed active desktop use, so further desktop input was paused. |
+| Installation/public release | Pending approval. Setup and Uninstall were never executed; no public GitHub Release was published. |
 
-The private native reference observation recorded at 21:24 UTC binds the signed A02 reference candidate. Its static audit reports 358 signed PE files, preserved vendor bytes and required dependency/XAML/translation resources. That is file-closure evidence, not final archive/installer or device acceptance. Native interaction used a byte-identical renamed signed host with matching PRI to select the application reliably in the desktop tool. The canonical shipping host remains unchanged; the observation does not independently prove launch through every canonical entry path.
+Final source freeze: `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC` (467 compile/resource/config inputs). Final signed backend: `2106140A7D84456F120C0F00BC7E672A8D71B1F6B78D0C4805BCC5F6263B48A3`. Artifacts embed code commit `7af89be`; subsequent documentation-only commits preserve these build inputs. Local delivery is under `artifacts/release-0.7.0-preview.3`.
 
-Native checks also exposed a clipped empty-launcher hint and Fit changing from 100% to 76.3% when Text options opened. Source now uses a smaller empty layout and reserves 40 DIP for options during autosizing. Those repairs are pending signed native retest; their success is not assumed from source or compilation.
+Static package receipt SHA256: `91A5B9FA8D9967DE5B911AF42C01F24BC8C71C6B9FA2EB5DD36A1B8A80AA252C`. Signed Setup SHA256: `94C232681AF4B519F824375B47B29E68958116B9A60889914CA339EC482826D2`; portable ZIP SHA256: `F2165EA9B2F274F3AC1AA621F6AD79848530C849E5648BF265326F8646A0AD8C`.
 
-The UI restoration does not claim improved OCR accuracy or faster capture/recording. Preserve the supplied-input uncertainty, exact user edits, raw extraction output and the signing requirements described below. Package-specific receipts must identify the delivered preview.3 bytes and results.
+Native reference evidence binds earlier freeze `A02F23EBD50CDBA68AA723CFCBE67A44CBFD813B4F1E445FE40CD80F41E56D43`. It used a byte-identical renamed signed host with matching PRI for desktop discovery; the canonical shipping host remains unchanged. Later 100%/Ctrl+0 attempts were inconclusive during desktop focus changes, not proof of an application regression. That test exposed a clipped launcher hint and Fit changing from 100% to 76.3% when Text options opened. The final source reduces the empty layout and reserves 40 DIP for options; these repairs are not claimed native-verified.
+
+No OCR accuracy or performance improvement is inferred from the layout change. The earlier dense six-row example retained 0/6 exact identifiers, matching stable output. Raw extraction and user values remain reviewable without guessed corrections. Earlier results below remain version-scoped historical evidence.
 
 ## Preview.2 historical component results
 
