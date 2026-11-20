@@ -18,7 +18,7 @@ namespace SnipStudio.WinUI.Backend;
 /// </summary>
 internal static class TranslationRuntimeTrust
 {
-    private const string ManifestSha256 = "DEC18E73BED3F1F29BC677D230616D12E0E7907B37F182704C639552BB8A7D18";
+    private const string ManifestSha256 = "38C255C3E6CBC7F067A4122901D9328C4FC9954BC7005AA421796F9B1CC0C5D2";
     private const string NodeSha256 = "86FC4785327DB5F5C7558DC6156C543B433C313E813A222E088086222AB4AFA6";
     private const int MaximumManifestBytes = 64 * 1024;
     private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
@@ -44,7 +44,7 @@ internal static class TranslationRuntimeTrust
             if (contents.GetProperty("version").GetInt32() != 1)
                 throw Blocked("The offline translation manifest version is not supported.");
             JsonElement files = contents.GetProperty("files");
-            if (files.ValueKind != JsonValueKind.Array || files.GetArrayLength() != 113)
+            if (files.ValueKind != JsonValueKind.Array || files.GetArrayLength() != 107)
                 throw Blocked("The complete reviewed offline translation bundle is required.");
             var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { manifestPath };
             string expectedRuntime = ChildPath(root, "runtime/node.exe");

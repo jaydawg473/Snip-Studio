@@ -25,7 +25,7 @@ def safe_parts(name):
         raise RuntimeError("Unsafe archive entry")
     return value.parts
 
-def copy_tar(archive, destination, drop_prefix=True):
+def copy_tar(archive, destination, drop_prefix=True, exclude_model_benchmarks=False):
     destination.mkdir(parents=True, exist_ok=True)
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
@@ -36,6 +36,11 @@ def copy_tar(archive, destination, drop_prefix=True):
             if drop_prefix:
                 parts = parts[1:]
             if not parts:
+                continue
+            if exclude_model_benchmarks and parts[-1].lower().endswith(".sh"):
+                if not member.isfile() or parts != ("speed.cpu.intgemm8bitalpha.sh",):
+                    raise RuntimeError("Unreviewed shell utility in model archive")
+                # This upstream CLI benchmark is not used by the WASM worker.
                 continue
             target = destination.joinpath(*parts)
             target.resolve().relative_to(destination.resolve())
@@ -91,7 +96,7 @@ entries = []
 for model in models:
     name = model["shortName"]
     destination = PAYLOAD / name
-    copy_tar(DOWNLOADS / (name + ".tar.gz"), destination)
+    copy_tar(DOWNLOADS / (name + ".tar.gz"), destination, exclude_model_benchmarks=True)
     info = json.loads((destination / "model_info.json").read_text(encoding="utf-8"))
     if info["shortName"] != name:
         raise RuntimeError("Model identity differs from the signed catalog")

@@ -59,6 +59,8 @@ for item in sorted(PAYLOAD.rglob("*")):
         continue
     if item.is_symlink():
         raise RuntimeError("Symbolic links are not allowed")
+    if item.suffix.lower() == ".sh":
+        raise RuntimeError("Shell benchmark utilities are not part of the runtime payload")
     relative = item.relative_to(PAYLOAD).as_posix()
     if "downloads" in item.parts or "translateLocally" in item.name:
         raise RuntimeError("Unreviewed download entered payload")

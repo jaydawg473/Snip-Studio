@@ -34,7 +34,7 @@
     <ProjectReference Include="../SnipStudio.Backend/SnipStudio.Backend.csproj" />
     <Content Include="../../assets/app-256.png" Link="Assets/app-256.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="../../assets/SnipStudio.ico" Link="Assets/SnipStudio.ico" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="../../translation-bundle/runtime/**/*" Link="translation/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="../../translation-bundle/runtime/**/*" Exclude="../../translation-bundle/runtime/**/*.sh" Link="translation/%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <!-- WinUI's CopyGeneratedXaml populates the build directory. For this
        unpackaged app, explicitly include the application PRI and compiled XAML
