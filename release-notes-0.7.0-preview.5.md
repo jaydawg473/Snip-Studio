@@ -8,4 +8,8 @@ Windows file version `0.7.0.5`. This WinUI preview brings back workflows from th
 - **Clipboard.** Captures and committed image edits copy to the clipboard by default. An existing off setting stays off. Change this under **Copy captures and edits to the clipboard** in Settings.
 - **Recording area.** Use **Adjust area** on the recording controls to change the selection before starting.
 
-Build, signing, package verification, and hands-on acceptance are pending for this preview.
+Build and static package verification passed. The installer and portable ZIP contain the same 739 files. Windows verified 583 timestamped PE signatures and the installer contains the full signed uninstaller.
+
+The signed backend passed 1,682 component, 7 local translation, and 74 generated-video checks. The generated-snip OCR draft and Undo test passed. Windows OCR found all six rows on the dense filename snip, with zero exact filenames. Selection order, verbatim conversion, Undo, and Redo passed on that image.
+
+Hands-on checks are pending for native pointer and clipboard workflows, live recording and audio, and installation.
