@@ -12,23 +12,28 @@
         </Grid>
         <ScrollViewer x:Name="RecordingBodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled">
             <StackPanel Spacing="12">
+                <InfoBar x:Name="VideoNotice" IsOpen="False" IsClosable="True" Severity="Error" Title="The action could not finish"/>
                 <StackPanel x:Name="RecordingSettingsPanel" Spacing="10">
-                    <TextBlock Text="Choose an area and audio sources. Start minimizes this window; reopen it from the taskbar to stop. MP4 is scaled to fit 1920 × 1080. Capture stays on this PC." TextWrapping="Wrap"/>
-                    <StackPanel x:Name="AreaRow" Orientation="Horizontal" Spacing="8">
-                        <ComboBox x:Name="RegionBox" Header="Recording area" MinWidth="210" MaxWidth="420" DisplayMemberPath="Name" AutomationProperties.Name="Recording area"/>
-                        <Button x:Name="SelectAreaButton" Content="Select area" Click="OnSelectAreaClicked" VerticalAlignment="Bottom"/>
-                        <Button x:Name="SelectWindowButton" Content="Select window" Click="OnSelectWindowClicked" VerticalAlignment="Bottom"/>
-                        <NumberBox x:Name="FpsBox" Header="Frames/sec" Value="15" Minimum="5" Maximum="30" SmallChange="1" SpinButtonPlacementMode="Compact" Width="100"/>
-                    </StackPanel>
+                    <TextBlock x:Name="SelectedAreaSummary" TextWrapping="Wrap" FontWeight="SemiBold" Visibility="Collapsed"/>
+                    <TextBlock x:Name="RecordingInstructions" Text="Choose an area and audio sources. Start minimizes this window; reopen it from the taskbar to stop. MP4 is scaled to fit 1920 × 1080. Capture stays on this PC." TextWrapping="Wrap"/>
                     <StackPanel x:Name="AudioChecksRow" Orientation="Horizontal" Spacing="12">
                         <CheckBox x:Name="MicrophoneCheck" Content="Microphone" IsChecked="True"/>
                         <CheckBox x:Name="SystemAudioCheck" Content="System audio" IsChecked="True"/>
-                        <CheckBox x:Name="CursorCheck" Content="Show pointer" IsChecked="True"/>
                     </StackPanel>
-                    <StackPanel x:Name="DevicesRow" Orientation="Horizontal" Spacing="8">
-                        <ComboBox x:Name="MicrophoneBox" Header="Microphone device" MinWidth="200" MaxWidth="330" DisplayMemberPath="Name"/>
-                        <ComboBox x:Name="SystemAudioBox" Header="Output device" MinWidth="200" MaxWidth="330" DisplayMemberPath="Name"/>
-                        <Button x:Name="RefreshAudioButton" Content="Refresh devices" Click="OnRefreshAudioClicked" VerticalAlignment="Bottom"/>
+                    <ToggleButton x:Name="RecordingOptionsButton" Content="Recording options" Click="OnRecordingOptionsClicked" Visibility="Collapsed" HorizontalAlignment="Left"/>
+                    <StackPanel x:Name="AdvancedRecordingOptionsPanel" Spacing="10">
+                        <StackPanel x:Name="AreaRow" Orientation="Horizontal" Spacing="8">
+                            <ComboBox x:Name="RegionBox" Header="Recording area" MinWidth="210" MaxWidth="420" DisplayMemberPath="Name" AutomationProperties.Name="Recording area" SelectionChanged="OnRecordingAreaChanged"/>
+                            <Button x:Name="SelectAreaButton" Content="Select area" Click="OnSelectAreaClicked" VerticalAlignment="Bottom"/>
+                            <Button x:Name="SelectWindowButton" Content="Select window" Click="OnSelectWindowClicked" VerticalAlignment="Bottom"/>
+                            <NumberBox x:Name="FpsBox" Header="Frames/sec" Value="15" Minimum="5" Maximum="30" SmallChange="1" SpinButtonPlacementMode="Compact" Width="100"/>
+                        </StackPanel>
+                        <CheckBox x:Name="CursorCheck" Content="Show pointer" IsChecked="True"/>
+                        <StackPanel x:Name="DevicesRow" Orientation="Horizontal" Spacing="8">
+                            <ComboBox x:Name="MicrophoneBox" Header="Microphone device" MinWidth="200" MaxWidth="330" DisplayMemberPath="Name"/>
+                            <ComboBox x:Name="SystemAudioBox" Header="Output device" MinWidth="200" MaxWidth="330" DisplayMemberPath="Name"/>
+                            <Button x:Name="RefreshAudioButton" Content="Refresh devices" Click="OnRefreshAudioClicked" VerticalAlignment="Bottom"/>
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
                 <Grid x:Name="PlaybackPanel" MinHeight="120" Height="280" Background="Black" Visibility="Collapsed">
@@ -36,6 +41,7 @@
                     <TextBlock x:Name="NoVideoText" Text="Record a video or choose Open video to review it here." Foreground="White" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"/>
                 </Grid>
                 <TextBlock x:Name="VideoInfoText" TextWrapping="Wrap" Visibility="Collapsed"/>
+                <TextBlock x:Name="RecordingDestinationText" TextWrapping="Wrap" Visibility="Collapsed" IsTextSelectionEnabled="True"/>
                 <StackPanel x:Name="ReviewOptionsPanel" Spacing="8" Visibility="Collapsed">
                     <StackPanel x:Name="CandidatePanel" Visibility="Collapsed" Spacing="4">
                         <TextBlock x:Name="CandidateInfoText" TextWrapping="Wrap"/>
@@ -65,7 +71,6 @@
                 <Button x:Name="StopRecordingButton" Content="Stop and save" Click="OnStopRecordingClicked" IsEnabled="False"/>
                 <TextBlock x:Name="ElapsedText" Text="00:00" VerticalAlignment="Center" AutomationProperties.Name="Recording duration"/>
             </StackPanel>
-            <InfoBar x:Name="VideoNotice" IsOpen="False" IsClosable="True" Severity="Error" Title="The action could not finish"/>
             <Button x:Name="CancelVideoButton" Content="Cancel" Click="OnCancelVideoClicked" IsEnabled="False" Visibility="Collapsed" HorizontalAlignment="Left"/>
             <ProgressBar x:Name="VideoProgress" IsIndeterminate="False" Minimum="0" Maximum="100" Value="0" Visibility="Collapsed"/>
             <TextBlock x:Name="VideoStatusText" Text="Ready to record." TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>

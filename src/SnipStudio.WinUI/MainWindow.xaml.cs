@@ -58,8 +58,8 @@ public sealed partial class MainWindow : Window
     private void ConfigureAccelerators()
     {
         AddShortcut(VirtualKey.O, VirtualKeyModifiers.Control, OpenAsync);
-        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, () => CaptureAsync(selectedCaptureKind, false));
-        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => { OpenRecordingWindow(); return Task.CompletedTask; });
+        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control, NewCaptureAsync);
+        AddShortcut(VirtualKey.N, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, BeginRecordingCaptureAsync);
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control, CopyAsync, respectsTextInput: true);
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => RecognizeAsync(copyOnly: true));
         AddShortcut(VirtualKey.P, VirtualKeyModifiers.Control, PrintAsync);

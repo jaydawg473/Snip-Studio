@@ -22,6 +22,11 @@ public sealed partial class MainWindow
     private bool desktopVisualInitialized;
     private string? externalSnapshotPath;
     private CaptureKind selectedCaptureKind = CaptureKind.Rectangle;
+    private CaptureKind selectedRecordingCaptureKind = CaptureKind.Rectangle;
+    private bool recordingCaptureMode;
+    private int recordingCaptureDelaySeconds;
+    private CaptureKind ActiveCaptureKind => recordingCaptureMode ? selectedRecordingCaptureKind : selectedCaptureKind;
+    private int ActiveCaptureDelaySeconds => recordingCaptureMode ? recordingCaptureDelaySeconds : preferences.CaptureDelaySeconds;
     private nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
 
     private void InitializeDesktopIntegration()
@@ -40,7 +45,7 @@ public sealed partial class MainWindow
             if (desktopIntegration is not null) return;
             desktopIntegration = new DesktopIntegrationService(WindowHandle);
             desktopIntegration.CaptureRequested += async (_, _) => { if (!busy && !applicationExitPending) await CaptureAsync(CaptureKind.Rectangle, false); };
-            desktopIntegration.RecordingRequested += (_, _) => { if (!busy && !applicationExitPending) OpenRecordingWindow(); };
+            desktopIntegration.RecordingRequested += async (_, _) => { if (!busy && !applicationExitPending) await BeginRecordingCaptureAsync(); };
             desktopIntegration.RestoreRequested += (_, _) => { AppWindow.Show(); Activate(); };
             desktopIntegration.ExitRequested += async (_, _) => await RequestApplicationExitAsync();
             desktopIntegration.IntegrationFailed += (_, args) => SetStatus("Windows integration could not finish: " + args.Exception.Message);
@@ -144,9 +149,12 @@ public sealed partial class MainWindow
         }
     }
 
-    private async void OnCaptureClicked(object sender, RoutedEventArgs args) => await CaptureAsync(selectedCaptureKind, false);
+    private async void OnCaptureClicked(object sender, RoutedEventArgs args) => await NewCaptureAsync();
+    private Task NewCaptureAsync() => recordingCaptureMode ? BeginRecordingCaptureAsync() : CaptureAsync(selectedCaptureKind, false);
     private void OnScreenshotModeClicked(object sender, RoutedEventArgs args)
     {
+        if (busy || closed || applicationExitPending) return;
+        recordingCaptureMode = false;
         UpdateCaptureControls();
         SetStatus("Screenshot mode. Choose a capture shape, then select New.");
     }
@@ -155,7 +163,12 @@ public sealed partial class MainWindow
         if (busy || closed) return;
         if (sender is FrameworkElement { Tag: string tag } && Enum.TryParse(tag, out CaptureKind mode))
         {
-            selectedCaptureKind = mode;
+            if (recordingCaptureMode)
+            {
+                if (mode is not CaptureKind.Rectangle and not CaptureKind.Window) return;
+                selectedRecordingCaptureKind = mode;
+            }
+            else selectedCaptureKind = mode;
             UpdateCaptureControls();
             SetStatus(CaptureModeLabel.Text + " capture ready. Select New to start.");
         }
@@ -163,6 +176,14 @@ public sealed partial class MainWindow
     private async void OnCaptureDelayClicked(object sender, RoutedEventArgs args)
     {
         if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
+        if (recordingCaptureMode)
+        {
+            if (busy || closed || applicationExitPending) return;
+            recordingCaptureDelaySeconds = seconds;
+            UpdateCaptureControls();
+            SetStatus(seconds == 0 ? "Recording area selection delay off." : $"Recording area selection starts after {seconds} seconds.");
+            return;
+        }
         await RunActionAsync("Saving capture delay…", () =>
         {
             DesktopPreferences draft = preferences.Clone();
@@ -181,9 +202,16 @@ public sealed partial class MainWindow
     }
     private void UpdateCaptureControls()
     {
-        CaptureModeLabel.Text = selectedCaptureKind switch { CaptureKind.AllMonitors => "All monitors", CaptureKind.Monitor => "Full screen", _ => selectedCaptureKind.ToString() };
-        CaptureDelayLabel.Text = preferences.CaptureDelaySeconds == 0 ? "Off" : preferences.CaptureDelaySeconds + " s";
-        ScreenshotModeButton.IsChecked = true;
+        CaptureModeLabel.Text = ActiveCaptureKind switch { CaptureKind.AllMonitors => "All monitors", CaptureKind.Monitor => "Full screen", _ => ActiveCaptureKind.ToString() };
+        CaptureDelayLabel.Text = ActiveCaptureDelaySeconds == 0 ? "Off" : ActiveCaptureDelaySeconds + " s";
+        ScreenshotModeButton.IsChecked = !recordingCaptureMode;
+        RecordButton.IsChecked = recordingCaptureMode;
+        ScreenshotModeUnderline.Visibility = recordingCaptureMode ? Visibility.Collapsed : Visibility.Visible;
+        RecordingModeUnderline.Visibility = recordingCaptureMode ? Visibility.Visible : Visibility.Collapsed;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureButton, recordingCaptureMode ? "New recording" : "New snip");
+        ToolTipService.SetToolTip(CaptureButton, recordingCaptureMode ? "New recording (Ctrl+N)" : "New snip (Ctrl+N)");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureOptionsButton, recordingCaptureMode ? "Recording area" : "Capture shape");
+        ToolTipService.SetToolTip(DelayButton, recordingCaptureMode ? "Delay before choosing the recording area" : "Capture delay");
         SetCaptureMenuChecks(CaptureModeMenu.Items);
         SetCaptureMenuChecks(CaptureDelayMenu.Items);
         if (CaptureMoreButton.Flyout is MenuFlyout more) SetCaptureMenuChecks(more.Items);
@@ -193,13 +221,23 @@ public sealed partial class MainWindow
     {
         foreach (MenuFlyoutItemBase item in items)
         {
+            if (item.Tag is string itemTag)
+                item.Visibility = recordingCaptureMode && itemTag is ("Freeform" or "Monitor" or "AllMonitors" or "ScreenshotOnly")
+                    ? Visibility.Collapsed : Visibility.Visible;
             if (item is MenuFlyoutSubItem submenu) SetCaptureMenuChecks(submenu.Items);
             else if (item is ToggleMenuFlyoutItem { Tag: string tag } choice)
-                choice.IsChecked = int.TryParse(tag, out int seconds)
-                    ? seconds == preferences.CaptureDelaySeconds : tag == selectedCaptureKind.ToString();
+                choice.IsChecked = tag switch
+                {
+                    "ScreenshotMode" => !recordingCaptureMode,
+                    "RecordingMode" => recordingCaptureMode,
+                    _ => int.TryParse(tag, out int seconds) ? seconds == ActiveCaptureDelaySeconds : tag == ActiveCaptureKind.ToString()
+                };
         }
     }
-    private async void OnScrollingClicked(object sender, RoutedEventArgs args) => await CaptureAsync(CaptureKind.Rectangle, true);
+    private async void OnScrollingClicked(object sender, RoutedEventArgs args)
+    {
+        if (!recordingCaptureMode) await CaptureAsync(CaptureKind.Rectangle, true);
+    }
 
     private async Task CaptureAsync(CaptureKind kind, bool scrolling)
     {
@@ -268,14 +306,56 @@ public sealed partial class MainWindow
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
     }
 
-    private void OnRecordClicked(object sender, RoutedEventArgs args) { if (!busy) OpenRecordingWindow(); }
-    private void OnVideoReviewClicked(object sender, RoutedEventArgs args) { if (!busy) OpenRecordingWindow(); }
-    private void OpenRecordingWindow(string? path = null)
+    private void OnRecordClicked(object sender, RoutedEventArgs args)
     {
-        if (closed || applicationExitPending) return;
+        if (busy || closed || applicationExitPending) return;
+        recordingCaptureMode = true;
+        UpdateCaptureControls();
+        SetStatus("Video mode. Select New to choose an area, then Start recording.");
+    }
+
+    private async Task BeginRecordingCaptureAsync()
+    {
+        if (busy || closed || applicationExitPending) return;
+        recordingCaptureMode = true;
+        UpdateCaptureControls();
+        CaptureRectangle? selectedRegion = null;
+        bool selectedArea = await RunActionAsync("Choose the recording area. Escape cancels.", async () =>
+        {
+            CaptureRectangle? selected;
+            try
+            {
+                selected = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
+                {
+                    OwnerWindow = WindowHandle, Kind = selectedRecordingCaptureKind,
+                    DelaySeconds = recordingCaptureDelaySeconds, HideTaskbars = preferences.HideTaskbars,
+                    KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible
+                }, ActionToken);
+            }
+            finally { if (!closed) { AppWindow.Show(); Activate(); } }
+            ActionToken.ThrowIfCancellationRequested();
+            if (selected is not { } region)
+            {
+                SetStatus("Recording canceled. Your previous snip is kept.");
+                return false;
+            }
+            selectedRegion = region;
+            return true;
+        }, commitDraft: false);
+        // Activate the recording controls after the main action restores any
+        // inline-text focus. Choosing video never applies or discards that draft.
+        if (selectedArea && selectedRegion is { } selected && !closed && !applicationExitPending &&
+            OpenRecordingWindow(initialRegion: new(selected.X, selected.Y, selected.Width, selected.Height), captureWorkflow: true))
+            SetStatus("Recording area selected. Choose audio, then Start recording. Your previous snip is kept.");
+    }
+
+    private void OnVideoReviewClicked(object sender, RoutedEventArgs args) { if (!busy) OpenRecordingWindow(); }
+    private bool OpenRecordingWindow(string? path = null, RecordingRegion? initialRegion = null, bool captureWorkflow = false)
+    {
+        if (closed || applicationExitPending) return false;
         RecordingWindow window;
-        try { window = new RecordingWindow(path); }
-        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { ReportUnexpectedFailure(exception); return; }
+        try { window = new RecordingWindow(path, initialRegion, captureWorkflow); }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { ReportUnexpectedFailure(exception); return false; }
         window.ConfigureDefaults(preferences.DefaultMicrophone, preferences.DefaultSystemAudio, preferences.RecordingFolder);
         recordingWindows.Add(window);
         allRecordingWindows.Add(window);
@@ -292,6 +372,7 @@ public sealed partial class MainWindow
             if (!closed && !recordingWindows.Any(candidate => candidate.IsRecording)) AppWindow.Show();
         };
         window.Activate();
+        return true;
     }
 
     private async void OnCopyClicked(object sender, RoutedEventArgs args) => await CopyAsync();

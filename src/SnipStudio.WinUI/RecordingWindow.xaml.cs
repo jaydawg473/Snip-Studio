@@ -33,9 +33,12 @@ public sealed partial class RecordingWindow : Window
     private bool audioLoading;
     private Task<string?>? stopTask;
     private Task<StorageFile>? videoFileRead;
+    private Task<string>? automaticRecordingPathRequest;
     private int videoGeneration;
     private int recordingGeneration;
     private readonly string? initialPath;
+    private readonly bool captureWorkflow;
+    private bool recordingOptionsExpanded;
     private string recordingFolder = "";
     private XamlRoot? minimumSizingRoot;
     public event EventHandler<bool>? RecordingStateChanged;
@@ -55,12 +58,15 @@ public sealed partial class RecordingWindow : Window
         public string? FailureMessage;
     }
 
-    public RecordingWindow(string? initialVideoPath = null, RecordingRegion? initialRegion = null)
+    public RecordingWindow(string? initialVideoPath = null, RecordingRegion? initialRegion = null, bool captureWorkflow = false)
     {
         initialPath = initialVideoPath;
         customRegion = initialRegion;
+        this.captureWorkflow = captureWorkflow && initialRegion != null;
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(1040, string.IsNullOrWhiteSpace(initialVideoPath) ? 480 : 820));
+        AppWindow.Resize(this.captureWorkflow && string.IsNullOrWhiteSpace(initialVideoPath)
+            ? new SizeInt32(760, 300)
+            : new SizeInt32(1040, string.IsNullOrWhiteSpace(initialVideoPath) ? 480 : 820));
         UpdateRecordingMinimums();
         AppWindow.Closing += OnClosing;
         Closed += OnClosed;
@@ -83,6 +89,8 @@ public sealed partial class RecordingWindow : Window
         if (closed || busy || recorder.IsActive) return;
         MicrophoneCheck.IsChecked = microphone;
         SystemAudioCheck.IsChecked = systemAudio;
+        if (!string.IsNullOrWhiteSpace(recordingFolder) && !Path.IsPathFullyQualified(recordingFolder))
+            throw new ArgumentException("Choose a full recording folder path in Settings.", nameof(recordingFolder));
         this.recordingFolder = string.IsNullOrWhiteSpace(recordingFolder) ? "" : Path.GetFullPath(recordingFolder);
     }
 
@@ -122,6 +130,18 @@ public sealed partial class RecordingWindow : Window
             if (RegionBox.Items[index] is RecordingDisplay item && item.Name.StartsWith("Selected area", StringComparison.Ordinal)) RegionBox.Items.RemoveAt(index);
         RegionBox.Items.Add(new RecordingDisplay($"Selected area · {region.Width} × {region.Height}", region, false));
         RegionBox.SelectedIndex = RegionBox.Items.Count - 1;
+    }
+
+    private void OnRecordingAreaChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (SelectedAreaSummary is not null && RegionBox.SelectedItem is RecordingDisplay area)
+            SelectedAreaSummary.Text = $"Selected area · {area.Region.Width} × {area.Region.Height} pixels";
+    }
+
+    private void OnRecordingOptionsClicked(object sender, RoutedEventArgs args)
+    {
+        recordingOptionsExpanded = RecordingOptionsButton.IsChecked == true;
+        UpdateCommands();
     }
 
     private async void OnSelectAreaClicked(object sender, RoutedEventArgs args) => await SelectRecordingRegionAsync(CaptureKind.Rectangle);
@@ -201,11 +221,17 @@ public sealed partial class RecordingWindow : Window
 
     private async void OnStartRecordingClicked(object sender, RoutedEventArgs args)
     {
-        await RunAsync("Choose where to save the recording…", async () =>
+        await RunAsync(captureWorkflow ? "Preparing the recording…" : "Choose where to save the recording…", async () =>
         {
             if (RegionBox.SelectedItem is not RecordingDisplay area) throw new InvalidOperationException("Choose a monitor or select an area first.");
-            string? path = await ChooseSavePathAsync("Snip Studio recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss"), ".mp4", "MP4 video");
+            string? path = captureWorkflow ? await PrepareAutomaticRecordingPathAsync()
+                : await ChooseSavePathAsync("Snip Studio recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss"), ".mp4", "MP4 video");
             if (path == null) { SetStatus("Recording canceled."); return; }
+            if (captureWorkflow)
+            {
+                RecordingDestinationText.Text = "Recording destination: " + path;
+                RecordingDestinationText.Visibility = Visibility.Visible;
+            }
             CancelPendingVideoOpen();
             player?.Pause();
             RecordingSettings settings = new(MicrophoneCheck.IsChecked == true, SystemAudioCheck.IsChecked == true,
@@ -278,7 +304,12 @@ public sealed partial class RecordingWindow : Window
             stopped = true;
             if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
             Activate();
-            if (completed != null) { PublishSaved(completed); await LoadVideoAsync(completed); }
+            if (completed != null)
+            {
+                if (captureWorkflow) RecordingDestinationText.Text = "Saved to: " + completed;
+                PublishSaved(completed);
+                await LoadVideoAsync(completed);
+            }
             else SetStatus("Recording stopped.");
         });
         return stopped;
@@ -670,6 +701,44 @@ public sealed partial class RecordingWindow : Window
         return (await picker.PickSaveFileAsync())?.Path;
     }
 
+    private async Task<string> PrepareAutomaticRecordingPathAsync()
+    {
+        if (automaticRecordingPathRequest is { IsCompleted: false })
+            throw new InvalidOperationException("The previous recording-folder request is still finishing. Check the folder and try again after it responds.");
+        string folder = recordingFolder;
+        if (string.IsNullOrWhiteSpace(folder))
+        {
+            string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+            if (string.IsNullOrWhiteSpace(videos) || !Path.IsPathFullyQualified(videos))
+                throw new DirectoryNotFoundException("Windows did not provide a Videos folder. Choose a recording folder in Settings.");
+            folder = Path.Combine(videos, "Snip Studio WinUI3");
+        }
+        if (!Path.IsPathFullyQualified(folder))
+            throw new DirectoryNotFoundException("Choose a full recording folder path in Settings.");
+        CancellationToken token = lifetime.Token;
+        Task<string> pending = Task.Run(() =>
+        {
+            token.ThrowIfCancellationRequested();
+            Directory.CreateDirectory(folder);
+            string path = Path.Combine(folder, "Snip Studio recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss-fff") + "-" + Guid.NewGuid().ToString("N") + ".mp4");
+            if (File.Exists(path) || Directory.Exists(path))
+                throw new IOException("The generated recording filename is already in use. Try Start again.");
+            return path;
+        }, token);
+        automaticRecordingPathRequest = pending;
+        _ = ObserveAutomaticRecordingPathAsync(pending);
+        try { return await pending.WaitAsync(TimeSpan.FromSeconds(8), token); }
+        catch (TimeoutException)
+        { throw new TimeoutException("The recording folder did not respond within eight seconds. No recording was started. Check the folder in Settings and try again."); }
+    }
+
+    private async Task ObserveAutomaticRecordingPathAsync(Task<string> pending)
+    {
+        try { await pending.ConfigureAwait(false); }
+        catch (Exception) { /* Observe a late folder-provider failure. */ }
+        finally { _ = Interlocked.CompareExchange(ref automaticRecordingPathRequest, null, pending); }
+    }
+
     private async Task RunAsync(string message, Func<Task> action)
     {
         if (closed || busy || recorder.IsActive && stopTask == null && !message.StartsWith("Finishing", StringComparison.Ordinal)) return;
@@ -702,6 +771,13 @@ public sealed partial class RecordingWindow : Window
         bool hasVideo = videoPath != null;
         bool hasSelection = candidateCopyPath != null;
         bool showReview = hasVideo || hasSelection;
+        bool compact = captureWorkflow && !showReview && !recordingOptionsExpanded;
+        AdvancedRecordingOptionsPanel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        SelectedAreaSummary.Visibility = captureWorkflow ? Visibility.Visible : Visibility.Collapsed;
+        RecordingOptionsButton.Visibility = captureWorkflow && !showReview ? Visibility.Visible : Visibility.Collapsed;
+        RecordingOptionsButton.IsEnabled = !busy && !active;
+        RecordingInstructions.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RecordingHeading.FontSize = compact ? 20 : 24;
         RecordingHeading.Text = active ? "Recording" : hasVideo ? "Review video" : hasSelection ? "Open video" : "Record video";
         Title = active ? "Snip Studio — Recording" : hasVideo ? "Snip Studio — " + Path.GetFileName(videoPath) : "Snip Studio — Record video";
         PlaybackPanel.Visibility = ReviewOptionsPanel.Visibility = showReview ? Visibility.Visible : Visibility.Collapsed;
@@ -709,6 +785,7 @@ public sealed partial class RecordingWindow : Window
         TrimRow.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
         VideoPlayer.AreTransportControlsEnabled = hasVideo;
         UpdateRecordingLayoutBounds(RecordingRoot.ActualHeight);
+        UpdateRecordingMinimums();
         StartRecordingButton.IsEnabled = !busy && !active;
         StopRecordingButton.IsEnabled = !busy && active;
         RegionBox.IsEnabled = SelectAreaButton.IsEnabled = SelectWindowButton.IsEnabled = FpsBox.IsEnabled = !busy && !active;
@@ -744,7 +821,8 @@ public sealed partial class RecordingWindow : Window
         double scale = RecordingRoot.XamlRoot?.RasterizationScale ??
             RecordingWindowDpi(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
         if (!double.IsFinite(scale) || scale <= 0) scale = 1;
-        int width = (int)Math.Ceiling(640 * scale), height = (int)Math.Ceiling(480 * scale);
+        bool compact = captureWorkflow && videoPath == null && candidateCopyPath == null && !recordingOptionsExpanded;
+        int width = (int)Math.Ceiling(640 * scale), height = (int)Math.Ceiling((compact ? 260 : 480) * scale);
         DisplayArea? display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         if (display is not null)
         {
