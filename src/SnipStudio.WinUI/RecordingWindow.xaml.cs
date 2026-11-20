@@ -38,7 +38,7 @@ public sealed partial class RecordingWindow : Window
     private int recordingGeneration;
     private readonly string? initialPath;
     private readonly bool captureWorkflow;
-    private bool recordingOptionsExpanded;
+    private long videoNoticeOpenToken;
     private string recordingFolder = "";
     private XamlRoot? minimumSizingRoot;
     public event EventHandler<bool>? RecordingStateChanged;
@@ -64,10 +64,14 @@ public sealed partial class RecordingWindow : Window
         customRegion = initialRegion;
         this.captureWorkflow = captureWorkflow && initialRegion != null;
         InitializeComponent();
+        string icon = Path.Combine(AppContext.BaseDirectory, "Assets", "SnipStudio.ico");
+        if (File.Exists(icon)) AppWindow.SetIcon(icon);
         AppWindow.Resize(this.captureWorkflow && string.IsNullOrWhiteSpace(initialVideoPath)
-            ? new SizeInt32(760, 300)
+            ? new SizeInt32(460, 128)
             : new SizeInt32(1040, string.IsNullOrWhiteSpace(initialVideoPath) ? 480 : 820));
         UpdateRecordingMinimums();
+        videoNoticeOpenToken = VideoNotice.RegisterPropertyChangedCallback(InfoBar.IsOpenProperty, (_, _) => UpdateCommands());
+        AdvancedRecordingFlyout.Opening += (_, _) => UpdateRecordingOptionsBounds();
         AppWindow.Closing += OnClosing;
         Closed += OnClosed;
         RecordingRoot.Loaded += OnLoaded;
@@ -92,6 +96,7 @@ public sealed partial class RecordingWindow : Window
         if (!string.IsNullOrWhiteSpace(recordingFolder) && !Path.IsPathFullyQualified(recordingFolder))
             throw new ArgumentException("Choose a full recording folder path in Settings.", nameof(recordingFolder));
         this.recordingFolder = string.IsNullOrWhiteSpace(recordingFolder) ? "" : Path.GetFullPath(recordingFolder);
+        UpdateRecordingAudioTooltips();
     }
 
     private void PublishSaved(string path)
@@ -138,23 +143,31 @@ public sealed partial class RecordingWindow : Window
             SelectedAreaSummary.Text = $"Selected area · {area.Region.Width} × {area.Region.Height} pixels";
     }
 
-    private void OnRecordingOptionsClicked(object sender, RoutedEventArgs args)
+    private void OnRecordingAudioClicked(object sender, RoutedEventArgs args) => UpdateRecordingAudioTooltips();
+
+    private void UpdateRecordingAudioTooltips()
     {
-        recordingOptionsExpanded = RecordingOptionsButton.IsChecked == true;
-        UpdateCommands();
+        ToolTipService.SetToolTip(MicrophoneCheck, MicrophoneCheck.IsChecked == true
+            ? "Microphone on — click to mute" : "Microphone off — click to record microphone audio");
+        ToolTipService.SetToolTip(SystemAudioCheck, SystemAudioCheck.IsChecked == true
+            ? "System audio on — click to mute" : "System audio off — click to record system audio");
     }
 
     private async void OnSelectAreaClicked(object sender, RoutedEventArgs args) => await SelectRecordingRegionAsync(CaptureKind.Rectangle);
     private async void OnSelectWindowClicked(object sender, RoutedEventArgs args) => await SelectRecordingRegionAsync(CaptureKind.Window);
-    private Task SelectRecordingRegionAsync(CaptureKind kind) => RunAsync(kind == CaptureKind.Window ? "Select a window to record. Escape cancels." : "Select the recording area. Escape cancels.", async () =>
+    private Task SelectRecordingRegionAsync(CaptureKind kind)
     {
-        CaptureRectangle? selected = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
+        AdvancedRecordingFlyout.Hide();
+        return RunAsync(kind == CaptureKind.Window ? "Select a window to record. Escape cancels." : "Select the recording area. Escape cancels.", async () =>
         {
-            OwnerWindow = WinRT.Interop.WindowNative.GetWindowHandle(this), Kind = kind
-        }, lifetime.Token);
-        if (selected is { } region) { AddCustomRegion(new(region.X, region.Y, region.Width, region.Height)); SetStatus("Recording area selected."); }
-        else SetStatus("Area selection canceled. The previous area is kept.");
-    });
+            CaptureRectangle? selected = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
+            {
+                OwnerWindow = WinRT.Interop.WindowNative.GetWindowHandle(this), Kind = kind
+            }, lifetime.Token);
+            if (selected is { } region) { AddCustomRegion(new(region.X, region.Y, region.Width, region.Height)); SetStatus("Recording area selected."); }
+            else SetStatus("Area selection canceled. The previous area is kept.");
+        });
+    }
 
     private async void OnRefreshAudioClicked(object sender, RoutedEventArgs args) => await RefreshAudioAsync();
     private async Task RefreshAudioAsync()
@@ -778,13 +791,37 @@ public sealed partial class RecordingWindow : Window
         bool hasVideo = videoPath != null;
         bool hasSelection = candidateCopyPath != null;
         bool showReview = hasVideo || hasSelection;
-        bool compact = captureWorkflow && !showReview && !recordingOptionsExpanded;
-        RecordingSettingsPanel.Visibility = captureWorkflow && showReview ? Visibility.Collapsed : Visibility.Visible;
-        AdvancedRecordingOptionsPanel.Visibility = !captureWorkflow || recordingOptionsExpanded ? Visibility.Visible : Visibility.Collapsed;
-        SelectedAreaSummary.Visibility = captureWorkflow ? Visibility.Visible : Visibility.Collapsed;
-        RecordingOptionsButton.Visibility = captureWorkflow && !showReview ? Visibility.Visible : Visibility.Collapsed;
+        bool compact = captureWorkflow && !showReview;
+        RecordingHeader.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RecordingSettingsPanel.Visibility = captureWorkflow ? Visibility.Collapsed : Visibility.Visible;
+        RecordingBodyScroll.Visibility = compact && !VideoNotice.IsOpen ? Visibility.Collapsed : Visibility.Visible;
+        RecordingBodyScroll.MaxHeight = compact ? 96 : double.PositiveInfinity;
+        RecordingBodyRow.Height = compact ? GridLength.Auto : new GridLength(1, GridUnitType.Star);
+        RecordingRoot.Padding = new Thickness(compact ? 8 : 16);
+        RecordingRoot.RowSpacing = compact ? 0 : 12;
+        RecordingFooter.Spacing = compact ? 2 : 4;
+        SelectedAreaSummary.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
+        StartRecordingButton.Content = compact ? "Start" : "Start recording";
+        StopRecordingButton.Content = compact ? "Stop" : "Stop and save";
+        StartRecordingButton.MinWidth = StopRecordingButton.MinWidth = compact ? 80 : 0;
+        StartRecordingButton.Visibility = compact && active ? Visibility.Collapsed : Visibility.Visible;
+        StopRecordingButton.Visibility = compact && !active ? Visibility.Collapsed : Visibility.Visible;
+        VideoStatusText.TextWrapping = compact ? TextWrapping.NoWrap : TextWrapping.Wrap;
+        VideoStatusText.TextTrimming = compact ? TextTrimming.CharacterEllipsis : TextTrimming.None;
+        VideoStatusText.FontSize = compact ? 12 : 14;
+        if (compact && CaptureAudioHost.Content is null)
+        {
+            AudioChoicesHost.Content = null;
+            CaptureAudioHost.Content = AudioChecksRow;
+        }
+        else if (!compact && AudioChoicesHost.Content is null)
+        {
+            CaptureAudioHost.Content = null;
+            AudioChoicesHost.Content = AudioChecksRow;
+        }
+        CaptureAudioHost.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
         RecordingOptionsButton.IsEnabled = !busy && !active;
-        RecordingInstructions.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        UpdateRecordingAudioTooltips();
         RecordingHeading.FontSize = compact ? 20 : 24;
         RecordingHeading.Text = active ? "Recording" : hasVideo ? "Review video" : hasSelection ? "Open video" : "Record video";
         Title = active ? "Snip Studio — Recording" : hasVideo ? "Snip Studio — " + Path.GetFileName(videoPath) : "Snip Studio — Record video";
@@ -810,7 +847,12 @@ public sealed partial class RecordingWindow : Window
         CancelVideoButton.Visibility = operationCancellation != null || pendingVideoOpen != null ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private void SetStatus(string message) { if (!closed) VideoStatusText.Text = message; }
+    private void SetStatus(string message)
+    {
+        if (closed) return;
+        VideoStatusText.Text = message;
+        ToolTipService.SetToolTip(VideoStatusText, message);
+    }
     private void ShowError(string message)
     {
         if (closed) return;
@@ -829,8 +871,9 @@ public sealed partial class RecordingWindow : Window
         double scale = RecordingRoot.XamlRoot?.RasterizationScale ??
             RecordingWindowDpi(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
         if (!double.IsFinite(scale) || scale <= 0) scale = 1;
-        bool compact = captureWorkflow && videoPath == null && candidateCopyPath == null && !recordingOptionsExpanded;
-        int width = (int)Math.Ceiling(640 * scale), height = (int)Math.Ceiling((compact ? 260 : 480) * scale);
+        bool compact = captureWorkflow && videoPath == null && candidateCopyPath == null;
+        int width = (int)Math.Ceiling((compact ? 460 : 640) * scale);
+        int height = (int)Math.Ceiling((compact ? VideoNotice.IsOpen ? 260 : 128 : 480) * scale);
         DisplayArea? display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
         if (display is not null)
         {
@@ -844,15 +887,24 @@ public sealed partial class RecordingWindow : Window
     [DllImport("user32.dll", EntryPoint = "GetDpiForWindow")]
     private static extern uint RecordingWindowDpi(nint window);
 
+    private void UpdateRecordingOptionsBounds()
+    {
+        double scale = RecordingRoot.XamlRoot?.RasterizationScale ?? 1;
+        DisplayArea? display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        if (display is not null && double.IsFinite(scale) && scale > 0)
+            RecordingOptionsScroll.MaxHeight = Math.Max(100, Math.Min(520, display.WorkArea.Height / scale - 80));
+    }
+
     private void OnLayoutSizeChanged(object sender, SizeChangedEventArgs args)
     {
         if (AreaRow == null) return;
         UpdateRecordingMinimums();
         bool narrow = args.NewSize.Width < 900;
         Orientation direction = narrow ? Orientation.Vertical : Orientation.Horizontal;
-        AreaRow.Orientation = DevicesRow.Orientation = TrimRow.Orientation = ExportRow.Orientation = direction;
-        AudioChecksRow.Orientation = args.NewSize.Width < 520 ? Orientation.Vertical : Orientation.Horizontal;
-        RecordActionsRow.Orientation = args.NewSize.Width < 430 ? Orientation.Vertical : Orientation.Horizontal;
+        TrimRow.Orientation = ExportRow.Orientation = direction;
+        bool compact = captureWorkflow && videoPath == null && candidateCopyPath == null;
+        AudioChecksRow.Orientation = !compact && args.NewSize.Width < 520 ? Orientation.Vertical : Orientation.Horizontal;
+        RecordActionsRow.Orientation = !compact && args.NewSize.Width < 430 ? Orientation.Vertical : Orientation.Horizontal;
         UpdateRecordingLayoutBounds(args.NewSize.Height);
     }
 
@@ -932,6 +984,7 @@ public sealed partial class RecordingWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         closed = true;
+        VideoNotice.UnregisterPropertyChangedCallback(InfoBar.IsOpenProperty, videoNoticeOpenToken);
         if (minimumSizingRoot is not null)
         {
             minimumSizingRoot.Changed -= OnRecordingMinimumRootChanged;

@@ -24,9 +24,8 @@ public sealed partial class MainWindow
     private CaptureKind selectedCaptureKind = CaptureKind.Rectangle;
     private CaptureKind selectedRecordingCaptureKind = CaptureKind.Rectangle;
     private bool recordingCaptureMode;
-    private int recordingCaptureDelaySeconds;
     private CaptureKind ActiveCaptureKind => recordingCaptureMode ? selectedRecordingCaptureKind : selectedCaptureKind;
-    private int ActiveCaptureDelaySeconds => recordingCaptureMode ? recordingCaptureDelaySeconds : preferences.CaptureDelaySeconds;
+    private int ActiveCaptureDelaySeconds => recordingCaptureMode ? 0 : preferences.CaptureDelaySeconds;
     private nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
 
     private void InitializeDesktopIntegration()
@@ -176,14 +175,7 @@ public sealed partial class MainWindow
     private async void OnCaptureDelayClicked(object sender, RoutedEventArgs args)
     {
         if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
-        if (recordingCaptureMode)
-        {
-            if (busy || closed || applicationExitPending) return;
-            recordingCaptureDelaySeconds = seconds;
-            UpdateCaptureControls();
-            SetStatus(seconds == 0 ? "Recording area selection delay off." : $"Recording area selection starts after {seconds} seconds.");
-            return;
-        }
+        if (recordingCaptureMode || busy || closed || applicationExitPending) return;
         await RunActionAsync("Saving capture delay…", () =>
         {
             DesktopPreferences draft = preferences.Clone();
@@ -203,15 +195,30 @@ public sealed partial class MainWindow
     private void UpdateCaptureControls()
     {
         CaptureModeLabel.Text = ActiveCaptureKind switch { CaptureKind.AllMonitors => "All monitors", CaptureKind.Monitor => "Full screen", _ => ActiveCaptureKind.ToString() };
+        foreach (FrameworkElement icon in new FrameworkElement[] { RectangleCaptureIcon, WindowCaptureIcon, FullScreenCaptureIcon, FreeformCaptureIcon, AllMonitorsCaptureIcon })
+            icon.Visibility = Visibility.Collapsed;
+        FrameworkElement selectedIcon = ActiveCaptureKind switch
+        {
+            CaptureKind.Window => WindowCaptureIcon,
+            CaptureKind.Monitor => FullScreenCaptureIcon,
+            CaptureKind.Freeform => FreeformCaptureIcon,
+            CaptureKind.AllMonitors => AllMonitorsCaptureIcon,
+            _ => RectangleCaptureIcon
+        };
+        selectedIcon.Visibility = Visibility.Visible;
         CaptureDelayLabel.Text = ActiveCaptureDelaySeconds == 0 ? "Off" : ActiveCaptureDelaySeconds + " s";
+        DelayButton.IsEnabled = !recordingCaptureMode;
         ScreenshotModeButton.IsChecked = !recordingCaptureMode;
         RecordButton.IsChecked = recordingCaptureMode;
         ScreenshotModeUnderline.Visibility = recordingCaptureMode ? Visibility.Collapsed : Visibility.Visible;
         RecordingModeUnderline.Visibility = recordingCaptureMode ? Visibility.Visible : Visibility.Collapsed;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureButton, recordingCaptureMode ? "New recording" : "New snip");
         ToolTipService.SetToolTip(CaptureButton, recordingCaptureMode ? "New recording (Ctrl+N)" : "New snip (Ctrl+N)");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureOptionsButton, recordingCaptureMode ? "Recording area" : "Capture shape");
-        ToolTipService.SetToolTip(DelayButton, recordingCaptureMode ? "Delay before choosing the recording area" : "Capture delay");
+        string shapeDescription = (recordingCaptureMode ? "Recording area: " : "Capture shape: ") + CaptureModeLabel.Text;
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureOptionsButton, shapeDescription);
+        ToolTipService.SetToolTip(CaptureOptionsButton, shapeDescription + ". Select New to start.");
+        ToolTipService.SetToolTip(DelayButton, recordingCaptureMode ? "Capture delay is unavailable in video mode" : "Screenshot capture delay");
+        LauncherHint.Text = recordingCaptureMode ? "Press Ctrl+N to select a recording area." : "Press Ctrl+N to take a screenshot.";
         SetCaptureMenuChecks(CaptureModeMenu.Items);
         SetCaptureMenuChecks(CaptureDelayMenu.Items);
         if (CaptureMoreButton.Flyout is MenuFlyout more) SetCaptureMenuChecks(more.Items);
@@ -224,14 +231,21 @@ public sealed partial class MainWindow
             if (item.Tag is string itemTag)
                 item.Visibility = recordingCaptureMode && itemTag is ("Freeform" or "Monitor" or "AllMonitors" or "ScreenshotOnly")
                     ? Visibility.Collapsed : Visibility.Visible;
-            if (item is MenuFlyoutSubItem submenu) SetCaptureMenuChecks(submenu.Items);
+            if (item is MenuFlyoutSubItem submenu)
+            {
+                if (submenu.Tag is "ScreenshotDelay") submenu.IsEnabled = !recordingCaptureMode;
+                SetCaptureMenuChecks(submenu.Items);
+            }
             else if (item is ToggleMenuFlyoutItem { Tag: string tag } choice)
+            {
+                if (int.TryParse(tag, out _)) choice.IsEnabled = !recordingCaptureMode;
                 choice.IsChecked = tag switch
                 {
                     "ScreenshotMode" => !recordingCaptureMode,
                     "RecordingMode" => recordingCaptureMode,
                     _ => int.TryParse(tag, out int seconds) ? seconds == ActiveCaptureDelaySeconds : tag == ActiveCaptureKind.ToString()
                 };
+            }
         }
     }
     private async void OnScrollingClicked(object sender, RoutedEventArgs args)
@@ -328,7 +342,7 @@ public sealed partial class MainWindow
                 selected = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
                 {
                     OwnerWindow = WindowHandle, Kind = selectedRecordingCaptureKind,
-                    DelaySeconds = recordingCaptureDelaySeconds, HideTaskbars = preferences.HideTaskbars,
+                    DelaySeconds = 0, HideTaskbars = preferences.HideTaskbars,
                     KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible
                 }, ActionToken);
             }

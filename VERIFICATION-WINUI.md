@@ -1,17 +1,20 @@
 # WinUI preview verification
 
-Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** Capture-row, minimum-size, Settings and Snip-style recording-route changes are implemented in source. Final build, native and package checks for the new route are pending; earlier provisional preview.4 checks are not final acceptance.
+Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** The Snip-style recording route now has a new clean capture-bar layout in source. Its build, native and package checks are pending; previous large-window/provisional results are not acceptance of this layout.
 
 ## Preview.4 current gates
 
 | Change | Evidence and remaining check |
 | --- | --- |
 | Compact native capture row | Source aligns controls and includes capture-menu icons. Render, clipping, focus and menu access await the signed current candidate. |
-| Minimum sizes | Source requests launcher 520 × 260, image editor 520 × 320, compact recording 640 × 260 and advanced recording/review 640 × 480 DIP, converted for display scale and clamped to the work area. Native resize tracking, small displays and DPI changes are NOT TESTED for the final preview.4 route. |
+| Minimum sizes | Source requests launcher 520 × 260, image editor 520 × 320, clean recording bar 460 × 128 and video review 640 × 480 DIP, scaled and work-area clamped. A capture warning raises the height floor to 260 DIP with a details body bounded at 96 DIP. Final native size tracking and DPI behavior are NOT TESTED. |
 | Settings | Source temporarily enlarges the host toward 680 × 640 DIP, bounds the scrollable dialog, then restores prior bounds unless the user resized; manual movement retains its new position. Native Save/Cancel, scrolling and restore/move/resize behavior are NOT TESTED for preview.4. |
-| Recording route | Source makes camera/video mode exclusive; video selection alone opens no recorder. New/Ctrl+N selects Rectangle/Window first, cancellation preserves the image/draft, and successful selection opens compact audio/Start/options controls. Start alone prepares the unique configured-folder MP4; Stop finishes and opens review. Open video is separate. Native mode/selection/cancel/start/stop/device behavior is NOT TESTED. |
+| Clean recording bar | Source shows inline Start or Stop, timer, microphone/system-audio boxes, Options, small selected-area/status rows and native caption close. It hides the capture heading/instructions/Open video/full setup. One left-aligned advanced form opens in a flyout without increasing the parent height. This replacement layout is NOT native-verified. |
+| Recording route | Video mode → New/Ctrl+N → Rectangle/Window selection; cancel keeps the image/draft and opens no recorder. Start alone prepares the configured-folder MP4 and minimizes; taskbar restore exposes Stop, then review. The user accepted the previous controls' functionality but rejected the large form; this is not a controlled test of the new bar, audio or recording hardware. |
 | Folder preparation | Source allows one request per recording window with an eight-second await, observes late failure and blocks a duplicate request while it remains pending. This is not proof of provider cancellation or hardware recording. |
-| Current build, signed tests and package | Pending for the new recording route. Provisional preview.4 results before that route, and all earlier-version results, are not counted as final validation. |
+| Current build, signed tests and package | Pending for the clean bar. The prior D51 routing candidate passed 1,673 components, 7 local translation and 47 generated-video assertions plus static closure D721; those results now apply to its old visual candidate, not this replacement. |
+
+Provisional reference: source freeze `D51C2C5AD4145F8C7F7DA6A88E5612719FC160880F7734815A6001855EBF4957`, static closure SHA256 `D721F21A4B5EC390EEC314F7A65F2D8B1A4E7125C5000AF5C0574FD6E3A07D57`. Earlier Settings/minimum observations remain reference-only. No final clean-bar archive, installation, Start/Stop/audio or device acceptance is claimed.
 
 No new OCR accuracy or performance result is claimed. The hybrid WinUI/WinForms/GDI+ boundary and signing requirements remain unchanged. Real capture/recording/audio, physical DPI/monitors and installation still require separate evidence.
 
