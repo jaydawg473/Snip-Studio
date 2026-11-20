@@ -118,17 +118,17 @@ public sealed partial class MainWindow
 
     private async void OnSettingsClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Settings", async () =>
     {
-        DesktopIntegrationService integration = desktopOwner?.desktopIntegration ?? throw new InvalidOperationException("Desktop integration did not initialize. Reopen the editor and review its startup message before changing Windows settings.");
         using var sizing = BeginSettingsWindowSizing();
         await Task.Yield();
         Root.UpdateLayout();
-        DesktopPreferences previous = preferencesStore.Load();
+        var settingsStore = new DesktopPreferencesStore();
+        DesktopPreferences previous = settingsStore.Load();
         DesktopPreferences settings = previous.Clone();
         if (!previous.RememberCaptureDelay) settings.CaptureDelaySeconds = sessionCaptureDelaySeconds;
         var view = new DesktopSettingsView(Root.XamlRoot, AppWindow.Id, settings, SavePreferences, ActionToken);
         if (await view.ShowAsync() is null) return false;
 
-        preferences = preferencesStore.Load();
+        preferences = settingsStore.Load();
         bool initializeInk = previous.InkArgb != preferences.InkArgb ||
             previous.HighlighterArgb != preferences.HighlighterArgb || previous.StrokeWidth != preferences.StrokeWidth;
         foreach (MainWindow editor in editorWindows)
@@ -137,7 +137,7 @@ public sealed partial class MainWindow
             editor.ApplyVisualPreferences(initializeInk);
         }
         if (desktopOwner is MainWindow owner) _ = owner.CheckForAutomaticUpdateAsync();
-        SetStatus(integration.GetPrintScreenSetupHint() ?? "Settings saved.");
+        SetStatus(desktopOwner?.desktopIntegration?.GetPrintScreenSetupHint() ?? "Settings saved.");
         return true;
 
         void SavePreferences(DesktopPreferences draft)
@@ -155,11 +155,14 @@ public sealed partial class MainWindow
                 next.UsePrintScreen != active.UsePrintScreen || next.KeepRunningInTray != active.KeepRunningInTray ||
                 next.KeepShortcutsAfterClose != active.KeepShortcutsAfterClose;
             bool startupChanged = next.StartupWithWindows != active.StartupWithWindows;
+            DesktopIntegrationService? integration = desktopOwner?.desktopIntegration;
+            if ((shortcutsChanged || startupChanged) && integration is null)
+                throw new InvalidOperationException("Windows integration is unavailable. Restore the previous shortcut and startup choices or reopen Snip Studio.");
             try
             {
-                if (shortcutsChanged) ApplyDesktopIntegrationPreferences(integration, next);
-                if (startupChanged) integration.SetStartupEnabled(next.StartupWithWindows);
-                preferencesStore.Save(draft);
+                if (shortcutsChanged) ApplyDesktopIntegrationPreferences(integration!, next);
+                if (startupChanged) integration!.SetStartupEnabled(next.StartupWithWindows);
+                settingsStore.Save(draft);
                 if (selectedDelay != settings.CaptureDelaySeconds || draft.RememberCaptureDelay != previous.RememberCaptureDelay)
                     sessionCaptureDelaySeconds = selectedDelay;
             }
@@ -167,9 +170,9 @@ public sealed partial class MainWindow
             {
                 var rollbackFailures = new List<string>();
                 if (shortcutsChanged)
-                    try { ApplyDesktopIntegrationPreferences(integration, active); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
+                    try { ApplyDesktopIntegrationPreferences(integration!, active); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
                 if (startupChanged)
-                    try { integration.SetStartupEnabled(active.StartupWithWindows); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
+                    try { integration!.SetStartupEnabled(active.StartupWithWindows); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
                 string detail = rollbackFailures.Count == 0 ? "" : " Review Windows integration settings. " + string.Join(" ", rollbackFailures);
                 throw new InvalidOperationException("Settings were not saved. " + failure.Message + detail, failure);
             }
@@ -260,10 +263,11 @@ public sealed partial class MainWindow
         }
         await RunActionAsync("Saving capture delay…", () =>
         {
-            DesktopPreferences draft = preferences.Clone();
+            var delayStore = new DesktopPreferencesStore();
+            DesktopPreferences draft = delayStore.Load();
             draft.CaptureDelaySeconds = seconds;
-            preferencesStore.Save(draft);
-            preferences = preferencesStore.Load();
+            delayStore.Save(draft);
+            preferences = delayStore.Load();
             foreach (MainWindow editor in editorWindows)
             {
                 editor.preferences = preferences.Clone();
