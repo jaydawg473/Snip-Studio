@@ -9,6 +9,7 @@ public static class DesktopDialogs
 {
     public static async Task<DesktopPreferences?> ShowSettingsAsync(XamlRoot root, DesktopPreferences preferences, DesktopIntegrationService integration)
     {
+        ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(preferences);
         ArgumentNullException.ThrowIfNull(integration);
         DesktopPreferences draft = preferences.Clone();
@@ -34,7 +35,7 @@ public static class DesktopDialogs
         var screenshotFolder = new TextBox { Header = "Screenshot folder", Text = draft.ScreenshotFolder };
         var recordingFolder = new TextBox { Header = "Recording folder", Text = draft.RecordingFolder };
         var error = new InfoBar { IsOpen = false, Severity = InfoBarSeverity.Error, IsClosable = false };
-        var content = new StackPanel { Spacing = 14, MinWidth = 260, MaxWidth = 560 };
+        var content = new StackPanel { Spacing = 14, MinWidth = 0, MaxWidth = 560 };
         content.Children.Add(new TextBlock { Text = "Settings apply to this WinUI build. Your stable Snip Studio settings stay separate.", TextWrapping = TextWrapping.Wrap });
         content.Children.Add(theme);
         content.Children.Add(ctrlWheel);
@@ -68,6 +69,13 @@ public static class DesktopDialogs
         content.Children.Add(recordingFolder);
         content.Children.Add(new TextBlock { Text = "Folders are used by capture and recording workflows. Changing a folder does not move existing files. Windows startup and shortcuts change only when you save this dialog.", FontSize = 12, TextWrapping = TextWrapping.Wrap });
         content.Children.Add(error);
+        var scroller = new ScrollViewer
+        {
+            Content = content,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            HorizontalScrollMode = ScrollMode.Disabled,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+        };
         var dialog = new ContentDialog
         {
             XamlRoot = root,
@@ -75,8 +83,19 @@ public static class DesktopDialogs
             PrimaryButtonText = "Save",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
-            Content = new ScrollViewer { Content = content, MaxHeight = Math.Max(180, Math.Min(580, root.Size.Height - 220)), HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled }
+            Content = scroller
         };
+        void UpdateSettingsBounds()
+        {
+            var size = root.Size;
+            if (!double.IsFinite(size.Width) || !double.IsFinite(size.Height) || size.Width <= 0 || size.Height <= 0) return;
+            // Reserve room for the title, action buttons, and dialog margins.
+            // A fixed minimum viewport can force those actions off a small host.
+            dialog.MaxHeight = Math.Max(1, size.Height - 32);
+            scroller.MaxHeight = Math.Max(1, Math.Min(580, size.Height - 220));
+            content.MaxWidth = Math.Max(1, Math.Min(560, size.Width - 80));
+        }
+        void OnSettingsRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateSettingsBounds();
         dialog.PrimaryButtonClick += (_, args) =>
         {
             try
@@ -108,7 +127,13 @@ public static class DesktopDialogs
                 error.IsOpen = true;
             }
         };
-        return await dialog.ShowAsync() == ContentDialogResult.Primary ? draft : null;
+        root.Changed += OnSettingsRootChanged;
+        try
+        {
+            UpdateSettingsBounds();
+            return await dialog.ShowAsync() == ContentDialogResult.Primary ? draft : null;
+        }
+        finally { root.Changed -= OnSettingsRootChanged; }
     }
 
     public static async Task<string?> ShowRecentAsync(XamlRoot root, IReadOnlyList<string> recentPaths)

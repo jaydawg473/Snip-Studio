@@ -7,6 +7,7 @@ using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.Storage;
 using Windows.Graphics;
+using System.Runtime.InteropServices;
 
 namespace SnipStudio.WinUI;
 
@@ -36,6 +37,7 @@ public sealed partial class RecordingWindow : Window
     private int recordingGeneration;
     private readonly string? initialPath;
     private string recordingFolder = "";
+    private XamlRoot? minimumSizingRoot;
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? RecordingSaved;
     public bool IsRecording => recorder.IsActive;
@@ -58,7 +60,8 @@ public sealed partial class RecordingWindow : Window
         initialPath = initialVideoPath;
         customRegion = initialRegion;
         InitializeComponent();
-        AppWindow.Resize(new SizeInt32(1040, 820));
+        AppWindow.Resize(new SizeInt32(1040, string.IsNullOrWhiteSpace(initialVideoPath) ? 480 : 820));
+        UpdateRecordingMinimums();
         AppWindow.Closing += OnClosing;
         Closed += OnClosed;
         RecordingRoot.Loaded += OnLoaded;
@@ -96,6 +99,9 @@ public sealed partial class RecordingWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs args)
     {
         RecordingRoot.Loaded -= OnLoaded;
+        minimumSizingRoot = RecordingRoot.XamlRoot;
+        if (minimumSizingRoot is not null) minimumSizingRoot.Changed += OnRecordingMinimumRootChanged;
+        UpdateRecordingMinimums();
         await RefreshAudioAsync();
         if (!closed && !string.IsNullOrWhiteSpace(initialPath))
             await RunAsync("Opening video…", () => LoadVideoAsync(initialPath));
@@ -592,7 +598,7 @@ public sealed partial class RecordingWindow : Window
         string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(sourcePath) + "-copy", Path.GetExtension(sourcePath), "Original video");
         if (destination == null) { SetStatus("Save copy canceled."); return; }
         operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        CancelVideoButton.IsEnabled = true;
+        UpdateCommands();
         SetStatus("Saving the original video copy…");
         await VideoReviewService.SaveCopyAsync(sourcePath, destination, operationCancellation.Token);
         PublishSaved(destination);
@@ -627,7 +633,7 @@ public sealed partial class RecordingWindow : Window
             _ => global::SnipStudio.VideoExportPreset.Balanced720p
         };
         operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
-        CancelVideoButton.IsEnabled = true;
+        UpdateCommands();
         VideoProgress.IsIndeterminate = false;
         var progress = new Progress<double>(value => { if (!closed) VideoProgress.Value = Math.Clamp(value * 100, 0, 100); });
         SetStatus("Exporting a smaller MP4. Attachment size is an estimate; the final result is checked.");
@@ -693,6 +699,16 @@ public sealed partial class RecordingWindow : Window
     {
         if (closed) return;
         bool active = recorder.IsActive || stopTask != null;
+        bool hasVideo = videoPath != null;
+        bool hasSelection = candidateCopyPath != null;
+        bool showReview = hasVideo || hasSelection;
+        RecordingHeading.Text = active ? "Recording" : hasVideo ? "Review video" : hasSelection ? "Open video" : "Record video";
+        Title = active ? "Snip Studio — Recording" : hasVideo ? "Snip Studio — " + Path.GetFileName(videoPath) : "Snip Studio — Record video";
+        PlaybackPanel.Visibility = ReviewOptionsPanel.Visibility = showReview ? Visibility.Visible : Visibility.Collapsed;
+        CandidatePanel.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
+        TrimRow.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
+        VideoPlayer.AreTransportControlsEnabled = hasVideo;
+        UpdateRecordingLayoutBounds(RecordingRoot.ActualHeight);
         StartRecordingButton.IsEnabled = !busy && !active;
         StopRecordingButton.IsEnabled = !busy && active;
         RegionBox.IsEnabled = SelectAreaButton.IsEnabled = SelectWindowButton.IsEnabled = FpsBox.IsEnabled = !busy && !active;
@@ -706,6 +722,7 @@ public sealed partial class RecordingWindow : Window
         TrimStartBox.IsEnabled = TrimEndBox.IsEnabled = SetStartButton.IsEnabled = SetEndButton.IsEnabled = !busy && !active && metadata != null;
         ExportPresetBox.IsEnabled = TargetSizeBox.IsEnabled = !busy && !active;
         CancelVideoButton.IsEnabled = busy && operationCancellation != null && !operationCancellation.IsCancellationRequested || !busy && !active && pendingVideoOpen != null;
+        CancelVideoButton.Visibility = operationCancellation != null || pendingVideoOpen != null ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void SetStatus(string message) { if (!closed) VideoStatusText.Text = message; }
@@ -719,16 +736,45 @@ public sealed partial class RecordingWindow : Window
         SetStatus("The action could not finish. Review the message above.");
     }
 
+    private void OnRecordingMinimumRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateRecordingMinimums();
+
+    private void UpdateRecordingMinimums()
+    {
+        if (closed || AppWindow.Presenter is not OverlappedPresenter presenter) return;
+        double scale = RecordingRoot.XamlRoot?.RasterizationScale ??
+            RecordingWindowDpi(WinRT.Interop.WindowNative.GetWindowHandle(this)) / 96d;
+        if (!double.IsFinite(scale) || scale <= 0) scale = 1;
+        int width = (int)Math.Ceiling(640 * scale), height = (int)Math.Ceiling(480 * scale);
+        DisplayArea? display = DisplayArea.GetFromWindowId(AppWindow.Id, DisplayAreaFallback.Nearest);
+        if (display is not null)
+        {
+            width = Math.Min(width, display.WorkArea.Width);
+            height = Math.Min(height, display.WorkArea.Height);
+        }
+        if (presenter.PreferredMinimumWidth != width) presenter.PreferredMinimumWidth = width;
+        if (presenter.PreferredMinimumHeight != height) presenter.PreferredMinimumHeight = height;
+    }
+
+    [DllImport("user32.dll", EntryPoint = "GetDpiForWindow")]
+    private static extern uint RecordingWindowDpi(nint window);
+
     private void OnLayoutSizeChanged(object sender, SizeChangedEventArgs args)
     {
         if (AreaRow == null) return;
+        UpdateRecordingMinimums();
         bool narrow = args.NewSize.Width < 900;
         Orientation direction = narrow ? Orientation.Vertical : Orientation.Horizontal;
         AreaRow.Orientation = DevicesRow.Orientation = TrimRow.Orientation = ExportRow.Orientation = direction;
         AudioChecksRow.Orientation = args.NewSize.Width < 520 ? Orientation.Vertical : Orientation.Horizontal;
         RecordActionsRow.Orientation = args.NewSize.Width < 430 ? Orientation.Vertical : Orientation.Horizontal;
-        RecordingSettingsScroll.MaxHeight = Math.Max(90, Math.Min(235, args.NewSize.Height * .30));
-        ReviewOptionsScroll.MaxHeight = Math.Max(70, Math.Min(150, args.NewSize.Height * .20));
+        UpdateRecordingLayoutBounds(args.NewSize.Height);
+    }
+
+    private void UpdateRecordingLayoutBounds(double height)
+    {
+        // Setup, playback and editing share one body scroller. Fixed actions
+        // and status remain reachable even at the recording window minimum.
+        PlaybackPanel.Height = Math.Clamp(height * .40, 120, 400);
     }
 
     private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
@@ -800,6 +846,11 @@ public sealed partial class RecordingWindow : Window
     private void OnClosed(object sender, WindowEventArgs args)
     {
         closed = true;
+        if (minimumSizingRoot is not null)
+        {
+            minimumSizingRoot.Changed -= OnRecordingMinimumRootChanged;
+            minimumSizingRoot = null;
+        }
         CancelPendingVideoOpen();
         ReleaseRecordingBoundary();
         lifetime.Cancel();

@@ -71,6 +71,9 @@ public sealed partial class MainWindow
     private async void OnSettingsClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Settings", async () =>
     {
         DesktopIntegrationService integration = desktopOwner?.desktopIntegration ?? throw new InvalidOperationException("Desktop integration did not initialize. Reopen the editor and review its startup message before changing Windows settings.");
+        using var sizing = BeginSettingsWindowSizing();
+        await Task.Yield();
+        Root.UpdateLayout();
         DesktopPreferences? draft = await DesktopDialogs.ShowSettingsAsync(Root.XamlRoot, preferences, integration);
         if (draft is null) return false;
         DesktopPreferences previous = preferences.Clone();
@@ -150,16 +153,16 @@ public sealed partial class MainWindow
     private void OnCaptureModeSelected(object sender, RoutedEventArgs args)
     {
         if (busy || closed) return;
-        if (sender is MenuFlyoutItem { Tag: string tag } && Enum.TryParse(tag, out CaptureKind mode))
+        if (sender is FrameworkElement { Tag: string tag } && Enum.TryParse(tag, out CaptureKind mode))
         {
             selectedCaptureKind = mode;
             UpdateCaptureControls();
-            SetStatus(CaptureOptionsButton.Label + " capture ready. Select New to start.");
+            SetStatus(CaptureModeLabel.Text + " capture ready. Select New to start.");
         }
     }
     private async void OnCaptureDelayClicked(object sender, RoutedEventArgs args)
     {
-        if (sender is not MenuFlyoutItem { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
+        if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
         await RunActionAsync("Saving capture delay…", () =>
         {
             DesktopPreferences draft = preferences.Clone();
@@ -174,12 +177,27 @@ public sealed partial class MainWindow
             SetStatus(seconds == 0 ? "Capture delay off." : $"Capture starts after {seconds} seconds.");
             return Task.FromResult(true);
         }, commitDraft: false);
+        if (!closed) UpdateCaptureControls();
     }
     private void UpdateCaptureControls()
     {
-        CaptureOptionsButton.Label = selectedCaptureKind == CaptureKind.AllMonitors ? "All monitors" : selectedCaptureKind.ToString();
-        DelayButton.Label = preferences.CaptureDelaySeconds == 0 ? "Off" : preferences.CaptureDelaySeconds + " s";
+        CaptureModeLabel.Text = selectedCaptureKind switch { CaptureKind.AllMonitors => "All monitors", CaptureKind.Monitor => "Full screen", _ => selectedCaptureKind.ToString() };
+        CaptureDelayLabel.Text = preferences.CaptureDelaySeconds == 0 ? "Off" : preferences.CaptureDelaySeconds + " s";
         ScreenshotModeButton.IsChecked = true;
+        SetCaptureMenuChecks(CaptureModeMenu.Items);
+        SetCaptureMenuChecks(CaptureDelayMenu.Items);
+        if (CaptureMoreButton.Flyout is MenuFlyout more) SetCaptureMenuChecks(more.Items);
+    }
+
+    private void SetCaptureMenuChecks(IEnumerable<MenuFlyoutItemBase> items)
+    {
+        foreach (MenuFlyoutItemBase item in items)
+        {
+            if (item is MenuFlyoutSubItem submenu) SetCaptureMenuChecks(submenu.Items);
+            else if (item is ToggleMenuFlyoutItem { Tag: string tag } choice)
+                choice.IsChecked = int.TryParse(tag, out int seconds)
+                    ? seconds == preferences.CaptureDelaySeconds : tag == selectedCaptureKind.ToString();
+        }
     }
     private async void OnScrollingClicked(object sender, RoutedEventArgs args) => await CaptureAsync(CaptureKind.Rectangle, true);
 

@@ -413,8 +413,8 @@ public sealed partial class MainWindow : Window
         InkContextBar.Visibility = ink || text || eraser ? Visibility.Visible : Visibility.Collapsed;
         ColorButton.Visibility = ink || text ? Visibility.Visible : Visibility.Collapsed;
         StrokeWidthContainer.Visibility = ink ? Visibility.Visible : Visibility.Collapsed;
-        SnapHighlighterButton.Visibility = selectedTool == PreviewTool.Highlighter ? Visibility.Visible : Visibility.Collapsed;
-        EraseAllButton.Visibility = eraser ? Visibility.Visible : Visibility.Collapsed;
+        SnapHighlighterContainer.Visibility = selectedTool == PreviewTool.Highlighter ? Visibility.Visible : Visibility.Collapsed;
+        EraseAllContainer.Visibility = eraser ? Visibility.Visible : Visibility.Collapsed;
         ContextRow.Visibility = session.HasImage && !contextDismissed && (ink || text || eraser) ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -487,6 +487,7 @@ public sealed partial class MainWindow : Window
         CaptureBar.IsEnabled = enabled;
         ToolBar.IsEnabled = enabled;
         ToolBar.Visibility = session.HasImage ? Visibility.Visible : Visibility.Collapsed;
+        UpdateWindowMinimums();
         ContextBar.IsEnabled = enabled;
         InkContextBar.IsEnabled = enabled;
         ContextCloseButton.IsEnabled = enabled;
@@ -545,7 +546,12 @@ public sealed partial class MainWindow : Window
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs args)
     {
         if (ZoomPanel is null) return;
-        FileBar.MaxWidth = Math.Clamp(args.NewSize.Width - 490, 44, 228);
+        UpdateWindowMinimums();
+        FileBar.MaxWidth = Math.Clamp(args.NewSize.Width - 466, 44, 228);
+        DelayButton.Visibility = args.NewSize.Width < 520 ? Visibility.Collapsed : Visibility.Visible;
+        CaptureOptionsButton.Visibility = args.NewSize.Width < 480 ? Visibility.Collapsed : Visibility.Visible;
+        CaptureMoreButton.Visibility = args.NewSize.Width < 520 ? Visibility.Visible : Visibility.Collapsed;
+        CaptureModeGroup.Visibility = args.NewSize.Width < 340 ? Visibility.Collapsed : Visibility.Visible;
         bool narrow = args.NewSize.Width < 560;
         Grid.SetRow(ZoomPanel, narrow ? 1 : 0);
         Grid.SetColumn(ZoomPanel, narrow ? 0 : 1);

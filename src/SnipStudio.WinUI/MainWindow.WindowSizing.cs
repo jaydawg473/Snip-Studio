@@ -18,6 +18,9 @@ public sealed partial class MainWindow
     private int systemWindowSizingDepth;
     private long windowSizingIntentVersion, snipWindowSizingSerial;
     private SnipWindowResizeRequest? pendingSnipWindowResize;
+    private bool settingsWindowSizing;
+    private long manualWindowResizeVersion;
+    private XamlRoot? minimumSizingRoot;
 
     private sealed record SnipWindowResizeRequest(long Serial, long IntentVersion, int PreviewGeneration,
         long Revision, int ImageWidth, int ImageHeight, int Pass);
@@ -54,6 +57,108 @@ public sealed partial class MainWindow
             }
         }
         observedWindowSizingSize = AppWindow.Size;
+        UpdateWindowMinimums();
+    }
+
+    private SizeInt32 MainWindowMinimumSize()
+    {
+        double raster = WindowSizingRasterScale();
+        int width = (int)Math.Ceiling((settingsWindowSizing ? 680 : 520) * raster);
+        int height = (int)Math.Ceiling((settingsWindowSizing ? 640 : session.HasImage ? 320 : 260) * raster);
+        if (TryGetWindowSizingWorkArea(out RectInt32 work))
+        {
+            width = Math.Min(width, work.Width);
+            height = Math.Min(height, work.Height);
+        }
+        return new(width, height);
+    }
+
+    private void UpdateWindowMinimums()
+    {
+        if (closed || AppWindow.Presenter is not OverlappedPresenter presenter) return;
+        SizeInt32 minimum = MainWindowMinimumSize();
+        bool previous = applyingSnipWindowSize;
+        applyingSnipWindowSize = true;
+        try
+        {
+            if (presenter.PreferredMinimumWidth != minimum.Width) presenter.PreferredMinimumWidth = minimum.Width;
+            if (presenter.PreferredMinimumHeight != minimum.Height) presenter.PreferredMinimumHeight = minimum.Height;
+        }
+        finally { applyingSnipWindowSize = previous; }
+    }
+
+    private IDisposable BeginSettingsWindowSizing()
+    {
+        PointInt32 position = AppWindow.Position;
+        SizeInt32 size = AppWindow.Size;
+        double originalRaster = WindowSizingRasterScale();
+        bool restored = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored };
+        long manualVersion = manualWindowResizeVersion;
+        settingsWindowSizing = true;
+        try
+        {
+            UpdateWindowMinimums();
+            if (restored)
+            {
+                SizeInt32 minimum = MainWindowMinimumSize();
+                ResizeWindowForDialog(new RectInt32(position.X, position.Y,
+                    Math.Max(size.Width, minimum.Width), Math.Max(size.Height, minimum.Height)));
+            }
+        }
+        catch
+        {
+            settingsWindowSizing = false;
+            UpdateWindowMinimums();
+            throw;
+        }
+        PointInt32 dialogPosition = AppWindow.Position;
+        return new SettingsSizingScope(() =>
+        {
+            settingsWindowSizing = false;
+            if (closed) return;
+            try
+            {
+                UpdateWindowMinimums();
+                if (restored && manualVersion == manualWindowResizeVersion &&
+                    AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })
+                {
+                    PointInt32 currentPosition = AppWindow.Position;
+                    bool moved = currentPosition.X != dialogPosition.X || currentPosition.Y != dialogPosition.Y;
+                    double rasterRatio = WindowSizingRasterScale() / originalRaster;
+                    ResizeWindowForDialog(new RectInt32(moved ? currentPosition.X : position.X,
+                        moved ? currentPosition.Y : position.Y,
+                        (int)Math.Ceiling(size.Width * rasterRatio), (int)Math.Ceiling(size.Height * rasterRatio)));
+                }
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+            {
+                SetStatus("Settings closed. The previous window size could not be restored: " + failure.Message);
+            }
+        });
+    }
+
+    private void ResizeWindowForDialog(RectInt32 bounds)
+    {
+        SizeInt32 minimum = MainWindowMinimumSize();
+        bounds.Width = Math.Max(minimum.Width, bounds.Width);
+        bounds.Height = Math.Max(minimum.Height, bounds.Height);
+        if (TryGetWindowSizingWorkArea(out RectInt32 work))
+        {
+            bounds.Width = Math.Min(bounds.Width, work.Width);
+            bounds.Height = Math.Min(bounds.Height, work.Height);
+            bounds.X = Math.Clamp(bounds.X, work.X, work.X + work.Width - bounds.Width);
+            bounds.Y = Math.Clamp(bounds.Y, work.Y, work.Y + work.Height - bounds.Height);
+        }
+        bool previous = applyingSnipWindowSize;
+        applyingSnipWindowSize = true;
+        try { AppWindow.MoveAndResize(bounds); }
+        finally { applyingSnipWindowSize = previous; }
+    }
+
+    private sealed class SettingsSizingScope(Action restore) : IDisposable
+    {
+        private Action? restoreAction = restore;
+        public void Dispose() => Interlocked.Exchange(ref restoreAction, null)?.Invoke();
     }
 
     private void CancelPendingSnipResize()
@@ -84,8 +189,16 @@ public sealed partial class MainWindow
 
     private void OnWindowSizingRootLoaded(object sender, RoutedEventArgs args)
     {
+        if (minimumSizingRoot is null && Root.XamlRoot is { } xamlRoot)
+        {
+            minimumSizingRoot = xamlRoot;
+            xamlRoot.Changed += OnMinimumSizingRootChanged;
+        }
+        UpdateWindowMinimums();
         ResumePendingSnipResize();
     }
+
+    private void OnMinimumSizingRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateWindowMinimums();
 
     private void QueueSnipWindowResize(long serial)
     {
@@ -270,6 +383,7 @@ public sealed partial class MainWindow
 
     private void MarkSnipWindowSizedByUser()
     {
+        unchecked { manualWindowResizeVersion++; }
         userSizedSnipWindow = true;
         CancelPendingSnipResize();
     }
@@ -289,6 +403,11 @@ public sealed partial class MainWindow
     {
         CancelPendingSnipResize();
         Root.Loaded -= OnWindowSizingRootLoaded;
+        if (minimumSizingRoot is not null)
+        {
+            minimumSizingRoot.Changed -= OnMinimumSizingRootChanged;
+            minimumSizingRoot = null;
+        }
         Closed -= OnWindowSizingClosed;
         if (windowSizingHookInstalled && windowSizingProcedure is not null)
         {

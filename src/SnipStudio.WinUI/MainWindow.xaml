@@ -43,6 +43,9 @@
                 <x:Double x:Key="AppBarThemeCompactHeight">34</x:Double>
                 <x:Double x:Key="AppBarThemeMinHeight">34</x:Double>
                 <x:Double x:Key="AppBarButtonContentHeight">20</x:Double>
+                <Style x:Key="StudioCaptureActionStyle" TargetType="Button" BasedOn="{StaticResource DefaultButtonStyle}">
+                    <Setter Property="Height" Value="34"/><Setter Property="MinHeight" Value="34"/><Setter Property="MinWidth" Value="0"/><Setter Property="Padding" Value="8,0"/><Setter Property="CornerRadius" Value="6"/><Setter Property="FontSize" Value="12"/><Setter Property="Background" Value="Transparent"/><Setter Property="BorderThickness" Value="0"/><Setter Property="VerticalContentAlignment" Value="Center"/><Setter Property="HorizontalContentAlignment" Value="Center"/><Setter Property="AllowFocusOnInteraction" Value="False"/>
+                </Style>
                 <Style TargetType="AppBarButton" BasedOn="{StaticResource DefaultAppBarButtonStyle}">
                     <Setter Property="Width" Value="34" />
                     <Setter Property="MinWidth" Value="34" />
@@ -74,58 +77,43 @@
 
         <Grid Grid.Row="0" Background="{ThemeResource StudioToolbarBrush}" Padding="12,10,12,10" ColumnSpacing="8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-            <CommandBar x:Name="CaptureBar" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" HorizontalContentAlignment="Left" Background="Transparent" Padding="0">
-                <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
-                <AppBarButton x:Name="CaptureButton" Icon="Add" Label="New" Click="OnCaptureClicked" Margin="0,0,8,0" FontWeight="SemiBold" Background="{ThemeResource StudioPrimaryBrush}" Foreground="{ThemeResource StudioPrimaryForegroundBrush}" ToolTipService.ToolTip="New snip (Ctrl+N)" MinWidth="104">
-                    <AppBarButton.Resources>
-                        <ResourceDictionary>
-                            <ResourceDictionary.ThemeDictionaries>
-                                <ResourceDictionary x:Key="Light">
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#0067C0" />
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#0067C0" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPointerOver" Color="#FFFFFF" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPressed" Color="#FFFFFF" />
-                                </ResourceDictionary>
-                                <ResourceDictionary x:Key="Dark">
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="#0067C0" />
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="#0067C0" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPointerOver" Color="#FFFFFF" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPressed" Color="#FFFFFF" />
-                                </ResourceDictionary>
-                                <ResourceDictionary x:Key="HighContrast">
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPointerOver" Color="{ThemeResource SystemColorHighlightColor}" />
-                                    <SolidColorBrush x:Key="AppBarButtonBackgroundPressed" Color="{ThemeResource SystemColorHighlightColor}" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}" />
-                                    <SolidColorBrush x:Key="AppBarButtonForegroundPressed" Color="{ThemeResource SystemColorHighlightTextColor}" />
-                                </ResourceDictionary>
-                            </ResourceDictionary.ThemeDictionaries>
-                        </ResourceDictionary>
-                    </AppBarButton.Resources>
-                </AppBarButton>
-                <AppBarToggleButton x:Name="ScreenshotModeButton" Icon="Camera" Label="Screenshot" LabelPosition="Collapsed" IsChecked="True" Click="OnScreenshotModeClicked" ToolTipService.ToolTip="Screenshot mode" />
-                <AppBarButton x:Name="RecordButton" Icon="Video" Label="Record" LabelPosition="Collapsed" Click="OnRecordClicked" Margin="1,0,8,0" ToolTipService.ToolTip="Record screen and audio" />
-                <AppBarButton x:Name="CaptureOptionsButton" Label="Rectangle" ToolTipService.ToolTip="Choose the capture shape, then select New" MinWidth="144">
-                    <AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon>
-                    <AppBarButton.Flyout><MenuFlyout>
-                        <MenuFlyoutItem Text="Rectangle" Tag="Rectangle" Click="OnCaptureModeSelected" />
-                        <MenuFlyoutItem Text="Freeform" Tag="Freeform" Click="OnCaptureModeSelected" />
-                        <MenuFlyoutItem Text="Window" Tag="Window" Click="OnCaptureModeSelected" />
-                        <MenuFlyoutItem Text="Full screen" Tag="Monitor" Click="OnCaptureModeSelected" />
-                        <MenuFlyoutItem Text="All monitors" Tag="AllMonitors" Click="OnCaptureModeSelected" />
-                        <MenuFlyoutSeparator />
-                        <MenuFlyoutItem Text="Scrolling capture…" Click="OnScrollingClicked" />
-                    </MenuFlyout></AppBarButton.Flyout>
-                </AppBarButton>
-                <AppBarButton x:Name="DelayButton" Label="Off" Margin="5,0,0,0" ToolTipService.ToolTip="Capture delay" MinWidth="70">
-                    <AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon>
-                    <AppBarButton.Flyout><MenuFlyout>
-                        <MenuFlyoutItem Text="Off" Tag="0" Click="OnCaptureDelayClicked" />
-                        <MenuFlyoutItem Text="3 seconds" Tag="3" Click="OnCaptureDelayClicked" />
-                        <MenuFlyoutItem Text="5 seconds" Tag="5" Click="OnCaptureDelayClicked" />
-                        <MenuFlyoutItem Text="10 seconds" Tag="10" Click="OnCaptureDelayClicked" />
-                    </MenuFlyout></AppBarButton.Flyout>
-                </AppBarButton>
-            </CommandBar>
+            <ContentControl x:Name="CaptureBar" IsTabStop="False" HorizontalAlignment="Left" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="CaptureButton" Width="104" Style="{StaticResource StudioCaptureActionStyle}" Background="{ThemeResource StudioPrimaryBrush}" Foreground="{ThemeResource StudioPrimaryForegroundBrush}" Padding="10,0" Margin="0,0,10,0" HorizontalContentAlignment="Left" Click="OnCaptureClicked" AutomationProperties.Name="New snip" ToolTipService.ToolTip="New snip (Ctrl+N)">
+                        <Button.Resources><ResourceDictionary><ResourceDictionary.ThemeDictionaries>
+                            <ResourceDictionary x:Key="Light"><SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#005A9E"/><SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#004E8C"/><SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White"/><SolidColorBrush x:Key="ButtonForegroundPressed" Color="White"/></ResourceDictionary>
+                            <ResourceDictionary x:Key="Dark"><SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="#1478CF"/><SolidColorBrush x:Key="ButtonBackgroundPressed" Color="#005A9E"/><SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="White"/><SolidColorBrush x:Key="ButtonForegroundPressed" Color="White"/></ResourceDictionary>
+                            <ResourceDictionary x:Key="HighContrast"><SolidColorBrush x:Key="ButtonBackgroundPointerOver" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ButtonBackgroundPressed" Color="{ThemeResource SystemColorHighlightColor}"/><SolidColorBrush x:Key="ButtonForegroundPointerOver" Color="{ThemeResource SystemColorHighlightTextColor}"/><SolidColorBrush x:Key="ButtonForegroundPressed" Color="{ThemeResource SystemColorHighlightTextColor}"/></ResourceDictionary>
+                        </ResourceDictionary.ThemeDictionaries></ResourceDictionary></Button.Resources>
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><FontIcon Glyph="&#xE710;" FontSize="18"/><TextBlock Text="New" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"/></StackPanel>
+                    </Button>
+                    <Border x:Name="CaptureModeGroup" Background="{ThemeResource ControlFillColorTertiaryBrush}" BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" BorderThickness="1" CornerRadius="6" Padding="1,0" Height="34" Margin="0,0,10,0">
+                        <StackPanel Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                            <Grid><ToggleButton x:Name="ScreenshotModeButton" Width="34" Height="30" MinWidth="0" MinHeight="30" Padding="0" CornerRadius="4" BorderThickness="0" Background="Transparent" IsChecked="True" Click="OnScreenshotModeClicked" AllowFocusOnInteraction="False" AutomationProperties.Name="Screenshot mode" ToolTipService.ToolTip="Screenshot mode"><FontIcon Glyph="&#xE722;" FontSize="18"/></ToggleButton><Border Height="2" Width="14" CornerRadius="1" Background="{ThemeResource StudioPrimaryBrush}" VerticalAlignment="Bottom" HorizontalAlignment="Center" IsHitTestVisible="False"/></Grid>
+                            <Button x:Name="RecordButton" Width="34" Height="30" MinWidth="0" MinHeight="30" Padding="0" CornerRadius="4" BorderThickness="0" Background="Transparent" Click="OnRecordClicked" AllowFocusOnInteraction="False" AutomationProperties.Name="Record screen and audio" ToolTipService.ToolTip="Record screen and audio"><FontIcon Glyph="&#xE714;" FontSize="18"/></Button>
+                        </StackPanel>
+                    </Border>
+                    <DropDownButton x:Name="CaptureOptionsButton" Width="140" Height="34" MinHeight="34" Padding="8,0" Margin="0,0,10,0" FontSize="12" CornerRadius="4" Background="{ThemeResource StudioOptionsBrush}" BorderThickness="0" HorizontalContentAlignment="Left" AllowFocusOnInteraction="False" AutomationProperties.Name="Capture shape" ToolTipService.ToolTip="Choose the capture shape, then select New">
+                        <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><Grid Width="18" Height="18"><Rectangle Width="16" Height="14" Stroke="{ThemeResource TextFillColorPrimaryBrush}" StrokeThickness="1.25" StrokeDashArray="3,2" RadiusX="1" RadiusY="1"/></Grid><TextBlock x:Name="CaptureModeLabel" Text="Rectangle" VerticalAlignment="Center"/></StackPanel>
+                        <DropDownButton.Flyout><MenuFlyout x:Name="CaptureModeMenu">
+                            <ToggleMenuFlyoutItem Text="Rectangle" Tag="Rectangle" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M1,3H19V17H1Z M3,5V15H17V5Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem>
+                            <ToggleMenuFlyoutItem Text="Window" Tag="Window" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M1,2H19V18H1Z M3,7V16H17V7Z M3,4H17V5H3Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem>
+                            <ToggleMenuFlyoutItem Text="Full screen" Tag="Monitor" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><SymbolIcon Symbol="FullScreen"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem>
+                            <ToggleMenuFlyoutItem Text="Freeform" Tag="Freeform" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M2,6L7,1L12,4L18,2L20,10L16,12L17,19L9,17L4,20L1,14Z M4,7L3,13L5,17L9,15L15,17L14,11L18,9L17,4L12,6L7,3Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem>
+                            <ToggleMenuFlyoutItem Text="All monitors" Tag="AllMonitors" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M0,1H12V11H0Z M2,3V9H10V3Z M4,12H8V14H4Z M8,7H20V17H8Z M10,9V15H18V9Z M12,18H16V20H12Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem>
+                            <MenuFlyoutSeparator/><MenuFlyoutItem Text="Scrolling capture…" Click="OnScrollingClicked"><MenuFlyoutItem.Icon><PathIcon Data="M2,0H15V4H13V2H4V18H13V16H15V20H2Z M12,7L16,3L20,7H17V13H20L16,17L12,13H15V7Z M6,5H11V7H6Z M6,9H11V11H6Z M6,13H11V15H6Z"/></MenuFlyoutItem.Icon></MenuFlyoutItem>
+                        </MenuFlyout></DropDownButton.Flyout>
+                    </DropDownButton>
+                    <Button x:Name="DelayButton" Width="70" Height="34" MinHeight="34" MinWidth="0" Padding="4,0" FontSize="12" Background="Transparent" BorderThickness="0" CornerRadius="4" AllowFocusOnInteraction="False" AutomationProperties.Name="Capture delay" ToolTipService.ToolTip="Capture delay">
+                        <StackPanel Orientation="Horizontal" Spacing="6" VerticalAlignment="Center"><FontIcon Glyph="&#xE823;" FontSize="18"/><TextBlock x:Name="CaptureDelayLabel" Text="Off" VerticalAlignment="Center"/></StackPanel>
+                        <Button.Flyout><MenuFlyout x:Name="CaptureDelayMenu"><ToggleMenuFlyoutItem Text="Off" Tag="0" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="3 seconds" Tag="3" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="5 seconds" Tag="5" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="10 seconds" Tag="10" Click="OnCaptureDelayClicked"/></MenuFlyout></Button.Flyout>
+                    </Button>
+                    <Button x:Name="CaptureMoreButton" Style="{StaticResource StudioCaptureActionStyle}" Width="34" Padding="0" Visibility="Collapsed" AutomationProperties.Name="More capture options" ToolTipService.ToolTip="Capture shape and delay">
+                        <FontIcon Glyph="&#xE712;" FontSize="18"/>
+                        <Button.Flyout><MenuFlyout><MenuFlyoutItem Text="Screenshot mode" Click="OnScreenshotModeClicked"><MenuFlyoutItem.Icon><SymbolIcon Symbol="Camera"/></MenuFlyoutItem.Icon></MenuFlyoutItem><MenuFlyoutItem Text="Record screen and audio" Click="OnRecordClicked"><MenuFlyoutItem.Icon><SymbolIcon Symbol="Video"/></MenuFlyoutItem.Icon></MenuFlyoutItem><MenuFlyoutSeparator/><MenuFlyoutSubItem Text="Capture shape"><ToggleMenuFlyoutItem Text="Rectangle" Tag="Rectangle" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M1,3H19V17H1Z M3,5V15H17V5Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem><ToggleMenuFlyoutItem Text="Window" Tag="Window" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M1,2H19V18H1Z M3,7V16H17V7Z M3,4H17V5H3Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem><ToggleMenuFlyoutItem Text="Full screen" Tag="Monitor" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M0,0H7V2H2V7H0Z M13,0H20V7H18V2H13Z M0,13H2V18H7V20H0Z M18,13H20V20H13V18H18Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem><ToggleMenuFlyoutItem Text="Freeform" Tag="Freeform" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M2,6L7,1L12,4L18,2L20,10L16,12L17,19L9,17L4,20L1,14Z M4,7L3,13L5,17L9,15L15,17L14,11L18,9L17,4L12,6L7,3Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem><ToggleMenuFlyoutItem Text="All monitors" Tag="AllMonitors" Click="OnCaptureModeSelected"><ToggleMenuFlyoutItem.Icon><PathIcon Data="M0,1H12V11H0Z M2,3V9H10V3Z M4,12H8V14H4Z M8,7H20V17H8Z M10,9V15H18V9Z M12,18H16V20H12Z"/></ToggleMenuFlyoutItem.Icon></ToggleMenuFlyoutItem><MenuFlyoutSeparator/><MenuFlyoutItem Text="Scrolling capture…" Click="OnScrollingClicked"><MenuFlyoutItem.Icon><PathIcon Data="M2,0H15V4H13V2H4V18H13V16H15V20H2Z M12,7L16,3L20,7H17V13H20L16,17L12,13H15V7Z M6,5H11V7H6Z M6,9H11V11H6Z M6,13H11V15H6Z"/></MenuFlyoutItem.Icon></MenuFlyoutItem></MenuFlyoutSubItem><MenuFlyoutSubItem Text="Capture delay"><ToggleMenuFlyoutItem Text="Off" Tag="0" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="3 seconds" Tag="3" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="5 seconds" Tag="5" Click="OnCaptureDelayClicked"/><ToggleMenuFlyoutItem Text="10 seconds" Tag="10" Click="OnCaptureDelayClicked"/></MenuFlyoutSubItem></MenuFlyout></Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </ContentControl>
             <CommandBar x:Name="FileBar" Grid.Column="1" MaxWidth="228" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Right" Background="Transparent" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
                 <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" LabelPosition="Collapsed" Click="OnOpenClicked" ToolTipService.ToolTip="Open an image (Ctrl+O)" />
@@ -174,7 +162,7 @@
                 <AppBarButton x:Name="RedoButton" Icon="Redo" Label="Redo" LabelPosition="Collapsed" Click="OnRedoClicked" ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False" />
                 <AppBarButton x:Name="OcrButton" Label="Text actions" LabelPosition="Collapsed" Click="OnOcrClicked" ToolTipService.ToolTip="Image to text"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
                 <AppBarSeparator />
-                <AppBarButton x:Name="ExternalEditorButton" Label="Edit in app" Click="OnExternalEditorClicked" ToolTipService.ToolTip="Open a copy in an external image editor" MinWidth="142"><AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon></AppBarButton>
+                <AppBarElementContainer><Button x:Name="ExternalEditorButton" Style="{StaticResource StudioCaptureActionStyle}" MinWidth="132" Click="OnExternalEditorClicked" ToolTipService.ToolTip="Open a copy in an external image editor"><StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><FontIcon Glyph="&#xE70F;" FontSize="18"/><TextBlock Text="Edit in app" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 <CommandBar.SecondaryCommands>
                     <AppBarToggleButton x:Name="PanButton" Label="Move view" Click="OnPanClicked" ToolTipService.ToolTip="Pan the image; middle-drag also pans"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                     <AppBarToggleButton x:Name="OcrSelectButton" Label="Select recognized text" Click="OnOcrSelectClicked" />
@@ -193,8 +181,8 @@
                     <AppBarElementContainer x:Name="StrokeWidthContainer">
                         <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="4,0,6,0"><NumberBox x:Name="StrokeWidthBox" Minimum="1" Maximum="100" Value="3" SmallChange="1" LargeChange="5" SpinButtonPlacementMode="Compact" Width="76" Height="30" MinHeight="30" ValueChanged="OnStrokeWidthChanged" AutomationProperties.Name="Stroke width in image pixels" ToolTipService.ToolTip="Stroke width in image pixels" /><TextBlock Text="px" FontSize="12" VerticalAlignment="Center" /></StackPanel>
                     </AppBarElementContainer>
-                    <AppBarToggleButton x:Name="SnapHighlighterButton" Label="Snap to text" IsChecked="True" Visibility="Collapsed" ToolTipService.ToolTip="Recognize touched words. Hold Shift while dragging for freehand." MinWidth="118" />
-                    <AppBarButton x:Name="EraseAllButton" Label="Erase all annotations" Click="OnEraseAllClicked" Visibility="Collapsed" MinWidth="176" />
+                    <AppBarElementContainer x:Name="SnapHighlighterContainer" Visibility="Collapsed"><CheckBox x:Name="SnapHighlighterButton" Content="Snap to text" IsChecked="True" MinHeight="30" FontSize="12" Margin="8,0" ToolTipService.ToolTip="Recognize touched words. Hold Shift while dragging for freehand."/></AppBarElementContainer>
+                    <AppBarElementContainer x:Name="EraseAllContainer" Visibility="Collapsed"><Button x:Name="EraseAllButton" Content="Erase all annotations" Style="{StaticResource StudioCaptureActionStyle}" Click="OnEraseAllClicked"/></AppBarElementContainer>
                 </CommandBar>
                 <CommandBar x:Name="ContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" Background="Transparent" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
@@ -203,8 +191,8 @@
                     <AppBarToggleButton x:Name="BoldButton" Icon="Bold" Label="Bold" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Bold" />
                     <AppBarToggleButton x:Name="ItalicButton" Icon="Italic" Label="Italic" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Italic" />
                     <AppBarToggleButton x:Name="UnderlineButton" Icon="Underline" Label="Underline" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Underline" />
-                    <AppBarButton x:Name="ApplyTextButton" Icon="Accept" Label="Apply" Click="OnApplyTextClicked" MinWidth="76" />
-                    <AppBarButton x:Name="CancelTextButton" Icon="Cancel" Label="Cancel" Click="OnCancelTextClicked" MinWidth="80" />
+                    <AppBarElementContainer><Button x:Name="ApplyTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnApplyTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE73E;" FontSize="16"/><TextBlock Text="Apply" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
+                    <AppBarElementContainer><Button x:Name="CancelTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnCancelTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE711;" FontSize="16"/><TextBlock Text="Cancel" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 </CommandBar>
                 <Button x:Name="ContextCloseButton" Grid.Column="2" Width="28" MinWidth="0" Height="28" Padding="0" Background="Transparent" BorderThickness="0" Content="×" FontSize="16" Click="OnContextCloseClicked" AutomationProperties.Name="Close tool options" ToolTipService.ToolTip="Close tool options" VerticalAlignment="Center" />
             </Grid>

@@ -1,10 +1,16 @@
 # Snip Studio WinUI 3 migration
 
-Updated November 19, 2026 for `0.7.0-preview.3` (`0.7.0.3`). The restored compact layout has partial signed-candidate native evidence; clean build/publication, current signed component/media checks and static package verification passed. Final interaction/device retests await an idle desktop. Production release status remains **INSUFFICIENT EVIDENCE**.
+Updated November 20, 2026 for `0.7.0-preview.4` (`0.7.0.4`). Current UI fixes are source changes awaiting build and native verification. Production release status remains **INSUFFICIENT EVIDENCE**; earlier preview results are historical.
 
 This repository preserves the Git history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting at 0.6.24 commit `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`. GitHub's self-fork request returned the original repository, so the migration has a separate repository rather than a fork-network entry. Preview identity, settings, startup entry, global shortcuts and update metadata are deliberately isolated from the stable application.
 
-## Compact editor restoration
+## Preview.4 reachability fixes
+
+The compact native capture row uses aligned controls and icons for capture menu entries, retaining the chosen layout and newer icons. Source minimums are 520 × 260 DIP for the empty launcher, 520 × 320 DIP for an editor with an image, and 640 × 480 DIP for recording; they scale with the display and are clamped to its available work area.
+
+Opening Settings temporarily requests at least 680 × 640 DIP when possible, with vertically scrollable content and bounded dialog height. Closing restores the prior frame when the user has not resized it; an intentional resize is retained, and a move retains the chosen position. These are source contracts, not observed native results. Current build and minimum/Settings retests are pending.
+
+## Preview.3 compact editor history
 
 Preview.3 restores the previous layout, spacing and tool placement while retaining the new icons. The source uses two 54/46-DIP toolbar rows, removes the large header, retains the blue New button, groups shape choices and puts zoom presets at the bottom. Contextual options and the canvas keep the established arrangement. Existing editing, OCR, capture and recording adapters remain the architecture; this change does not replace the OCR engine or establish a performance improvement.
 
@@ -41,7 +47,7 @@ Image/PDF exports are flattened. Editable annotation objects and history are ses
 
 ## Preview integration and privacy
 
-Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The preview.2 concurrent public API regression passed 64 writes and 128 reads without errors; the current preview.3 component suite also passed concurrent settings validation. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
+Preferences use the separate preview profile. Settings reads and writes coordinate on the existing bounded named mutex before initial disk loading; writes merge changed fields/recent paths, preserve unknown JSON and disclose backup/default recovery. The preview.2 concurrent public API regression passed 64 writes and 128 reads without errors; the preview.3 component suite also passed concurrent settings validation. Persistent native replacement conflicts fail with data preserved, with a bounded retry for transient conflicts. Startup changes occur when Settings is saved. Tray and global shortcuts are optional; shortcut conflicts produce feedback. Native restart and Shell actions remain unverified.
 
 The manual update service queries only this WinUI repository's release endpoint, bounds the response and timeout, rejects redirected or out-of-repository release links, and displays reported metadata for review. A different tag alone is not treated as proof of a newer signed release. The service has no installer-download or execution path.
 
@@ -53,16 +59,12 @@ The repository pins .NET SDK 10.0.404, Microsoft.WindowsAppSDK 2.7.0 and Microso
 
 NuGet restore requires package signatures. Authenticode validation separately covers executed tools/helpers and delivered executable dependencies: Automation Forge signs our outputs with timestamps; valid original third-party signatures remain intact. A precompiled, signed manifest build task avoids execution of an unsigned generated inline task. Compiled applications are not executed before signing.
 
-The publish target explicitly requires the application's PRI and compiled App/MainWindow/EditorViewport/RecordingWindow XAML resources. The first preview's missing-resource launch failure established why dependency/PE checks alone do not cover application resource closure. Preview.3 requires its own build, signature, resource, notice, privacy and archive audit; earlier preview artifacts do not satisfy those gates.
+The publish target explicitly requires the application's PRI and compiled App/MainWindow/EditorViewport/RecordingWindow XAML resources. The first preview's missing-resource launch failure established why dependency/PE checks alone do not cover application resource closure. Each preview requires its own build, signature, resource, notice, privacy and archive audit; earlier artifacts do not satisfy current gates.
 
 Installation, stable-channel replacement and public GitHub Release publication require separate authorization and are not performed by this preview's update check. Source commits and packages must identify their exact source freeze and verification scope.
 
 ## Remaining work
 
-Fresh signed preview.3 suites passed 1,673 assertions against final source freeze `10FC38988A6903B8124E28B847B75EE6363101A7B8AD3DBC243B3317FBEBE1BC`. Retest the latest empty-launcher/options-reserve fixes, zoom/shortcut behavior, manual-size retention and monitor bounds, Final-source clean build/publication and static installer/ZIP checks have passed. Current results are recorded in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md) rather than inferred from earlier candidates.
-
-Historically, preview.2 signed suites passed 1,673 unique component assertions; manifest-task, local translation and generated-media results are documented separately. Its native evidence established one supplied-image Open/OCR/Text/edit/history/Save As sequence and reduction from 1086 × 754 to 713 × 493 with usable overflow. A fresh instance passed F11 to 1920 × 1080 full screen and back before dialogs. The old instance's Ctrl+O/Ctrl+S/Ctrl+0/F11 results after picker/system-sizing interactions were inconclusive; no global registration failure was established.
-
-Preview.2 also confirmed the shortened Convert text label, Text activation and precise font-size display/edit round trips. The restored toolbar must retain those behaviors and be checked again; those earlier passes are not a general keyboard or source-font accuracy claim.
+Build the current preview.4 source and verify a signed candidate. Native checks must cover capture-row alignment/menu access, launcher/editor/recording minimum tracking, Settings scrolling and Save/Cancel restoration, deliberate resizing/movement, and small/mixed-DPI work areas. Prior component/native/package evidence remains version-scoped in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md).
 
 Package-specific source/signature/hash and audit evidence belongs with the delivered candidate. Required broader native/device checks remain: Fit/manual zoom, mixed DPI, real capture/scrolling, recording/audio/video, clipboard/print/share, preferences/recovery, Shell/startup and installation. Measure startup, real capture/recording and longer-running memory with stated inputs before claiming a performance improvement. Component timings, compilation, one native sequence and package verification do not close all acceptance gates.
