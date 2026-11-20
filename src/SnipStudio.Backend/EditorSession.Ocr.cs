@@ -151,6 +151,11 @@ public sealed partial class EditorSession
         PointF first = ConvertPoint(start, nameof(start));
         PointF last = ConvertPoint(end, nameof(end));
         var selection = snapshot.SelectionGeometry;
+        if (snapshot.NativeResult.ProtectedGraphics.Any(graphic => graphic.Contains(first)))
+        {
+            selection.Clear();
+            return selection;
+        }
         int anchor = selection.HitTest(first, 8);
         if (anchor < 0) selection.Clear();
         else selection.Select(anchor, first == last ? anchor : selection.Nearest(last));
@@ -188,6 +193,8 @@ public sealed partial class EditorSession
             NativeLine sourceLine = snapshot.NativeResult.Lines[sourceIndex];
             if (!sourceLine.RecognitionClipBounds.IsEmpty)
                 mask = Rectangle.Intersect(mask, Rectangle.Ceiling(sourceLine.RecognitionClipBounds));
+            foreach (RectangleF graphic in snapshot.NativeResult.ProtectedGraphics)
+                mask = ProtectOcrPadding(mask, selected, graphic);
             for (int lineIndex = 0; lineIndex < snapshot.NativeResult.Lines.Count; lineIndex++)
             {
                 NativeLine line = snapshot.NativeResult.Lines[lineIndex];
@@ -269,8 +276,12 @@ public sealed partial class EditorSession
             float fontSize = fitted?.FontSize ?? Math.Clamp(style.FontSizePixels, 1, 1024);
             string rtf = fitted?.Rtf ??
                 global::SnipStudio.RichTextLayout.CreatePlainRtf(line.Text, style.FontFamily, fontSize, style.Style, foreground);
-            PointF location;
-            if (fitted != null) location = fitted.TextLocation;
+            PointF location, anchor;
+            if (fitted != null)
+            {
+                location = fitted.TextLocation;
+                anchor = new PointF(location.X + fitted.MeasuredInkBounds.Left, location.Y + fitted.MeasuredInkBounds.Top);
+            }
             else
             {
                 // Even an overlong OCR misread can open so its text can be
@@ -278,10 +289,11 @@ public sealed partial class EditorSession
                 RectangleF ink = global::SnipStudio.RichTextLayout.Measure(rtf, width).InkBounds;
                 if (ink.IsEmpty)
                     throw new InvalidOperationException("This line has no editable text that the renderer can display.");
-                location = new PointF(line.Bounds.Left - ink.Left, line.Bounds.Top - ink.Top);
+                anchor = new PointF(RoundSourcePixel(line.Bounds.Left), RoundSourcePixel(line.Bounds.Top));
+                location = new PointF(anchor.X - ink.Left, anchor.Y - ink.Top);
             }
             return new OcrLineEditSnapshot(source, -1, line.Text, rtf, style.FontFamily, (TextFontStyle)style.Style,
-                location, foreground, fontSize, width, 0, line.Bounds, mask, layout, background);
+                location, foreground, fontSize, width, 0, new RectangleF(anchor, line.Bounds.Size), mask, layout, background);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -309,11 +321,8 @@ public sealed partial class EditorSession
         ArgumentException.ThrowIfNullOrWhiteSpace(rtf);
         RectangleF ink = global::SnipStudio.RichTextLayout.Measure(rtf, draft.LayoutWidth).InkBounds;
         RectangleF layout = draft.ProtectedLayout;
-        RectangleF sourceInk = draft.SourceInk;
-        if (ink.IsEmpty || sourceInk.Left < layout.Left || sourceInk.Top < layout.Top ||
-            sourceInk.Left + ink.Width > layout.Right || sourceInk.Top + ink.Height > layout.Bottom)
+        if (!TryAlignOcrInk(draft.SourceInk.Location, layout, ink, out PointF location))
             throw new InvalidOperationException("The edit needs more room than this source line has. Shorten the text or reduce its font size.");
-        PointF location = new(sourceInk.Left - ink.Left, sourceInk.Top - ink.Top);
         var replacement = new global::SnipStudio.RecognizedTextReplacement(draft.SourceMask, location, text, rtf,
             FromArgb(argb), FromArgb(draft.BackgroundArgb), fontSize, draft.LayoutWidth, layout, ink);
         int index = document.ReplaceRecognizedTextBlocks(new[] { replacement }, draft.Source.ImageIdentity, draft.Source.Revision);
@@ -458,7 +467,7 @@ public sealed partial class EditorSession
         RequireCurrentOcr(snapshot);
         NativeLine line = snapshot.NativeResult.Lines[index];
         SampleOcrColors(mask, out Color background, out Color foreground);
-        Rectangle bounds = Rectangle.Intersect(new Rectangle(Point.Empty, document.ImageSize), Rectangle.Ceiling(line.Bounds));
+        Rectangle bounds = Rectangle.Intersect(new Rectangle(Point.Empty, document.ImageSize), EncloseSourcePixels(line.Bounds));
         using Bitmap source = document.CopyBaseRegion(bounds);
         Rectangle local = new(Point.Empty, source.Size);
         NativeStyle style = await Task.Run(() => global::SnipStudio.SourceTextMatcher.EstimateWithFamilyContext(
@@ -541,6 +550,8 @@ public sealed partial class EditorSession
             (int)Math.Floor(text.Left) - 2, (int)Math.Floor(text.Top) - 2,
             (int)Math.Ceiling(text.Right) + 2, (int)Math.Ceiling(text.Bottom) + 2));
         mask = ProtectOcrPadding(mask, text, line.ExcludedGraphicBounds);
+        foreach (RectangleF graphic in snapshot.NativeResult.ProtectedGraphics)
+            mask = ProtectOcrPadding(mask, text, graphic);
         if (!line.RecognitionClipBounds.IsEmpty)
             mask = Rectangle.Intersect(mask, Rectangle.Ceiling(line.RecognitionClipBounds));
         for (int index = 0; index < snapshot.NativeResult.Lines.Count; index++)
@@ -644,13 +655,16 @@ public sealed partial class EditorSession
         }
         Rectangle union = Rectangle.Empty;
         foreach (NativeLine line in chosen)
-            union = union.IsEmpty ? Rectangle.Ceiling(line.Bounds) : Rectangle.Union(union, Rectangle.Ceiling(line.Bounds));
+        {
+            Rectangle bounds = EncloseSourcePixels(line.Bounds);
+            union = union.IsEmpty ? bounds : Rectangle.Union(union, bounds);
+        }
         if (union.IsEmpty || (long)union.Width * union.Height > 16L * 1024 * 1024) return null;
         var samples = new List<global::SnipStudio.SourceTextFamilySample>();
         foreach (NativeLine line in chosen)
         {
             token.ThrowIfCancellationRequested();
-            Rectangle bounds = Rectangle.Ceiling(line.Bounds);
+            Rectangle bounds = EncloseSourcePixels(line.Bounds);
             SampleOcrColors(bounds, out Color background, out Color foreground, requireOpaque: false);
             bounds.Offset(-union.Left, -union.Top);
             samples.Add(new global::SnipStudio.SourceTextFamilySample(bounds, line.Text, foreground, background));
@@ -669,6 +683,8 @@ public sealed partial class EditorSession
         // painting over the neighboring date/type column or an annotation.
         int right = Math.Min(document.ImageSize.Width, mask.Right + (2 * 1024 * 1024) / mask.Height);
         NativeLine line = snapshot.NativeResult.Lines[sourceIndex];
+        foreach (RectangleF graphic in snapshot.NativeResult.ProtectedGraphics)
+            right = LimitOcrRight(graphic, mask, right);
         foreach (NativeLine other in snapshot.NativeResult.Lines)
         {
             if (ReferenceEquals(other, line)) continue;
@@ -751,18 +767,38 @@ public sealed partial class EditorSession
             string rtf = global::SnipStudio.RichTextLayout.CreatePlainRtf(text, style.FontFamily, size, style.Style, foreground);
             var metrics = global::SnipStudio.RichTextLayout.Measure(rtf, Math.Min(32768, layout.Width));
             RectangleF ink = metrics.InkBounds;
-            if (ink.IsEmpty || sourceInk.Left < layout.Left || sourceInk.Top < layout.Top ||
-                sourceInk.Left + ink.Width > layout.Right || sourceInk.Top + ink.Height > layout.Bottom) return null;
-            // Match the OCR ink origin. Padded masks give native ascenders and
-            // antialiasing room without shifting the editable text to mask.Left.
-            // Source-space coordinates survive clipping and icon protection;
-            // padding is not a new text origin.
-            PointF location = new(sourceInk.Left - ink.Left, sourceInk.Top - ink.Top);
+            if (!TryAlignOcrInk(sourceInk.Location, layout, ink, out PointF location)) return null;
             return new global::SnipStudio.RecognizedTextReplacement(mask, location, text, rtf,
                 foreground, background, size, Math.Min(32768, layout.Width), layout, ink);
         }
         catch (ArgumentException) { return null; }
         catch (InvalidOperationException) { return null; }
+    }
+
+    // Windows OCR can return fractional coordinates after an enlarged pass.
+    // Measure from every touched pixel, including a partially covered first or
+    // last row, so the native font matcher sees the original glyph edges.
+    private static Rectangle EncloseSourcePixels(RectangleF bounds) => Rectangle.FromLTRB(
+        (int)Math.Floor(bounds.Left), (int)Math.Floor(bounds.Top),
+        (int)Math.Ceiling(bounds.Right), (int)Math.Ceiling(bounds.Bottom));
+
+    private static float RoundSourcePixel(float value) => MathF.Round(value, MidpointRounding.AwayFromZero);
+
+    private static bool TryAlignOcrInk(PointF sourceAnchor, RectangleF layout, RectangleF measuredInk, out PointF location)
+    {
+        location = default;
+        if (measuredInk.IsEmpty || sourceAnchor.X < layout.Left || sourceAnchor.Y < layout.Top) return false;
+        float minX = MathF.Ceiling(layout.Left), minY = MathF.Ceiling(layout.Top);
+        float maxX = MathF.Floor(layout.Right - measuredInk.Width), maxY = MathF.Floor(layout.Bottom - measuredInk.Height);
+        if (minX > maxX || minY > maxY) return false;
+        float x = Math.Clamp(RoundSourcePixel(sourceAnchor.X), minX, maxX);
+        float y = Math.Clamp(RoundSourcePixel(sourceAnchor.Y), minY, maxY);
+        // Align the raster to the nearest safe source pixel instead of making
+        // GDI+ blend an otherwise sharp glyph across two rows or columns.
+        // Do not move the ink further than half a source pixel just to fit.
+        if (Math.Abs(x - sourceAnchor.X) > .5f || Math.Abs(y - sourceAnchor.Y) > .5f) return false;
+        location = new PointF(x - measuredInk.Left, y - measuredInk.Top);
+        return true;
     }
 
     private static bool ValidOcrBounds(RectangleF bounds) => float.IsFinite(bounds.X) && float.IsFinite(bounds.Y) &&

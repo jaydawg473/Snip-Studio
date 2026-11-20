@@ -7,15 +7,28 @@ Unicode true
 !include "x64.nsh"
 
 !ifndef APP_VERSION
-  !define APP_VERSION "0.7.0-preview.5"
+  !define APP_VERSION "0.7.0-preview.6"
 !endif
 !ifndef APP_VERSION_NUMERIC
-  !define APP_VERSION_NUMERIC "0.7.0.5"
+  !define APP_VERSION_NUMERIC "0.7.0.6"
 !endif
 !define APP_NAME "Snip Studio WinUI 3 Preview"
 !define APP_EXE "SnipStudio.WinUI3.Preview.exe"
 !define APP_KEY "Software\Automation Forge\Snip Studio WinUI 3 Preview"
 !define ARP_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\AutomationForge.SnipStudio.WinUI3.Preview"
+!define PREVIEW_WINDOW_CLASS "WinUIDesktopWin32WindowClass"
+!define PREVIEW_EXIT_MESSAGE "AutomationForge.SnipStudio.WinUI3.RequestInstallerExit.v1"
+!define PREVIEW_EXIT_COOKIE 21333
+!define PREVIEW_CLOSE_TIMEOUT_MS 30000
+
+Var PreviewClosePath
+Var PreviewCloseWindow
+Var PreviewClosePid
+Var PreviewCloseProcess
+Var PreviewCloseVisibleOnly
+Var PreviewCloseStarted
+Var PreviewCloseMessage
+Var PreviewCloseDetail
 
 !ifndef PAYLOAD_DIR
   !error "The frozen signed self-contained payload directory is required."
@@ -146,21 +159,210 @@ destination_empty:
 destination_ok:
   Pop $1
   Pop $0
-  Call CheckInstalledPreviewFiles
 FunctionEnd
 
-; Read-only probes run before any installed file is changed. A busy or
-; unwritable file blocks the operation; no process is launched or closed.
+; Only use actual preview top-level windows on the installer's desktop.
+; The class and title exclude capture overlays, pickers and host windows.
+; The held process handle binds a matching HWND's PID to this installed EXE.
+Function FindInstalledPreviewWindow
+  System::Store "s"
+  StrCpy $PreviewCloseWindow 0
+  StrCpy $PreviewClosePid 0
+  StrCpy $PreviewCloseProcess 0
+  StrCpy $0 0
+  StrCpy $8 0
+  System::Call '$SYSDIR\user32.dll::GetDesktopWindow() p.r9'
+  StrCmp $9 0 preview_find_done
+  StrCmp $9 "error" preview_find_done
+preview_find_next:
+  IntCmp $8 512 preview_find_done 0 preview_find_done
+  IntOp $8 $8 + 1
+  System::Call '$SYSDIR\user32.dll::FindWindowExW(p r9, p r0, w "${PREVIEW_WINDOW_CLASS}", p 0) p.r0'
+  StrCmp $0 0 preview_find_done
+  StrCmp $0 "error" preview_find_done
+  System::Call '$SYSDIR\user32.dll::GetWindow(p r0, i 4) p.r4' ; GW_OWNER
+  StrCmp $4 0 0 preview_find_next
+  ${If} $PreviewCloseVisibleOnly == 1
+    System::Call '$SYSDIR\user32.dll::IsWindowVisible(p r0) i.r4'
+    StrCmp $4 1 0 preview_find_next
+  ${EndIf}
+  System::Call '$SYSDIR\user32.dll::GetWindowTextW(p r0, w .r1, i ${NSIS_MAX_STRLEN}) i.r4'
+  IntCmp $4 11 0 preview_find_next 0
+  StrCpy $4 $1 11
+  StrCmpS $4 "Snip Studio" preview_find_pid
+  ; The dirty editor adds a bullet and space before the product title.
+  StrCpy $4 $1 11 2
+  StrCmpS $4 "Snip Studio" 0 preview_find_next
+preview_find_pid:
+  System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 r2) i.r4'
+  StrCmp $4 0 preview_find_next
+  StrCmp $4 "error" preview_find_next
+  StrCmp $2 0 preview_find_next
+  ; PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE. No terminate access.
+  System::Call '$SYSDIR\kernel32.dll::OpenProcess(i 0x101000, i 0, i r2) p.r3'
+  StrCmp $3 0 preview_find_next
+  StrCmp $3 "error" preview_find_next
+  System::Call '$SYSDIR\kernel32.dll::QueryFullProcessImageNameW(p r3, i 0, w .r1, *i ${NSIS_MAX_STRLEN} r6) i.r4'
+  StrCmp $4 1 0 preview_find_release
+  StrCmp $1 $PreviewClosePath 0 preview_find_release
+  StrCpy $PreviewCloseWindow $0
+  StrCpy $PreviewClosePid $2
+  StrCpy $PreviewCloseProcess $3
+  Goto preview_find_done
+preview_find_release:
+  System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
+  Goto preview_find_next
+preview_find_done:
+  System::Store "l"
+FunctionEnd
+
+; Request normal closure at the start of installation, after the user chose
+; Install. The installation path registration excludes portable copies. An
+; old visible window uses its own close/save prompts. Newer previews can exit
+; through the app's cooperative protocol even if hidden in the tray.
+Function CloseInstalledPreviewForUpdate
+  System::Store "s"
+  ReadRegStr $0 HKCU "${APP_KEY}" "InstallLocation"
+  StrCmp $0 "" preview_close_done
+  GetFullPathName $0 "$0\${APP_EXE}"
+  GetFullPathName $PreviewClosePath "$INSTDIR\${APP_EXE}"
+  StrCmp $0 $PreviewClosePath 0 preview_close_done
+  IfFileExists "$PreviewClosePath" 0 preview_close_done
+  System::Call '$SYSDIR\user32.dll::RegisterWindowMessageW(w "${PREVIEW_EXIT_MESSAGE}") i.r7'
+  StrCpy $PreviewCloseMessage $7
+preview_close_retry:
+  System::Call '$SYSDIR\kernel32.dll::GetTickCount() i.r7'
+  StrCpy $PreviewCloseStarted $7
+  StrCpy $PreviewCloseDetail "Complete any save or recording prompts, or use Exit from the Snip Studio notification-area icon."
+preview_close_find:
+  StrCpy $PreviewCloseVisibleOnly 1
+  Call FindInstalledPreviewWindow
+  ${If} $PreviewCloseWindow == 0
+    StrCpy $PreviewCloseVisibleOnly 0
+    Call FindInstalledPreviewWindow
+  ${EndIf}
+  StrCmp $PreviewCloseWindow 0 preview_close_done
+  StrCpy $0 $PreviewCloseWindow
+  StrCpy $2 $PreviewClosePid
+  StrCpy $3 $PreviewCloseProcess
+  StrCpy $R4 $PreviewCloseMessage
+  System::Call '$SYSDIR\kernel32.dll::GetTickCount() i.r7'
+  IntOp $7 $7 - $PreviewCloseStarted
+  IntCmpU $7 ${PREVIEW_CLOSE_TIMEOUT_MS} preview_close_release 0 preview_close_release
+  Call CheckPreviewCloseTarget
+  StrCmp $4 1 0 preview_close_again
+  StrCmp $R4 0 preview_close_release
+  StrCmp $R4 "error" preview_close_release
+  ; Capability probe has no side effect. Uncertain delivery does not fall back.
+  System::Call '$SYSDIR\user32.dll::SendMessageTimeoutW(p r0, i R4, p ${PREVIEW_EXIT_COOKIE}, p 1, i 0x23, i 1000, *p 0 R8) p.R7'
+  StrCmp $R7 0 preview_close_release
+  StrCmp $R7 "error" preview_close_release
+  Call CheckPreviewCloseTarget
+  StrCmp $4 1 0 preview_close_again
+  StrCmp $R8 ${PREVIEW_EXIT_COOKIE} preview_close_cooperative
+  StrCmp $R8 0x5355 preview_close_cooperative
+
+  ; A legacy hidden window can only Exit through its tray menu. A silent
+  ; update never asks an old preview to close because it may show a prompt.
+  IfSilent preview_close_release
+  System::Call '$SYSDIR\user32.dll::IsWindowVisible(p r0) i.r4'
+  StrCmp $4 1 0 preview_close_release
+  System::Call '$SYSDIR\user32.dll::AllowSetForegroundWindow(i r2) i.r4'
+  System::Call '$SYSDIR\user32.dll::IsIconic(p r0) i.r4'
+  ${If} $4 == 1
+    System::Call '$SYSDIR\user32.dll::ShowWindowAsync(p r0, i 9) i.r4' ; SW_RESTORE
+  ${EndIf}
+  Call CheckPreviewCloseTarget
+  StrCmp $4 1 0 preview_close_again
+  System::Call '$SYSDIR\user32.dll::SetForegroundWindow(p r0) i.r4'
+  DetailPrint "Asking the installed Snip Studio window to close."
+  ; WM_SYSCOMMAND / SC_CLOSE follows the normal title bar Close path.
+  System::Call '$SYSDIR\user32.dll::PostMessageW(p r0, i 0x0112, p 0xF060, p 0) i.r4'
+  StrCmp $4 1 0 preview_close_release
+  StrCpy $5 0 ; Acknowledge closure of this legacy window, then find the next.
+  Goto preview_close_wait
+
+preview_close_cooperative:
+  StrCpy $6 0
+  IfSilent 0 preview_close_send
+  StrCpy $6 2 ; New previews receive an idle-only request during silent setup.
+preview_close_send:
+  ${If} $6 == 0
+    System::Call '$SYSDIR\user32.dll::AllowSetForegroundWindow(i r2) i.r4'
+    DetailPrint "Waiting for the installed Snip Studio to exit."
+  ${EndIf}
+  Call CheckPreviewCloseTarget
+  StrCmp $4 1 0 preview_close_again
+  System::Call '$SYSDIR\user32.dll::SendMessageTimeoutW(p r0, i R4, p ${PREVIEW_EXIT_COOKIE}, p r6, i 0x23, i 1000, *p 0 R8) p.R7'
+  StrCmp $R7 0 preview_close_release
+  StrCmp $R7 "error" preview_close_release
+  StrCmp $R8 ${PREVIEW_EXIT_COOKIE} preview_close_accepted
+  StrCmp $R8 0x5355 preview_close_accepted preview_close_release
+preview_close_accepted:
+  StrCpy $5 1 ; A cooperative ACK only queues exit. Wait for the process.
+
+preview_close_wait:
+  System::Call '$SYSDIR\kernel32.dll::WaitForSingleObject(p r3, i 0) i.r4'
+  StrCmp $4 0 preview_close_again
+  StrCmp $4 258 0 preview_close_release
+  ${If} $5 == 0
+    System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 r6) i.r4'
+    StrCmp $6 $2 0 preview_close_again
+  ${EndIf}
+  System::Call '$SYSDIR\kernel32.dll::GetTickCount() i.r7'
+  IntOp $7 $7 - $PreviewCloseStarted
+  IntCmpU $7 ${PREVIEW_CLOSE_TIMEOUT_MS} preview_close_release 0 preview_close_release
+  Sleep 200
+  Goto preview_close_wait
+
+preview_close_again:
+  System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
+  System::Call '$SYSDIR\kernel32.dll::GetTickCount() i.r7'
+  IntOp $7 $7 - $PreviewCloseStarted
+  IntCmpU $7 ${PREVIEW_CLOSE_TIMEOUT_MS} preview_close_pending 0 preview_close_pending
+  Goto preview_close_find
+preview_close_release:
+  System::Call '$SYSDIR\kernel32.dll::CloseHandle(p r3) i.r4'
+preview_close_pending:
+  IfSilent preview_close_cancel
+  MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "The installed Snip Studio is still open.$\r$\n$\r$\n$PreviewCloseDetail$\r$\n$\r$\nChoose Retry after closing it, or Cancel to stop this update." /SD IDCANCEL IDRETRY preview_close_retry
+preview_close_cancel:
+  System::Store "l"
+  SetErrorLevel 3
+  Abort
+preview_close_done:
+  System::Store "l"
+FunctionEnd
+
+; Confirm process lifetime and HWND ownership again before each request. Inputs
+; are the installer-held process handle $3, its PID $2 and candidate HWND $0.
+Function CheckPreviewCloseTarget
+  System::Call '$SYSDIR\kernel32.dll::WaitForSingleObject(p r3, i 0) i.r4'
+  StrCmp $4 258 0 preview_target_invalid
+  System::Call '$SYSDIR\user32.dll::GetWindowThreadProcessId(p r0, *i 0 R6) i.r4'
+  StrCmp $4 0 preview_target_invalid
+  StrCmp $4 "error" preview_target_invalid
+  StrCmp $R6 $2 0 preview_target_invalid
+  StrCpy $4 1
+  Return
+preview_target_invalid:
+  StrCpy $4 0
+FunctionEnd
+
+; File probes remain authoritative before any installed bytes change. A lock
+; from a process outside this installation never triggers a close request.
 !macro DefinePreviewFileCheck Prefix
 Function ${Prefix}CheckInstalledFileAvailable
   Exch $0
   Push $1
+retry_available:
   IfFileExists "$0" 0 available
   System::Call 'kernel32::CreateFileW(w r0, i 0x40010000, i 7, p 0, i 3, i 0x80, p 0) p.r1'
   ${If} $1 == -1
     DetailPrint "File cannot be updated: $0"
-    IfSilent +2
-      MessageBox MB_OK|MB_ICONEXCLAMATION "A preview file is in use or cannot be changed.$\r$\n$\r$\nClose ${APP_NAME}, check folder permissions, and retry.$\r$\n$\r$\n$0"
+    IfSilent blocked_file
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION|MB_DEFBUTTON2 "A preview file is in use or cannot be changed.$\r$\n$\r$\nClose ${APP_NAME}, check folder permissions, and retry.$\r$\n$\r$\n$0" /SD IDCANCEL IDRETRY retry_available
+blocked_file:
     Pop $1
     Pop $0
     SetErrorLevel 2
@@ -221,6 +423,8 @@ FunctionEnd
 Section "${APP_NAME} (required)" MainApplication
   SectionIn RO
   Call CheckPreviewDestination
+  Call CloseInstalledPreviewForUpdate
+  Call CheckInstalledPreviewFiles
   SetShellVarContext current
   SetRegView 64
   SetOutPath "$INSTDIR"

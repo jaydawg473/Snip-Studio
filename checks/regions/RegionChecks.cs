@@ -133,7 +133,7 @@ internal static class RegionChecks
             Check(result.Lines.Count == 2,"standalone proven icon pseudo-line removed");
             result=Seed(image,"@",true,false,false,1);
             RecognizedTextRegions.Refine(result,image);
-            Check(result.Text.StartsWith("@ "),"isolated compact symbol retained without repeated-row evidence");
+            Check(!result.Text.StartsWith("@ "),"isolated folded document outline is excluded without repeated rows");
             result=Seed(image,"@",false,false,false,3);
             string genuine=result.Text;
             RecognizedTextRegions.Refine(result,image);

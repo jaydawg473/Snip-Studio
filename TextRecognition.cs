@@ -50,6 +50,9 @@ namespace SnipStudio
         public double? TextAngle { get; set; }
         public bool WasResized { get; set; }
         public List<TextLineRegion> Lines { get; private set; }
+        // Standalone icon lines can be dropped from editable text. Keep their
+        // positions regardless, including when OCR recovery merges other rows.
+        internal List<RectangleF> ProtectedGraphics { get; private set; }
 
         public TextRecognitionResult()
         {
@@ -58,6 +61,7 @@ namespace SnipStudio
             Language = "";
             RecoveryRawText = "";
             Lines = new List<TextLineRegion>();
+            ProtectedGraphics = new List<RectangleF>();
         }
     }
 
@@ -152,6 +156,7 @@ namespace SnipStudio
                         recognition.RecoveryPasses++;
                         recognition.RecoveryRawText = native.RawText ?? "";
                         RecognizedTextRegions.Refine(native, snapshot);
+                        KeepProtectedGraphics(recognition, native);
                         RecognizedTextRecovery.MergeMissing(recognition, native, sourceBounds, budget.Token);
                         // Repeated proven icons can make Windows omit an entire
                         // neighboring row. One measured original-size retry
@@ -165,8 +170,13 @@ namespace SnipStudio
                             recognition.RecoveryPasses++;
                             recognition.RecoveryRawText += Environment.NewLine + (pane.RawText ?? "");
                             RecognizedTextRegions.Refine(pane, snapshot);
+                            KeepProtectedGraphics(recognition, pane);
                             RecognizedTextRecovery.MergeMissing(recognition, pane, sourceBounds, budget.Token);
                         }
+                        // Recovery may supply an icon guess in an already
+                        // protected location. Reconcile the final editable rows
+                        // with the same raster checks, leaving both raw passes intact.
+                        RecognizedTextRegions.Refine(recognition, snapshot);
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                 }
@@ -184,6 +194,15 @@ namespace SnipStudio
             if (recognition.TextAngle.HasValue && Math.Abs(recognition.TextAngle.Value) > 2)
                 recognition.Message += " Angled text may need freehand highlighting.";
             return recognition;
+        }
+
+        private static void KeepProtectedGraphics(TextRecognitionResult target, TextRecognitionResult source)
+        {
+            foreach (RectangleF bounds in source.ProtectedGraphics)
+            {
+                if (target.ProtectedGraphics.Count >= 512) break;
+                if (!target.ProtectedGraphics.Contains(bounds)) target.ProtectedGraphics.Add(bounds);
+            }
         }
 
         private static async Task<TextRecognitionResult> RecognizePassAsync(OcrEngine engine, Bitmap snapshot,

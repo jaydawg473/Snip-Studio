@@ -1,4 +1,5 @@
 using Microsoft.UI.Windowing;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.Storage.Pickers;
@@ -14,6 +15,7 @@ public sealed partial class MainWindow
     private static readonly HashSet<RecordingWindow> allRecordingWindows = [];
     private static MainWindow? desktopOwner;
     private static bool applicationExitPending;
+    private static bool installerExitQueued;
     private readonly DesktopPreferencesStore preferencesStore = new();
     private DesktopPreferences preferences = new();
     private DesktopIntegrationService? desktopIntegration;
@@ -531,28 +533,66 @@ public sealed partial class MainWindow
         }
     }
 
-    private async Task RequestApplicationExitAsync()
+    internal static bool QueueInstallerExit(DispatcherQueue dispatcher, bool silent)
     {
-        if (applicationExitPending) return;
+        if (applicationExitPending || installerExitQueued) return true;
+        if (silent && !CanExitWithoutPrompt()) return false;
+        installerExitQueued = dispatcher.TryEnqueue(async () =>
+        {
+            MainWindow? editor = editorWindows.FirstOrDefault(window => !window.closed);
+            try { await RequestApplicationExitAsync(editor, silent); }
+            catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+            {
+                if (editor is { closed: false }) editor.ReportUnexpectedFailure(exception);
+            }
+            finally { installerExitQueued = false; }
+        });
+        return installerExitQueued;
+    }
+
+    private static bool CanExitWithoutPrompt() =>
+        editorWindows.All(editor => editor.closed || (!editor.busy && !editor.closePending &&
+            !editor.session.IsDirty && !editor.Viewport.IsTextEditing)) &&
+        allRecordingWindows.All(recording => recording.IsClosed || recording.CanCloseWithoutPrompt);
+
+    private Task RequestApplicationExitAsync() => RequestApplicationExitAsync(this, silent: false);
+
+    private static async Task RequestApplicationExitAsync(MainWindow? initiator, bool silent)
+    {
+        if (applicationExitPending || silent && !CanExitWithoutPrompt()) return;
         MainWindow[] editors = editorWindows.Where(editor => !editor.closed).ToArray();
-        if (editors.Any(editor => editor.busy || editor.closePending)) { desktopIntegration?.RestoreWindow(); SetStatus("Finish or cancel the current action before exiting Snip Studio."); return; }
+        if (editors.Any(editor => editor.busy || editor.closePending))
+        {
+            initiator?.desktopIntegration?.RestoreWindow();
+            initiator?.SetStatus("Finish or cancel the current action before exiting Snip Studio.");
+            return;
+        }
         applicationExitPending = true;
         foreach (MainWindow editor in editors) editor.UpdateCommands();
         try
         {
             foreach (RecordingWindow recording in allRecordingWindows.Where(window => !window.IsClosed).ToArray())
-                if (!await recording.RequestCloseAsync()) return;
+                if (!await recording.RequestCloseAsync(silent)) return;
             var reviewed = new List<(MainWindow Editor, long Revision, TextEditDraft? Draft)>();
             foreach (MainWindow editor in editors)
             {
-                editor.AppWindow.Show(); editor.Activate();
-                bool confirmed = await editor.RunActionAsync("Review changes before exiting…", editor.ConfirmReplaceAsync, commitDraft: false);
-                if (!confirmed) return;
+                if (editor.closed) continue;
+                if (editor.session.IsDirty || editor.Viewport.IsTextEditing)
+                {
+                    if (silent) return;
+                    editor.AppWindow.Show();
+                    if (editor.AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
+                    editor.Activate();
+                    bool confirmed = await editor.RunActionAsync("Review changes before exiting…", editor.ConfirmReplaceAsync, commitDraft: false);
+                    if (!confirmed) return;
+                }
                 reviewed.Add((editor, editor.session.Revision, editor.Viewport.CaptureTextDraft()));
             }
-            if (reviewed.Any(item => item.Editor.busy || item.Editor.closePending || item.Editor.Viewport.CaptureTextDraft() != item.Draft || item.Editor.session.Revision != item.Revision))
-            { SetStatus("An editor changed while exit was being reviewed. Your windows are kept; review them before exiting again."); return; }
-            foreach (MainWindow editor in editors) { editor.explicitExit = true; editor.allowClose = true; editor.Close(); }
+            if (reviewed.Any(item => !item.Editor.closed && (item.Editor.busy || item.Editor.closePending ||
+                item.Editor.Viewport.CaptureTextDraft() != item.Draft || item.Editor.session.Revision != item.Revision)))
+            { initiator?.SetStatus("An editor changed while exit was being reviewed. Your windows are kept; review them before exiting again."); return; }
+            foreach (MainWindow editor in editors.Where(editor => !editor.closed))
+            { editor.explicitExit = true; editor.allowClose = true; editor.Close(); }
         }
         finally
         {

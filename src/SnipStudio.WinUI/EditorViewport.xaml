@@ -8,6 +8,7 @@
     <Grid x:Name="Host"
           Background="{ThemeResource StudioCanvasBrush}"
           SizeChanged="OnViewportSizeChanged"
+          LayoutUpdated="OnViewportLayoutUpdated"
           Loaded="OnViewportLoaded"
           Unloaded="OnViewportUnloaded"
           PointerPressed="OnPointerPressed"

@@ -86,6 +86,7 @@ public sealed class OcrSnapshot
             Language = Language, Message = Message, TextAngle = TextAngle,
             RecoveryPasses = RecoveryPasses, WasResized = WasResized
         };
+        native.ProtectedGraphics.AddRange(result.ProtectedGraphics);
         var lines = new List<OcrLineSnapshot>(result.Lines.Count);
         foreach (var source in result.Lines)
         {

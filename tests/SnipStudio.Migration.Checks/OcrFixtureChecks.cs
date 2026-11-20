@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Drawing.Text;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -34,6 +35,8 @@ internal static partial class Program
         Directory.CreateDirectory(output);
         var fixtures = new List<object>();
         object? lineEdit = null;
+        bool iconRasterPassed = false;
+        bool sourcePixelPlacementPassed = false;
         bool passed = false;
         string? failure = null;
         Stopwatch clock = Stopwatch.StartNew();
@@ -55,6 +58,10 @@ internal static partial class Program
                 if (new FileInfo(item.InputPath).Length is < 1 or > 128L * 1024 * 1024)
                     throw new ArgumentException("A fixture is empty or exceeds 128 MB.");
             }
+            CheckDocumentIconRaster();
+            iconRasterPassed = true;
+            CheckFractionalOcrSourcePixels();
+            sourcePixelPlacementPassed = true;
             lineEdit = context.RunWithResult(CheckRecognizedLineDraftAsync());
             bool allPassed = true;
             for (int index = 0; index < manifest.Fixtures.Count; index++)
@@ -91,6 +98,8 @@ internal static partial class Program
                 ElapsedMilliseconds = clock.Elapsed.TotalMilliseconds,
                 Scope = "Real installed Windows OCR on one generated source-line draft and explicitly supplied local image fixtures. Checks cover draft/apply/Undo, exact ordinal lines, public OCR selection, source-style conversion/render and Undo/Redo. No desktop capture, WinUI Text-tool activation or native pointer/clipboard acceptance. Extraction mismatches remain unchanged and are recorded, never guessed or corrected.",
                 RecognizedLineDraft = lineEdit,
+                IconRasterPassed = iconRasterPassed,
+                SourcePixelPlacementPassed = sourcePixelPlacementPassed,
                 Fixtures = fixtures,
                 Failure = failure
             };
@@ -102,6 +111,57 @@ internal static partial class Program
     }
 
     private sealed record OcrFixtureOutcome(bool Passed, bool StopAfterNativeTimeout, object Evidence);
+
+    private static void CheckDocumentIconRaster()
+    {
+        using var image = new Bitmap(200, 94, PixelFormat.Format32bppArgb);
+        string[] iconPixels = [".########...", "#........#..", "#.........#.", "#..........#",
+            "#....#.....#", "#...#.#....#", "#...###....#", "#...###....#", "#...#.####.#",
+            "#.######.#.#", "#.#.#..###.#", "#..##......#", "#..........#", "#..........#", ".##########."];
+        using (Graphics graphics = Graphics.FromImage(image))
+        using (var font = new Font("Segoe UI", 13, FontStyle.Regular, GraphicsUnit.Pixel))
+        {
+            graphics.Clear(Color.White);
+            for (int y = 0; y < iconPixels.Length; y++)
+                for (int x = 0; x < iconPixels[y].Length; x++)
+                    if (iconPixels[y][x] == '#') graphics.FillRectangle(Brushes.Red, 12 + x, 10 + y, 1, 1);
+            graphics.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
+            graphics.DrawString("00042_Aa.pdf", font, Brushes.Black, 29, 10);
+            graphics.DrawString("@ A1", font, Brushes.Red, 11, 47);
+        }
+
+        static global::SnipStudio.TextLineRegion Line(string text, params (string Text, RectangleF Bounds)[] words)
+        {
+            var line = new global::SnipStudio.TextLineRegion { Text = text };
+            foreach ((string value, RectangleF bounds) in words)
+            {
+                line.Words.Add(new global::SnipStudio.TextWordRegion { Text = value, Bounds = bounds });
+                line.Bounds = line.Bounds.IsEmpty ? bounds : RectangleF.Union(line.Bounds, bounds);
+            }
+            return line;
+        }
+
+        // Seed native geometry so the tests exercise the exact boundary case
+        // independent of Windows OCR language-pack and version differences.
+        var refine = typeof(EditorSession).Assembly.GetType("SnipStudio.RecognizedTextRegions", throwOnError: true)!
+            .GetMethod("Refine", BindingFlags.Static | BindingFlags.NonPublic)!;
+        const string raw = "@ 00042_Aa.pdf\n@ A1";
+        var merged = new global::SnipStudio.TextRecognitionResult { Available = true, Text = raw };
+        merged.Lines.Add(Line("@ 00042_Aa.pdf", ("@", new RectangleF(12.5f, 11, 11, 13)),
+            ("00042_Aa.pdf", new RectangleF(30, 13, 82, 13))));
+        merged.Lines.Add(Line("@ A1", ("@", new RectangleF(12, 49, 12, 13)), ("A1", new RectangleF(26, 49, 15, 13))));
+        refine.Invoke(null, [merged, image]);
+        Check(merged.RawText == raw && merged.Lines.Select(line => line.Text).SequenceEqual(["00042_Aa.pdf", "@ A1"]),
+            "An isolated folded document is excluded without altering genuine punctuation, identifiers or raw OCR");
+        Check(merged.Lines[0].Words.Count == 1 && merged.Lines[0].ExcludedGraphicBounds == new RectangleF(12, 10, 12, 15),
+            "The icon and its padded raster bounds are kept outside the selectable filename");
+
+        var standalone = new global::SnipStudio.TextRecognitionResult { Available = true, Text = "@" };
+        standalone.Lines.Add(Line("@", ("@", new RectangleF(12, 10, 12, 15))));
+        refine.Invoke(null, [standalone, image]);
+        Check(standalone.Lines.Count == 0 && standalone.Text.Length == 0 && standalone.RawText == "@" &&
+            image.GetPixel(12, 13).ToArgb() == Color.Red.ToArgb(), "A standalone icon cannot be converted and its source pixels are untouched");
+    }
 
     private static async Task<object> CheckRecognizedLineDraftAsync()
     {
@@ -126,6 +186,7 @@ internal static partial class Program
         OcrLineEditSnapshot draft = await session.PrepareRecognizedLineEditAsync(recognized, line.Index, matchingBudget.Token);
         Check(draft.ExistingAnnotationIndex < 0 && draft.Text == line.Text && draft.Mask.Width > 0,
             "Preparing a raster text draft keeps the original recognized string and its source mask");
+        Check(IsSourcePixel(draft.Location), "The in-place OCR draft starts on the source-pixel grid");
         Check(session.Revision == revision && !session.CanUndo && session.AnnotationCount == 0 &&
             PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original),
             "Opening a recognized draft leaves pixels, revision and Undo unchanged");
@@ -141,13 +202,35 @@ internal static partial class Program
         var note = session.GetAnnotation(edited)?.Text;
         Check(note is { Text: replacement, Argb: color, FontSize: fontSize } && session.CanUndo,
             "Applying a changed recognized draft keeps its exact text, color and size");
+        Check(note != null && IsSourcePixel(note.Location), "Applying recognized text keeps whole-pixel placement in the exported image");
         Expect<InvalidOperationException>(() => session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize),
             "A committed source draft cannot modify a newer revision again");
         session.Undo();
         Check(session.Revision == revision && session.AnnotationCount == 0 && !session.CanUndo &&
             PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original),
             "One Undo restores the original image and all pre-draft history");
-        return new { Passed = true, OriginalLine = line.Text, EditedText = replacement, UndoRestoredOriginalPixels = true };
+        return new { Passed = true, OriginalLine = line.Text, EditedText = replacement, UndoRestoredOriginalPixels = true, AlignedToSourcePixels = true };
+    }
+
+    private static bool IsSourcePixel(ImagePoint point) => point.X == Math.Truncate(point.X) && point.Y == Math.Truncate(point.Y);
+
+    private static void CheckFractionalOcrSourcePixels()
+    {
+        Type backend = typeof(EditorSession);
+        var enclose = backend.GetMethod("EncloseSourcePixels", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var sample = (Rectangle)enclose.Invoke(null, [new RectangleF(10.25f, 11.75f, 8.5f, 5.5f)])!;
+        Check(sample == Rectangle.FromLTRB(10, 11, 19, 18), "Style samples include both partially covered source edges");
+
+        var align = backend.GetMethod("TryAlignOcrInk", BindingFlags.Static | BindingFlags.NonPublic)!;
+        RectangleF ink = new(2, 3, 9, 6);
+        object[] open = [new PointF(10.25f, 11.75f), new RectangleF(2, 3, 30, 22), ink, PointF.Empty];
+        Check(align.Invoke(null, open) is true && (PointF)open[3] == new PointF(8, 9),
+            "Fractional OCR ink snaps to the nearest original pixel without shifting the glyph bitmap");
+        object[] tight = [new PointF(10.5f, 11.5f), new RectangleF(2, 3, 17, 14), ink, PointF.Empty];
+        Check(align.Invoke(null, tight) is true && (PointF)tight[3] == new PointF(8, 8),
+            "When a protected right or bottom edge blocks a rounding tie, use the other nearest pixel");
+        tight[0] = new PointF(10.625f, 11.625f);
+        Check(align.Invoke(null, tight) is false, "Do not relocate ink by more than a half-pixel to evade protection");
     }
 
     private static async Task<OcrFixtureOutcome> CheckOcrFixtureAsync(OcrFixtureInput fixture, string output, int index)
@@ -161,7 +244,7 @@ internal static partial class Program
         OcrConversionResult? conversion = null;
         string[] actualLines = Array.Empty<string>(), annotationText = Array.Empty<string>();
         string[] missing = Array.Empty<string>(), unexpected = Array.Empty<string>();
-        bool exactOrder = false, selectionIndicesMatch = false, undoPixelsMatch = false, redoPixelsMatch = false, convertedTextMatches = false;
+        bool exactOrder = false, selectionIndicesMatch = false, undoPixelsMatch = false, redoPixelsMatch = false, convertedTextMatches = false, convertedTextAligned = false;
         double recognitionMilliseconds = 0, conversionMilliseconds = 0, renderMilliseconds = 0;
         int width = 0, height = 0;
         long originalRevision = 0;
@@ -203,7 +286,9 @@ internal static partial class Program
             try { conversion = await session.ConvertRecognizedTextAsync(recognized, cancellationToken: conversionCancellation.Token); }
             finally { step.Stop(); conversionMilliseconds = step.Elapsed.TotalMilliseconds; }
             if (!conversion.Applied) throw new InvalidOperationException("Conversion was not applied: " + conversion.Message);
-            annotationText = session.GetAnnotations().Where(item => item.Text is not null).Select(item => item.Text!.Text).ToArray();
+            var notes = session.GetAnnotations().Where(item => item.Text is not null).Select(item => item.Text!).ToArray();
+            annotationText = notes.Select(note => note.Text).ToArray();
+            convertedTextAligned = notes.Length > 0 && notes.All(note => IsSourcePixel(note.Location));
             convertedTextMatches = annotationText.SequenceEqual(actualLines.Where(value => !string.IsNullOrWhiteSpace(value)), StringComparer.Ordinal);
             step.Restart();
             byte[] converted = (await session.RenderPreviewAsync()).PngBytes;
@@ -215,7 +300,7 @@ internal static partial class Program
                 PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original);
             session.Redo();
             redoPixelsMatch = PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(converted);
-            passed = exactOrder && selectionIndicesMatch && convertedTextMatches && undoPixelsMatch && redoPixelsMatch;
+            passed = exactOrder && selectionIndicesMatch && convertedTextMatches && convertedTextAligned && undoPixelsMatch && redoPixelsMatch;
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
         {
@@ -250,6 +335,7 @@ internal static partial class Program
             Conversion = conversion,
             ConvertedAnnotationText = annotationText,
             ConvertedTextExactlyPreservedInOrder = convertedTextMatches,
+            ConvertedTextAlignedToSourcePixels = convertedTextAligned,
             UndoRestoredOriginalPixelsAndRevision = undoPixelsMatch,
             RedoRestoredConvertedPixels = redoPixelsMatch,
             RecognitionMilliseconds = recognitionMilliseconds,

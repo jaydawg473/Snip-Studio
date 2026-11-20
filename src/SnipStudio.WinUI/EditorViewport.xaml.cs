@@ -319,6 +319,21 @@ public sealed partial class EditorViewport : UserControl
     private void OnXamlRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateViewport();
     private void OnViewportSizeChanged(object sender, SizeChangedEventArgs args) => UpdateViewport();
 
+    private void OnViewportLayoutUpdated(object? sender, object args)
+    {
+        if (!view.HasImage || !view.UsesNativePixels || !UpdateRasterRootOffset()) return;
+        CancelGesture();
+        UpdateScene();
+    }
+
+    private bool UpdateRasterRootOffset()
+    {
+        if (!Host.IsLoaded || XamlRoot?.Content is not UIElement root) return false;
+        Point offset = Host.TransformToVisual(root).TransformPoint(new Point(0, 0));
+        return double.IsFinite(offset.X) && double.IsFinite(offset.Y) &&
+            view.SetRasterRootOffset(new CanvasPoint(offset.X, offset.Y));
+    }
+
     private void UpdateViewport()
     {
         CancelGesture();
@@ -332,12 +347,17 @@ public sealed partial class EditorViewport : UserControl
     {
         if (view.HasImage)
         {
-            // The one-DIP frame sits outside the source image; pointer coordinates
-            // and the image itself share precisely the same origin.
-            Canvas.SetLeft(ImageFrame, view.Origin.X - 1);
-            Canvas.SetTop(ImageFrame, view.Origin.Y - 1);
-            ImageFrame.Width = view.DisplayWidth + 2;
-            ImageFrame.Height = view.DisplayHeight + 2;
+            if (view.UsesNativePixels) UpdateRasterRootOffset();
+            // At actual size, both the image and its one-device-pixel frame
+            // start on the raster grid. Overlays and pointer mapping use the
+            // same snapped image origin as the inner edge of the frame.
+            CanvasPoint origin = view.DisplayOrigin;
+            double frame = view.FrameThickness;
+            Canvas.SetLeft(ImageFrame, origin.X - frame);
+            Canvas.SetTop(ImageFrame, origin.Y - frame);
+            ImageFrame.BorderThickness = new Thickness(frame);
+            ImageFrame.Width = view.DisplayWidth + 2 * frame;
+            ImageFrame.Height = view.DisplayHeight + 2 * frame;
             Picture.Width = view.DisplayWidth;
             Picture.Height = view.DisplayHeight;
             if (selectionBounds is ImageRectangle bounds)

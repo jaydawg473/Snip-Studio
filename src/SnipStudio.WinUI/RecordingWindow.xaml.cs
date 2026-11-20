@@ -46,6 +46,7 @@ public sealed partial class RecordingWindow : Window
     public event EventHandler<string>? RecordingSaved;
     public bool IsRecording => recorder.IsActive;
     public bool IsClosed => closed;
+    internal bool CanCloseWithoutPrompt => !busy && !closePending && !recorder.IsActive && stopTask is null;
 
     private sealed class CandidateVideoOpen
     {
@@ -77,6 +78,7 @@ public sealed partial class RecordingWindow : Window
         AdvancedRecordingFlyout.Opening += (_, _) => UpdateRecordingOptionsBounds();
         AppWindow.Closing += OnClosing;
         Closed += OnClosed;
+        InstallerExitHook.Attach(this);
         RecordingRoot.Loaded += OnLoaded;
         recorder.StatusChanged += OnRecorderStatusChanged;
         durationTimer.Tick += (_, _) =>
@@ -1006,9 +1008,10 @@ public sealed partial class RecordingWindow : Window
     }
 
     /// <summary>Coordinates application Exit without bypassing active recording/file ownership.</summary>
-    public async Task<bool> RequestCloseAsync()
+    public async Task<bool> RequestCloseAsync(bool silent = false)
     {
         if (closed) return true;
+        if (silent && !CanCloseWithoutPrompt) return false;
         if (busy || closePending)
         {
             SetStatus("Finish or cancel the current file operation before closing.");

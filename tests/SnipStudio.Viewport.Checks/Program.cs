@@ -29,6 +29,7 @@ internal static class Program
         {
             Run("visible viewport reclaims closed and shorter tool rows", VisibleViewportExamples);
             Run("known physical-pixel and DIP mappings", KnownMappings);
+            Run("actual-size image, frame and input share the physical raster", NativeRasterAlignment);
             Run("Fit centers without upscaling across DPI and aspect ratios", FitMatrix);
             Run("large-image Fit can be below the manual zoom minimum", LargeImageFit);
             Run("zoom keeps the source pixel under its viewport anchor", AnchoredZoom);
@@ -145,6 +146,58 @@ internal static class Program
         }
     }
 
+    private static void NativeRasterAlignment()
+    {
+        foreach (double raster in new[] { 1d, 1.25, 1.5, 1.75, 2, 2.25, 3 })
+        {
+            CanvasPoint root = new(19.31, 87.17);
+            ViewportState view = Create(301, 169, 663.5, 414.25, raster);
+            view.SetRasterRootOffset(root);
+            Near(100, view.ZoomPercent, "Small image fits at actual size");
+            Check(view.IsFit, "Pixel alignment preserves Fit intent");
+            VerifyGrid(view, root);
+
+            // Changing a toolbar row can move the canvas within the XAML root
+            // without changing its width or height.
+            CanvasPoint previousOrigin = view.Origin;
+            CanvasPoint previousDisplayOrigin = view.DisplayOrigin;
+            root = new(19.27, 106.83);
+            Check(view.SetRasterRootOffset(root) && view.DisplayOrigin != previousDisplayOrigin,
+                "A moved canvas gets a new aligned local origin");
+            Point(previousOrigin, view.Origin, "Raster movement does not change the logical view");
+            Check(!view.SetRasterRootOffset(root), "An unchanged layout does not require repainting");
+            VerifyGrid(view, root);
+
+            view.ZoomTo(87, view.Center);
+            Check(!view.UsesNativePixels, "A different zoom keeps normal subpixel placement");
+            Point(view.Origin, view.DisplayOrigin, "Other zoom levels are not snapped");
+            Near(1, view.FrameThickness, "Other zoom levels keep the one-DIP border");
+            view.ZoomTo(100, view.Center);
+            Check(!view.IsFit, "Explicit actual size remains a manual view");
+            VerifyGrid(view, root);
+        }
+
+        static void VerifyGrid(ViewportState view, CanvasPoint root)
+        {
+            double raster = view.RasterizationScale;
+            CanvasPoint first = view.ViewportAt(new(0, 0));
+            CanvasPoint last = view.ViewportAt(new(view.ImageWidth, view.ImageHeight));
+            double x = (first.X + root.X) * raster;
+            double y = (first.Y + root.Y) * raster;
+            Near(Math.Round(x), x, "The image starts on a horizontal device pixel");
+            Near(Math.Round(y), y, "The image starts on a vertical device pixel");
+            Near(view.ImageWidth, (last.X - first.X) * raster, "The image width is an exact device-pixel count");
+            Near(view.ImageHeight, (last.Y - first.Y) * raster, "The image height is an exact device-pixel count");
+            Near(1, view.FrameThickness * raster, "The frame inset is exactly one device pixel");
+            Check(Math.Abs((first.X - view.Origin.X) * raster) <= .5 + 1e-9 &&
+                Math.Abs((first.Y - view.Origin.Y) * raster) <= .5 + 1e-9,
+                "The actual image stays within half a device pixel of the logical origin");
+            Check(view.Contains(first) && !view.Contains(new(first.X - .01, first.Y)),
+                "Pointer hit testing starts at the aligned image edge");
+            Point(new(17, 9), view.ImageAt(view.ViewportAt(new(17, 9))), "Overlays and pointer input agree on the same source pixel");
+        }
+    }
+
     private static void LargeImageFit()
     {
         ViewportState view = Create(32768, 2048, 256, 160, 1);
@@ -173,8 +226,21 @@ internal static class Program
             {
                 view.ZoomTo(zoom, anchor);
                 Near(zoom, view.ZoomPercent, "Requested manual zoom is retained");
-                Point(original, view.ImageAt(anchor), "Repeated zoom keeps the same source point under the cursor");
-                Point(anchor, view.ViewportAt(original), "Anchored source point renders at the cursor");
+                if (view.UsesNativePixels)
+                {
+                    CanvasPoint atCursor = view.ImageAt(anchor);
+                    CanvasPoint drawn = view.ViewportAt(original);
+                    Check(Math.Abs(atCursor.X - original.X) <= .5 + 1e-9 && Math.Abs(atCursor.Y - original.Y) <= .5 + 1e-9,
+                        "Actual-size pointer anchor stays within half a source pixel");
+                    Check(Math.Abs((drawn.X - anchor.X) * raster) <= .5 + 1e-9 &&
+                        Math.Abs((drawn.Y - anchor.Y) * raster) <= .5 + 1e-9,
+                        "Actual-size visual anchor stays within half a device pixel");
+                }
+                else
+                {
+                    Point(original, view.ImageAt(anchor), "Repeated zoom keeps the same source point under the cursor");
+                    Point(anchor, view.ViewportAt(original), "Anchored source point renders at the cursor");
+                }
                 Check(!view.IsFit, "Manual zoom does not silently refit");
             }
             view.ZoomTo(-100, anchor);
@@ -321,7 +387,13 @@ internal static class Program
     {
         Near(view.Origin.X, view.Width - view.Origin.X - view.DisplayWidth, label + " equal left/right gaps");
         Near(view.Origin.Y, view.Height - view.Origin.Y - view.DisplayHeight, label + " equal top/bottom gaps");
-        Point(view.Center, view.ViewportAt(new(view.ImageWidth / 2d, view.ImageHeight / 2d)), label + " image center at viewport center");
+        CanvasPoint drawnCenter = view.ViewportAt(new(view.ImageWidth / 2d, view.ImageHeight / 2d));
+        if (view.UsesNativePixels)
+            Check(Math.Abs((drawnCenter.X - view.Center.X) * view.RasterizationScale) <= .5 + 1e-9 &&
+                Math.Abs((drawnCenter.Y - view.Center.Y) * view.RasterizationScale) <= .5 + 1e-9,
+                label + " actual-size image center stays within half a device pixel");
+        else
+            Point(view.Center, drawnCenter, label + " image center at viewport center");
     }
 
     private static void CheckFinite(ViewportState view, string label)

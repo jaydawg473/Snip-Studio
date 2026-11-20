@@ -53,6 +53,7 @@ public sealed partial class MainWindow : Window
         SetTool(PreviewTool.Pen, revealOptions: false);
         InitializeDesktopIntegration();
         InitializeWindowSizing();
+        InstallerExitHook.Attach(this);
         Root.AddHandler(UIElement.PointerPressedEvent, new PointerEventHandler((_, _) => CancelPendingSnipResize()), true);
         Root.AddHandler(UIElement.PointerWheelChangedEvent, new PointerEventHandler((_, _) => CancelPendingSnipResize()), true);
         UpdateCommands();

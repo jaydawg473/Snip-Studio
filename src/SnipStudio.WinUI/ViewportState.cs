@@ -17,11 +17,30 @@ internal sealed class ViewportState
     internal double ZoomPercent { get; private set; } = 100;
     internal bool IsFit { get; private set; } = true;
     internal CanvasPoint Origin { get; private set; }
+    private CanvasPoint rasterRootOffset;
     internal bool HasImage => ImageWidth > 0 && ImageHeight > 0;
-    internal double Scale => ZoomPercent / 100 / RasterizationScale;
+    internal bool UsesNativePixels => Math.Abs(ZoomPercent - 100) < 1e-9;
+    internal double Scale => (UsesNativePixels ? 1 : ZoomPercent / 100) / RasterizationScale;
     internal double DisplayWidth => ImageWidth * Scale;
     internal double DisplayHeight => ImageHeight * Scale;
+    internal double FrameThickness => UsesNativePixels ? 1 / RasterizationScale : 1;
+    internal CanvasPoint DisplayOrigin => UsesNativePixels ? new(
+        AlignToRaster(Origin.X, rasterRootOffset.X), AlignToRaster(Origin.Y, rasterRootOffset.Y)) : Origin;
     internal CanvasPoint Center => new(Width / 2, Height / 2);
+
+    // Snap in root coordinates because the viewport itself may sit on a
+    // fractional DIP. Keep the mathematical origin for reversible zoom anchors.
+    private double AlignToRaster(double position, double offset) =>
+        Math.Round((position + offset) * RasterizationScale) / RasterizationScale - offset;
+
+    internal bool SetRasterRootOffset(CanvasPoint offset)
+    {
+        RequireFinite(offset.X, offset.Y);
+        if (rasterRootOffset == offset) return false;
+        CanvasPoint previous = DisplayOrigin;
+        rasterRootOffset = offset;
+        return previous != DisplayOrigin;
+    }
 
     internal void SetImage(int width, int height)
     {
@@ -37,7 +56,7 @@ internal sealed class ViewportState
         if (width < 0 || height < 0 || rasterizationScale <= 0)
             throw new ArgumentOutOfRangeException(nameof(width));
         if (Width == width && Height == height && RasterizationScale == rasterizationScale) return;
-        CanvasPoint anchor = ImageAt(Center);
+        CanvasPoint anchor = ImageAtOrigin(Center, Origin);
         Width = width;
         Height = height;
         RasterizationScale = rasterizationScale;
@@ -60,7 +79,7 @@ internal sealed class ViewportState
     internal void ZoomTo(double percent, CanvasPoint anchor)
     {
         RequireFinite(percent, anchor.X, anchor.Y);
-        CanvasPoint imageAnchor = ImageAt(anchor);
+        CanvasPoint imageAnchor = ImageAtOrigin(anchor, Origin);
         ZoomPercent = Math.Clamp(percent, MinimumZoom, MaximumZoom);
         IsFit = false;
         Origin = new(anchor.X - imageAnchor.X * Scale, anchor.Y - imageAnchor.Y * Scale);
@@ -87,18 +106,25 @@ internal sealed class ViewportState
     internal CanvasPoint ImageAt(CanvasPoint viewport)
     {
         RequireFinite(viewport.X, viewport.Y);
-        return new((viewport.X - Origin.X) / Scale, (viewport.Y - Origin.Y) / Scale);
+        return ImageAtOrigin(viewport, DisplayOrigin);
     }
+
+    private CanvasPoint ImageAtOrigin(CanvasPoint viewport, CanvasPoint origin) =>
+        new((viewport.X - origin.X) / Scale, (viewport.Y - origin.Y) / Scale);
 
     internal CanvasPoint ViewportAt(CanvasPoint image)
     {
         RequireFinite(image.X, image.Y);
-        return new(Origin.X + image.X * Scale, Origin.Y + image.Y * Scale);
+        CanvasPoint origin = DisplayOrigin;
+        return new(origin.X + image.X * Scale, origin.Y + image.Y * Scale);
     }
 
-    internal bool Contains(CanvasPoint viewport) => HasImage &&
-        viewport.X >= Origin.X && viewport.X <= Origin.X + DisplayWidth &&
-        viewport.Y >= Origin.Y && viewport.Y <= Origin.Y + DisplayHeight;
+    internal bool Contains(CanvasPoint viewport)
+    {
+        CanvasPoint origin = DisplayOrigin;
+        return HasImage && viewport.X >= origin.X && viewport.X <= origin.X + DisplayWidth &&
+            viewport.Y >= origin.Y && viewport.Y <= origin.Y + DisplayHeight;
+    }
 
     internal CanvasPoint ClampedImageAt(CanvasPoint viewport)
     {

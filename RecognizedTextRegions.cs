@@ -7,8 +7,8 @@ using System.Runtime.InteropServices;
 namespace SnipStudio
 {
     // Native OCR can read a folded-paper icon as "Z]" and include it in the
-    // text that would be erased/re-rendered. Refine only when raster evidence
-    // establishes a repeated graphical column. Ambiguous prefixes stay text.
+    // text that would be erased/re-rendered. Require either a distinct folded
+    // document outline or a proven graphical column. Ambiguous prefixes stay text.
     internal static class RecognizedTextRegions
     {
         private const int MaximumAnchors = 256;
@@ -48,7 +48,7 @@ namespace SnipStudio
                         graphic.Right < first.Left && first.Left - graphic.Right <= height * 1.8f)
                     {
                         anchors.Add(graphic);
-                        ProtectGraphic(line, graphic);
+                        ProtectGraphic(result, line, graphic);
                     }
                 }
 
@@ -79,21 +79,38 @@ namespace SnipStudio
                     TextWordRegion word = line.Words[0];
                     float height = line.Words.Count > 1 ? MedianHeight(line.Words, 1) : word.Bounds.Height / 1.4f;
                     RectangleF bounds = word.Bounds;
-                    if (!CompactPrefix(line, height, true) ||
-                        !ProvenColumn(bounds, anchors, height)) continue;
-                    examined++;
-                    Evidence evidence = pixels.Inspect(Rectangle.Ceiling(bounds));
+                    Evidence evidence = null;
+                    bool document = false;
+                    if (PotentialDocumentPrefix(line))
+                    {
+                        examined++;
+                        Rectangle probe = Rectangle.FromLTRB((int)Math.Floor(bounds.Left) - 2, (int)Math.Floor(bounds.Top) - 2,
+                            (int)Math.Ceiling(bounds.Right) + 2, (int)Math.Ceiling(bounds.Bottom) + 2);
+                        if (line.Words.Count > 1) probe.Width = Math.Min(probe.Right, (int)Math.Floor(line.Words[1].Bounds.Left)) - probe.Left;
+                        Evidence expanded = pixels.Inspect(probe);
+                        if (expanded.FoldedDocument && expanded.ColorBounds.IntersectsWith(Rectangle.Ceiling(bounds)))
+                        { document = true; evidence = expanded; }
+                    }
+                    // Keep the existing proven-column route even when this
+                    // token is ineligible for the independent outline check.
+                    if (!document)
+                    {
+                        if (!CompactPrefix(line, height, true) || !ProvenColumn(bounds, anchors, height)) continue;
+                        examined++;
+                        evidence = pixels.Inspect(Rectangle.Ceiling(bounds));
+                    }
                     bool symbols = false;
                     foreach (char character in word.Text)
                         if (!Char.IsLetterOrDigit(character) && !Char.IsWhiteSpace(character)) symbols = true;
                     // A monochrome N, part code or CJK character is not removed.
                     // Neutral folded-paper geometry also needs a punctuation-like
                     // OCR token; chromatic artwork supplies its own raster proof.
-                    if (!evidence.Multicolor && !evidence.ChromaticBoxContour && (!symbols || !evidence.PaperContour)) continue;
+                    if (!document && !evidence.Multicolor && !evidence.ChromaticBoxContour && (!symbols || !evidence.PaperContour)) continue;
+                    RectangleF graphic = document ? RectangleF.Union(bounds, evidence.ColorBounds) : bounds;
                     if (line.Words.Count == 1)
                     {
-                        if (!evidence.ChromaticBoxContour) continue;
-                        ProtectGraphic(line, bounds);
+                        if (!document && !evidence.ChromaticBoxContour) continue;
+                        ProtectGraphic(result, line, graphic);
                         line.Words.Clear();
                         line.Text = "";
                         line.Bounds = RectangleF.Empty;
@@ -102,7 +119,7 @@ namespace SnipStudio
                     }
                     string retained;
                     if (!TrySlice(line, 1, line.Words.Count, out retained)) continue;
-                    ProtectGraphic(line, bounds);
+                    ProtectGraphic(result, line, graphic);
                     line.Words.RemoveAt(0);
                     line.Text = retained;
                     RecomputeBounds(line);
@@ -133,10 +150,25 @@ namespace SnipStudio
             return next.Left > bounds.Right && next.Left - bounds.Right <= height * 2 && bounds.Top <= next.Top;
         }
 
-        private static void ProtectGraphic(TextLineRegion line, RectangleF graphic)
+        private static bool PotentialDocumentPrefix(TextLineRegion line)
+        {
+            TextWordRegion first = line.Words[0];
+            RectangleF bounds = first.Bounds;
+            if (String.IsNullOrEmpty(first.Text) || first.Text.Length > 3 ||
+                bounds.Height < 7 || bounds.Height > 96 || bounds.Width < 4 || bounds.Width > bounds.Height * 1.8f ||
+                Single.IsNaN(bounds.Left) || Single.IsInfinity(bounds.Left) ||
+                Single.IsNaN(bounds.Top) || Single.IsInfinity(bounds.Top) ||
+                Single.IsNaN(bounds.Width) || Single.IsNaN(bounds.Height)) return false;
+            foreach (char character in first.Text) if (character > 127) return false;
+            return line.Words.Count == 1 || line.Words[1].Bounds.Left >= bounds.Right;
+        }
+
+        private static void ProtectGraphic(TextRecognitionResult result, TextLineRegion line, RectangleF graphic)
         {
             line.ExcludedGraphicBounds = line.ExcludedGraphicBounds.IsEmpty ? graphic :
                 RectangleF.Union(line.ExcludedGraphicBounds, graphic);
+            if (result.ProtectedGraphics.Count < MaximumRasterChecks && !result.ProtectedGraphics.Contains(graphic))
+                result.ProtectedGraphics.Add(graphic);
         }
 
         private static bool ProvenColumn(RectangleF candidate, List<Rectangle> anchors, float textHeight)
@@ -237,7 +269,7 @@ namespace SnipStudio
         private sealed class Evidence
         {
             internal Rectangle ColorBounds;
-            internal bool Multicolor, PaperContour, ChromaticPaperContour, ChromaticBoxContour;
+            internal bool Multicolor, PaperContour, ChromaticPaperContour, ChromaticBoxContour, FoldedDocument;
         }
 
         private sealed class Pixels : IDisposable
@@ -256,7 +288,7 @@ namespace SnipStudio
                 Rectangle area = Rectangle.Intersect(new Rectangle(Point.Empty, bitmap.Size), requested);
                 if (area.Width < 2 || area.Height < 2 || area.Width > 256 || area.Height > 256) return result;
                 int[] hues = new int[12], columns = new int[area.Width], rows = new int[area.Height];
-                int[] colorColumns = new int[area.Width], colorRows = new int[area.Height];
+                int[] colorColumns = new int[area.Width], colorRows = new int[area.Height], colorRowRight = new int[area.Height];
                 int firstX = area.Right, firstY = area.Bottom, lastX = area.Left - 1, lastY = area.Top - 1, saturated = 0;
                 int background = Background(area);
                 int br = (background >> 16) & 255, bg = (background >> 8) & 255, bb = background & 255;
@@ -275,7 +307,7 @@ namespace SnipStudio
                         {
                             int hue = Math.Min(11, (int)(Color.FromArgb(r, g, b).GetHue() / 30));
                             hues[hue]++; saturated++;
-                            colorColumns[x]++; colorRows[y]++;
+                            colorColumns[x]++; colorRows[y]++; colorRowRight[y] = x;
                             firstX = Math.Min(firstX, area.Left + x); lastX = Math.Max(lastX, area.Left + x);
                             firstY = Math.Min(firstY, area.Top + y); lastY = Math.Max(lastY, area.Top + y);
                         }
@@ -315,8 +347,35 @@ namespace SnipStudio
                         colorColumns[inkLeft] >= ink.Height * .7 && colorColumns[inkRight] >= ink.Height * .6 &&
                         colorRows[inkTop] >= ink.Width * .6 && colorRows[inkBottom] >= ink.Width * .6;
                     result.ChromaticPaperContour = result.ChromaticBoxContour && ink.Height >= ink.Width * 1.05;
+                    // A one-off colored token is only suppressed when it has
+                    // the full rectangular sheet edges, the cut-away upper
+                    // corner and colored marks well inside the sheet. A red @,
+                    // an outline letter and ordinary punctuation do not qualify.
+                    int foldDepth = Math.Max(2, Math.Min(5, ink.Width / 3));
+                    int foldRow = Math.Min(inkBottom, inkTop + foldDepth);
+                    result.FoldedDocument = result.ChromaticPaperContour && ink.Width >= 9 && ink.Height >= 12 &&
+                        colorRowRight[inkTop] <= inkRight - 2 && colorRowRight[inkBottom] >= inkRight - 1 &&
+                        colorRowRight[foldRow] >= inkRight - 1 && HasInteriorMark(ink);
                 }
                 return result;
+            }
+
+            private bool HasInteriorMark(Rectangle ink)
+            {
+                int coloredRows = 0;
+                for (int y = ink.Top + 3; y < ink.Bottom - 3; y++)
+                {
+                    Marshal.Copy(IntPtr.Add(data.Scan0, checked(y * data.Stride + ink.Left * 4)), row, 0, ink.Width * 4);
+                    for (int x = 3; x < ink.Width - 3; x++)
+                    {
+                        int at = x * 4, r = row[at + 2], g = row[at + 1], b = row[at];
+                        int max = Math.Max(r, Math.Max(g, b)), min = Math.Min(r, Math.Min(g, b));
+                        if (row[at + 3] < 128 || max < 48 || max - min < 32 || (max - min) * 100 < max * 40) continue;
+                        if (++coloredRows >= 3) return true;
+                        break;
+                    }
+                }
+                return false;
             }
             private int Background(Rectangle area)
             {
