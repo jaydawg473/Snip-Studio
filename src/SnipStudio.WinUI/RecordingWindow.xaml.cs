@@ -3,6 +3,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.Windows.Storage.Pickers;
 using SnipStudio.WinUI.Backend;
+using Windows.ApplicationModel.DataTransfer;
 using Windows.Media.Core;
 using Windows.Media.Playback;
 using Windows.Storage;
@@ -41,12 +42,16 @@ public sealed partial class RecordingWindow : Window
     private readonly bool captureWorkflow;
     private long videoNoticeOpenToken;
     private string recordingFolder = "";
+    private bool autoCopyRecordingChanges = true;
+    private bool autoSaveOriginalRecordings = true;
+    private bool askSaveEditedRecordings = true;
+    private (int Generation, TimeSpan Start, TimeSpan End)? savedTrimRange;
     private XamlRoot? minimumSizingRoot;
     public event EventHandler<bool>? RecordingStateChanged;
     public event EventHandler<string>? RecordingSaved;
     public bool IsRecording => recorder.IsActive;
     public bool IsClosed => closed;
-    internal bool CanCloseWithoutPrompt => !busy && !closePending && !recorder.IsActive && stopTask is null;
+    internal bool CanCloseWithoutPrompt => !busy && !closePending && !recorder.IsActive && stopTask is null && !RequiresTrimConfirmation;
 
     private sealed class CandidateVideoOpen
     {
@@ -93,16 +98,26 @@ public sealed partial class RecordingWindow : Window
         UpdateCommands();
     }
 
-    public void ConfigureDefaults(bool microphone, bool systemAudio, string recordingFolder)
+    public void ConfigureDefaults(bool microphone, bool systemAudio, string recordingFolder,
+        string microphoneDeviceId = "", string systemAudioDeviceId = "", bool autoCopyRecordingChanges = true,
+        bool autoSaveOriginalRecordings = true, bool askSaveEditedRecordings = true)
     {
         if (closed || busy || recorder.IsActive) return;
-        MicrophoneCheck.IsChecked = microphone;
-        SystemAudioCheck.IsChecked = systemAudio;
         if (!string.IsNullOrWhiteSpace(recordingFolder) && !Path.IsPathFullyQualified(recordingFolder))
             throw new ArgumentException("Choose a full recording folder path in Settings.", nameof(recordingFolder));
         this.recordingFolder = string.IsNullOrWhiteSpace(recordingFolder) ? "" : Path.GetFullPath(recordingFolder);
+        this.autoCopyRecordingChanges = autoCopyRecordingChanges;
+        this.autoSaveOriginalRecordings = autoSaveOriginalRecordings;
+        this.askSaveEditedRecordings = askSaveEditedRecordings;
+        MicrophoneCheck.IsChecked = microphone;
+        SystemAudioCheck.IsChecked = systemAudio;
+        SeedAudioDevice(MicrophoneBox, microphoneDeviceId);
+        SeedAudioDevice(SystemAudioBox, systemAudioDeviceId);
         UpdateRecordingAudioTooltips();
     }
+
+    private static void SeedAudioDevice(ComboBox box, string deviceId) =>
+        FillDevices(box, box.Items.OfType<RecordingAudioDevice>().Where(device => device.Id.Length > 0).ToArray(), deviceId);
 
     private void PublishSaved(string path)
     {
@@ -112,6 +127,38 @@ public sealed partial class RecordingWindow : Window
             VideoNotice.Message = "The video was saved, but recent files could not be updated: " + exception.Message;
             VideoNotice.IsOpen = true;
         }
+    }
+
+    private async Task<bool> CopySavedRecordingAsync(string path)
+    {
+        PublishSaved(path);
+        if (!autoCopyRecordingChanges) return false;
+        try { return await CopyVideoFileAsync(path); }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            if (!closed)
+            {
+                VideoNotice.Title = "Video saved";
+                VideoNotice.Severity = InfoBarSeverity.Warning;
+                VideoNotice.Message = "The video was saved at " + path + ". Windows could not copy the file to the clipboard. " + exception.Message;
+                VideoNotice.IsOpen = true;
+            }
+            return false;
+        }
+    }
+
+    private async Task<bool> CopyVideoFileAsync(string path)
+    {
+        long intent = DesktopImageActions.BeginClipboardWrite();
+        StorageFile file = await StorageFile.GetFileFromPathAsync(path).AsTask().WaitAsync(TimeSpan.FromSeconds(8), lifetime.Token);
+        if (closed || !DesktopImageActions.IsCurrentClipboardWrite(intent)) return false;
+        var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+        data.Properties.Title = file.Name;
+        data.SetStorageItems(new[] { file }, true);
+        if (!Clipboard.SetContentWithOptions(data, new ClipboardContentOptions { IsAllowedInHistory = false, IsRoamable = false }))
+            throw new InvalidOperationException("Windows did not accept the clipboard file.");
+        Clipboard.Flush();
+        return true;
     }
 
     private async void OnLoaded(object sender, RoutedEventArgs args)
@@ -228,9 +275,9 @@ public sealed partial class RecordingWindow : Window
         {
             if (!closed)
             {
-                FillDevices(MicrophoneBox, Array.Empty<RecordingAudioDevice>(), "");
-                FillDevices(SystemAudioBox, Array.Empty<RecordingAudioDevice>(), "");
-                ShowError(exception.Message + " Windows default devices are still selectable; recording startup will report an unavailable source.");
+                FillDevices(MicrophoneBox, Array.Empty<RecordingAudioDevice>(), microphoneId);
+                FillDevices(SystemAudioBox, Array.Empty<RecordingAudioDevice>(), outputId);
+                ShowError(exception.Message + " Your audio selections are kept. Windows default devices remain selectable.");
             }
         }
         finally
@@ -263,17 +310,22 @@ public sealed partial class RecordingWindow : Window
         box.Items.Clear();
         box.Items.Add(new RecordingAudioDevice("", "Windows default"));
         foreach (var device in choices) box.Items.Add(device);
-        box.SelectedIndex = 0;
-        for (int index = 1; index < box.Items.Count; index++)
-            if (box.Items[index] is RecordingAudioDevice device && device.Id == selectedId) { box.SelectedIndex = index; break; }
+        if (string.IsNullOrEmpty(selectedId)) { box.SelectedIndex = 0; return; }
+        var selected = choices.FirstOrDefault(device => string.Equals(device.Id, selectedId, StringComparison.OrdinalIgnoreCase));
+        if (selected == null)
+        {
+            selected = new RecordingAudioDevice(selectedId, "Saved device (unavailable)");
+            box.Items.Add(selected);
+        }
+        box.SelectedItem = selected;
     }
 
     private async void OnStartRecordingClicked(object sender, RoutedEventArgs args)
     {
-        await RunAsync(captureWorkflow ? "Preparing the recording…" : "Choose where to save the recording…", async () =>
+        await RunAsync(autoSaveOriginalRecordings ? "Preparing the recording…" : "Choose where to save the recording…", async () =>
         {
             if (RegionBox.SelectedItem is not RecordingDisplay area) throw new InvalidOperationException("Choose a monitor or select an area first.");
-            string? path = captureWorkflow ? await PrepareAutomaticRecordingPathAsync()
+            string? path = autoSaveOriginalRecordings ? await PrepareAutomaticRecordingPathAsync()
                 : await ChooseSavePathAsync("Snip Studio recording " + DateTime.Now.ToString("yyyy-MM-dd HHmmss"), ".mp4", "MP4 video");
             if (path == null) { SetStatus("Recording canceled."); return; }
             if (captureWorkflow)
@@ -356,7 +408,7 @@ public sealed partial class RecordingWindow : Window
             if (completed != null)
             {
                 if (captureWorkflow) RecordingDestinationText.Text = "Saved to: " + completed;
-                PublishSaved(completed);
+                await CopySavedRecordingAsync(completed);
                 await LoadVideoAsync(completed);
             }
             else SetStatus("Recording stopped.");
@@ -395,10 +447,13 @@ public sealed partial class RecordingWindow : Window
     private async void OnOpenVideoClicked(object sender, RoutedEventArgs args) => await RunAsync("Choose a video…", async () =>
     {
         var picker = new FileOpenPicker(AppWindow.Id) { SuggestedStartLocation = PickerLocationId.VideosLibrary, CommitButtonText = "Open video" };
+        if (!string.IsNullOrWhiteSpace(recordingFolder)) picker.SuggestedFolder = recordingFolder;
         foreach (string extension in new[] { ".mp4", ".mov", ".wmv", ".avi", ".m4v" }) picker.FileTypeFilter.Add(extension);
         var chosen = await picker.PickSingleFileAsync();
-        if (chosen != null) await LoadVideoAsync(chosen.Path);
-        else SetStatus("Open canceled. The current video is kept.");
+        if (chosen == null) { SetStatus("Open canceled. The current video is kept."); return; }
+        if (!await ConfirmPendingTrimAsync("opening another video"))
+        { SetStatus("The current video and trim range are kept."); return; }
+        await LoadVideoAsync(chosen.Path);
     });
 
     private async Task LoadVideoAsync(string path, bool isTrimmedCopy = false)
@@ -687,6 +742,12 @@ public sealed partial class RecordingWindow : Window
 
     private async void OnCopyVideoClicked(object sender, RoutedEventArgs args) => await CopyVideoPathAsync(videoPath, selected: false);
     private async void OnCopySelectedVideoClicked(object sender, RoutedEventArgs args) => await CopyVideoPathAsync(candidateCopyPath, selected: true);
+    private async void OnCopyVideoFileClicked(object sender, RoutedEventArgs args) => await RunAsync("Copying the video file…", async () =>
+    {
+        if (videoPath != null && await CopyVideoFileAsync(videoPath))
+            SetStatus("Video file copied. Paste into a folder or an app that accepts files.");
+    });
+
     private Task CopyVideoPathAsync(string? sourcePath, bool selected) => RunAsync("Choose a filename for the " + (selected ? "selected file" : "current video") + " copy…", async () =>
     {
         if (sourcePath == null) return;
@@ -703,25 +764,61 @@ public sealed partial class RecordingWindow : Window
 
     private async void OnTrimVideoClicked(object sender, RoutedEventArgs args) => await RunAsync("Choose a filename for the trimmed copy…", async () =>
     {
-        if (videoPath is not { } original || metadata == null) return;
+        await SaveTrimmedCopyAsync(reviewCopy: true);
+    });
+
+    private bool RequiresTrimConfirmation => askSaveEditedRecordings && TryGetTrimRange(out var start, out var end) &&
+        (start != TimeSpan.Zero || end != metadata!.Duration) && savedTrimRange != (videoGeneration, start, end);
+
+    private async Task<bool> ConfirmPendingTrimAsync(string nextAction)
+    {
+        if (!RequiresTrimConfirmation) return true;
+        var dialog = new ContentDialog
+        {
+            XamlRoot = RecordingRoot.XamlRoot,
+            Title = "Save the selected trim?",
+            Content = "Save the selected range as a separate video before " + nextAction + ". Your original recording is kept.",
+            PrimaryButtonText = "Save trimmed copy",
+            SecondaryButtonText = "Discard range",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary
+        };
+        return (await dialog.ShowAsync()) switch
+        {
+            ContentDialogResult.Primary => await SaveTrimmedCopyAsync(reviewCopy: false),
+            ContentDialogResult.Secondary => true,
+            _ => false
+        };
+    }
+
+    private async Task<bool> SaveTrimmedCopyAsync(bool reviewCopy)
+    {
+        if (videoPath is not { } original || metadata == null) return false;
         if (!TryGetTrimRange(out var start, out var end))
             throw new ArgumentException("Choose an end after the start, within this video's duration.");
-        if (start == TimeSpan.Zero && end == metadata.Duration) { SetStatus("Choose a shorter range to trim. Use Save current video copy for the full clip."); return; }
+        if (start == TimeSpan.Zero && end == metadata.Duration) { SetStatus("Choose a shorter range to trim. Use Save current video copy for the full clip."); return false; }
         string? destination = await ChooseSavePathAsync(Path.GetFileNameWithoutExtension(original) + "-trimmed", ".mp4", "MP4 video");
-        if (destination == null) { SetStatus("Trim canceled."); return; }
+        if (destination == null) { SetStatus("Trim canceled."); return false; }
         ProtectTrimOriginal(destination);
         player?.Pause();
         SetStatus("Saving the exact trim range. Keep this window open until Windows finishes…");
         await VideoReviewService.TrimAsync(original, destination, start, end);
-        PublishSaved(destination);
+        savedTrimRange = (videoGeneration, start, end);
         trimOriginalPaths.Add(original);
+        bool copied = await CopySavedRecordingAsync(destination);
+        if (!reviewCopy)
+        {
+            SetStatus("Trimmed copy saved." + (copied ? " Video file copied." : ""));
+            return true;
+        }
         try { await LoadVideoAsync(destination, isTrimmedCopy: true); }
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
         {
             ShowError("The trimmed copy was saved at " + destination + ", but it could not be opened for review. The current clip is kept. " + exception.Message);
             SetStatus("Trimmed copy saved. The current clip is kept.");
         }
-    });
+        return true;
+    }
 
     private async void OnExportVideoClicked(object sender, RoutedEventArgs args) => await RunAsync("Choose a filename for the smaller MP4…", async () =>
     {
@@ -743,9 +840,10 @@ public sealed partial class RecordingWindow : Window
         SetStatus("Exporting a smaller MP4. Attachment size is an estimate; the final result is checked.");
         var result = await VideoReviewService.ExportAsync(videoPath, destination, metadata, preset,
             (int)Math.Clamp(double.IsFinite(TargetSizeBox.Value) ? TargetSizeBox.Value : 20, 1, 1000), operationCancellation.Token, progress);
-        PublishSaved(result.Path);
+        bool copied = await CopySavedRecordingAsync(result.Path);
         SetStatus($"Saved {Path.GetFileName(result.Path)} · {result.Bytes / 1000000.0:0.##} MB." +
-            (result.TargetMet ? "" : " The requested attachment target was exceeded; choose a larger target or trim the duration."));
+            (result.TargetMet ? "" : " The requested attachment target was exceeded; choose a larger target or trim the duration.") +
+            (copied ? " Video file copied." : ""));
     });
 
     private void ProtectTrimOriginal(string destination)
@@ -790,7 +888,7 @@ public sealed partial class RecordingWindow : Window
             string videos = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
             if (string.IsNullOrWhiteSpace(videos) || !Path.IsPathFullyQualified(videos))
                 throw new DirectoryNotFoundException("Windows did not provide a Videos folder. Choose a recording folder in Settings.");
-            folder = Path.Combine(videos, "Snip Studio WinUI3");
+            folder = Path.Combine(videos, "Screen Recordings");
         }
         if (!Path.IsPathFullyQualified(folder))
             throw new DirectoryNotFoundException("Choose a full recording folder path in Settings.");
@@ -889,7 +987,7 @@ public sealed partial class RecordingWindow : Window
         Title = active ? "Snip Studio — Recording" : hasVideo ? "Snip Studio — " + Path.GetFileName(videoPath) : "Snip Studio — Record video";
         PlaybackPanel.Visibility = ReviewOptionsPanel.Visibility = showReview ? Visibility.Visible : Visibility.Collapsed;
         CandidatePanel.Visibility = hasSelection ? Visibility.Visible : Visibility.Collapsed;
-        FilmstripPanel.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
+        FilmstripPanel.Visibility = VideoFileActions.Visibility = ExportRow.Visibility = VideoInfoText.Visibility = hasVideo ? Visibility.Visible : Visibility.Collapsed;
         TrimRow.Visibility = metadata == null ? Visibility.Collapsed : Visibility.Visible;
         VideoPlayer.AreTransportControlsEnabled = hasVideo;
         UpdateRecordingLayoutBounds(RecordingRoot.ActualHeight);
@@ -901,7 +999,7 @@ public sealed partial class RecordingWindow : Window
         MicrophoneBox.IsEnabled = SystemAudioBox.IsEnabled = !busy && !active && !audioLoading;
         RefreshAudioButton.IsEnabled = !busy && !active && !audioLoading;
         OpenVideoButton.IsEnabled = !busy && !active;
-        CopyVideoButton.IsEnabled = !busy && !active && videoPath != null;
+        CopyVideoButton.IsEnabled = CopyVideoFileButton.IsEnabled = !busy && !active && videoPath != null;
         CopySelectedVideoButton.IsEnabled = !busy && !active && candidateCopyPath != null;
         ExportVideoButton.IsEnabled = !busy && !active && videoPath != null && metadata != null;
         FilmstripInput.IsEnabled = TrimStartBox.IsEnabled = TrimEndBox.IsEnabled = SetStartButton.IsEnabled = SetEndButton.IsEnabled = FilmstripAvailable;
@@ -1002,7 +1100,7 @@ public sealed partial class RecordingWindow : Window
     private async void OnClosing(AppWindow sender, AppWindowClosingEventArgs args)
     {
         if (allowClose || closed) return;
-        if (!busy && !closePending && !recorder.IsActive && stopTask == null) return;
+        if (CanCloseWithoutPrompt) return;
         args.Cancel = true;
         await RequestCloseAsync();
     }
@@ -1034,6 +1132,14 @@ public sealed partial class RecordingWindow : Window
                 if (!await StopAndReviewAsync()) return false;
             }
             if (recorder.IsActive || stopTask != null || busy) return false;
+            if (RequiresTrimConfirmation)
+            {
+                if (AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
+                Activate();
+                bool readyToClose = false;
+                await RunAsync("Checking the selected trim…", async () => readyToClose = await ConfirmPendingTrimAsync("closing"));
+                if (!readyToClose) { SetStatus("The current video and trim range are kept."); return false; }
+            }
             allowClose = true;
             Close();
             try { return await closeCompletion.Task.WaitAsync(TimeSpan.FromSeconds(5)); }

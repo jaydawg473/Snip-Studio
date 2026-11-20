@@ -16,9 +16,10 @@ public sealed class DesktopIntegrationService : IDisposable
 {
     public const string CaptureShortcutLabel = "Ctrl+Alt+Shift+S";
     public const string RecordingShortcutLabel = "Ctrl+Alt+Shift+R";
+    public const string KeyboardSettingsUri = "ms-settings:easeofaccess-keyboard";
     private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     private const string StartupValue = "Snip Studio WinUI3 Preview - Automation Forge";
-    private const int CaptureHotkey = 0x5351, RecordingHotkey = 0x5352;
+    private const int CaptureHotkey = 0x5351, RecordingHotkey = 0x5352, PrintScreenHotkey = 0x5353;
     private const uint TrayMessage = 0x8000 + 105;
     private const nuint SubclassId = 0x53535733;
     private readonly int ownerThread = Environment.CurrentManagedThreadId;
@@ -26,7 +27,7 @@ public sealed class DesktopIntegrationService : IDisposable
     private readonly SubclassProc subclassProc;
     private readonly uint taskbarCreated;
     private nint icon;
-    private bool disposed, hotkeysEnabled, trayEnabled, trayAdded;
+    private bool disposed, hotkeysEnabled, printScreenEnabled, trayEnabled, trayAdded;
 
     public DesktopIntegrationService(nint windowHandle)
     {
@@ -47,6 +48,7 @@ public sealed class DesktopIntegrationService : IDisposable
     public event EventHandler? ExitRequested;
     public event EventHandler<DesktopIntegrationErrorEventArgs>? IntegrationFailed;
     public bool HotkeysEnabled { get { VerifyAccess(); return hotkeysEnabled; } }
+    public bool PrintScreenEnabled { get { VerifyAccess(); return printScreenEnabled; } }
     public bool TrayEnabled { get { VerifyAccess(); return trayEnabled; } }
 
     public void SetHotkeysEnabled(bool enabled)
@@ -72,6 +74,40 @@ public sealed class DesktopIntegrationService : IDisposable
             throw new Win32Exception(error, RecordingShortcutLabel + " is already in use. Global shortcuts were not enabled.");
         }
         hotkeysEnabled = true;
+    }
+
+    public void SetPrintScreenEnabled(bool enabled)
+    {
+        VerifyAccess();
+        if (enabled == printScreenEnabled) return;
+        if (!enabled)
+        {
+            UnregisterHotKey(hwnd, PrintScreenHotkey);
+            printScreenEnabled = false;
+            return;
+        }
+        const uint noRepeat = 0x4000;
+        const uint printScreenKey = 0x2C;
+        if (!RegisterHotKey(hwnd, PrintScreenHotkey, noRepeat, printScreenKey))
+            throw new Win32Exception(Marshal.GetLastWin32Error(), "Print Screen could not be registered. Check whether another capture app is using it, then retry.");
+        printScreenEnabled = true;
+    }
+
+    public string? GetPrintScreenSetupHint()
+    {
+        VerifyAccess();
+        if (!printScreenEnabled) return null;
+        try
+        {
+            // The OS shortcut can take this key while Snip Studio is in the
+            // background. Observe the same setting as the stable app.
+            using RegistryKey? keyboard = Registry.CurrentUser.OpenSubKey(@"Control Panel\Keyboard", writable: false);
+            if (keyboard?.GetValue("PrintScreenKeyForSnippingEnabled", null, RegistryValueOptions.DoNotExpandEnvironmentNames) is 0)
+                return null;
+        }
+        catch (Exception failure) when (failure is IOException or UnauthorizedAccessException or System.Security.SecurityException)
+        { /* Windows may still take the shortcut when the preference cannot be read. */ }
+        return "Windows may take Print Screen first. If it opens Snipping Tool, turn off its Print Screen shortcut in Windows keyboard settings.";
     }
 
     public void SetTrayEnabled(bool enabled)
@@ -187,10 +223,11 @@ public sealed class DesktopIntegrationService : IDisposable
     {
         try
         {
-            if (!disposed && message == 0x0312 && hotkeysEnabled) // WM_HOTKEY
+            if (!disposed && message == 0x0312) // WM_HOTKEY
             {
-                if ((int)wParam == CaptureHotkey) { Raise(CaptureRequested); return 0; }
-                if ((int)wParam == RecordingHotkey) { Raise(RecordingRequested); return 0; }
+                if ((hotkeysEnabled && (int)wParam == CaptureHotkey) || (printScreenEnabled && (int)wParam == PrintScreenHotkey))
+                { Raise(CaptureRequested); return 0; }
+                if (hotkeysEnabled && (int)wParam == RecordingHotkey) { Raise(RecordingRequested); return 0; }
             }
             if (!disposed && taskbarCreated != 0 && message == taskbarCreated && trayEnabled)
             {
@@ -287,7 +324,9 @@ public sealed class DesktopIntegrationService : IDisposable
     {
         UnregisterHotKey(hwnd, CaptureHotkey);
         UnregisterHotKey(hwnd, RecordingHotkey);
+        UnregisterHotKey(hwnd, PrintScreenHotkey);
         hotkeysEnabled = false;
+        printScreenEnabled = false;
         RemoveTrayIcon();
         trayEnabled = false;
         if (icon != 0) { DestroyIcon(icon); icon = 0; }

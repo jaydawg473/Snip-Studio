@@ -81,6 +81,8 @@ internal static partial class Program
 
     private static async Task CheckWorkflowsAsync(string output)
     {
+        CheckSavedCaptureBaseline();
+        completedGroups.Add("Autosave marks only the exact captured revision and rejects stale image identity");
         await CheckShapeSelectionAndMovementAsync();
         completedGroups.Add("Shape pixels, selection, movement and history");
         await CheckCropAndSourceRemovalAsync(output);
@@ -109,10 +111,34 @@ internal static partial class Program
         await CheckVideoCopyAsync(output);
         completedGroups.Add("Video-copy file transaction, exact bytes, cancellation and failure preservation (non-video fixture)");
         await CheckPreferencesAsync(output);
+        CheckLegacySettingsImport(output);
         completedGroups.Add("Settings stale per-field merges, parallel recent writes, recovery and unknown JSON preservation");
         PrepareSettingsWorkerFixture(output);
         await MeasureLargeImageWorkAsync(output);
         completedGroups.Add("Controlled large-image operation timings and sampled process memory");
+    }
+
+    private static void CheckSavedCaptureBaseline()
+    {
+        using EditorSession session = new();
+        byte[] source = CreateImage(160, 100);
+        session.OpenImageBytes(source);
+        var baseline = session.GetCaptureBaseline();
+        Check(session.IsDirty, "A new capture starts without a saved baseline");
+        Check(session.TryRecordSavedCapture(baseline) && !session.IsDirty && session.Revision == baseline.Revision,
+            "Completing the save of the exact original marks it clean without changing history");
+
+        session.OpenImageBytes(source);
+        baseline = session.GetCaptureBaseline();
+        Check(session.AddShape(AnnotationShape.Rectangle, new(20, 20), new(100, 70), 0xFFFF0000, 2),
+            "An annotation can be added while the original is saving");
+        long editedRevision = session.Revision;
+        Check(session.TryRecordSavedCapture(baseline) && session.IsDirty && session.Revision == editedRevision,
+            "The original still belongs to the edited capture and its newer changes stay dirty");
+
+        session.OpenImageBytes(source);
+        Check(!session.TryRecordSavedCapture(baseline) && session.IsDirty,
+            "Identical replacement bytes are a distinct document and cannot inherit a stale autosave");
     }
 
     private static async Task CheckShapeSelectionAndMovementAsync()

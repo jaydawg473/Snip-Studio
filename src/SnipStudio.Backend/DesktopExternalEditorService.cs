@@ -16,6 +16,37 @@ public static class DesktopExternalEditorService
     private const long MaximumRetainedBytes = 512L * 1024 * 1024;
     private static readonly SemaphoreSlim gate = new(1, 1);
 
+    public static async Task<string> ValidateConfiguredEditorPathAsync(string executablePath, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath)) return "";
+        string fullPath = GetEditorPath(executablePath.Trim());
+        if (!await gate.WaitAsync(0, cancellationToken))
+            throw new InvalidOperationException("The previous editor signature check is still finishing. Try again later.");
+        Task worker;
+        try
+        {
+            worker = Task.Run(() =>
+            {
+                try { DesktopExecutableTrust.VerifySignedTimestampedExecutable(fullPath); }
+                finally { gate.Release(); }
+            });
+        }
+        catch { gate.Release(); throw; }
+        try { await worker.WaitAsync(TimeSpan.FromSeconds(16), cancellationToken); }
+        catch (TimeoutException)
+        {
+            _ = ObserveLateTrustAsync(worker);
+            throw new TimeoutException("The editor signature check did not finish within 16 seconds. The editor selection was not saved.");
+        }
+        catch (OperationCanceledException)
+        {
+            // Native trust calls can finish after our cancel or timeout.
+            _ = ObserveLateTrustAsync(worker);
+            throw;
+        }
+        return fullPath;
+    }
+
     public static async Task<DesktopExternalEditorResult> OpenAsync(byte[] png, string executablePath, nint owner, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(png);
@@ -23,8 +54,7 @@ public static class DesktopExternalEditorService
         if (owner == 0) throw new ArgumentException("An editor window is required.", nameof(owner));
         if (png.Length is < 8 or > 128 * 1024 * 1024 || !png.AsSpan(0, 8).SequenceEqual(new byte[] { 137, 80, 78, 71, 13, 10, 26, 10 }))
             throw new ArgumentException("The external editor requires a PNG snapshot no larger than 128 MB.", nameof(png));
-        if (!Path.IsPathFullyQualified(executablePath) || !string.Equals(Path.GetExtension(executablePath), ".exe", StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Choose the external editor's absolute .exe path.", nameof(executablePath));
+        string fullPath = GetEditorPath(executablePath);
         if (!await gate.WaitAsync(0, cancellationToken))
             throw new InvalidOperationException("The previous editor signature check is still finishing. Try again later.");
         var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -37,7 +67,7 @@ public static class DesktopExternalEditorService
         {
             worker = Task.Run(() =>
             {
-                try { return OpenCore(frozen, executablePath, timeout.Token, launchState); }
+                try { return OpenCore(frozen, fullPath, timeout.Token, launchState); }
                 finally { gate.Release(); }
             });
         }
@@ -65,10 +95,17 @@ public static class DesktopExternalEditorService
         }
     }
 
-    private static DesktopExternalEditorResult OpenCore(byte[] png, string executablePath, CancellationToken cancellationToken, LaunchState launchState)
+    private static string GetEditorPath(string executablePath)
+    {
+        if (!Path.IsPathFullyQualified(executablePath) || !string.Equals(Path.GetExtension(executablePath), ".exe", StringComparison.OrdinalIgnoreCase) ||
+            executablePath.IndexOfAny(new[] { '"', '\r', '\n' }) >= 0)
+            throw new ArgumentException("Choose the external editor's absolute .exe path.", nameof(executablePath));
+        return Path.GetFullPath(executablePath);
+    }
+
+    private static DesktopExternalEditorResult OpenCore(byte[] png, string executable, CancellationToken cancellationToken, LaunchState launchState)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        string executable = Path.GetFullPath(executablePath);
         // Deny writes and replacement from signature verification through image
         // activation. Process.Start receives this exact path without a shell.
         using var executableLock = new FileStream(executable, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -120,9 +157,14 @@ public static class DesktopExternalEditorService
 
     private static async Task ObserveAndDisposeAsync(Task worker, CancellationTokenSource timeout)
     {
+        try { await ObserveLateTrustAsync(worker).ConfigureAwait(false); }
+        finally { timeout.Dispose(); }
+    }
+
+    private static async Task ObserveLateTrustAsync(Task worker)
+    {
         try { await worker.ConfigureAwait(false); }
         catch (Exception) { /* Observe a late native trust result after UI timeout. */ }
-        finally { timeout.Dispose(); }
     }
 
     private sealed class LaunchState { internal int Value; }

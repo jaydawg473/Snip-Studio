@@ -4,7 +4,6 @@ namespace SnipStudio.WinUI;
 
 public partial class App : Application
 {
-    private MainWindow? mainWindow;
     private bool startupCompleted;
 
     public App()
@@ -37,7 +36,7 @@ public partial class App : Application
         try
         {
             StartupDiagnostics.Stage("OnLaunched.MainWindow.constructor.begin");
-            mainWindow = new MainWindow();
+            var mainWindow = new MainWindow();
             StartupDiagnostics.Stage("OnLaunched.MainWindow.constructor.completed");
             mainWindow.Activate();
             StartupDiagnostics.Stage("OnLaunched.MainWindow.Activate.completed");

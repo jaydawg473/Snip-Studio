@@ -50,8 +50,10 @@ public sealed partial class EditorViewport : UserControl
     private IReadOnlyList<OcrBounds>? dragRecognizedBands;
     private OcrBounds? recognizedDraftMask;
     private TextEditDraft? textDraft;
+    private TextEditDraft? initialTextDraft;
+    private string initialNativeText = "";
+    private string initialNativeRtf = "";
     private bool loadingText;
-    private bool draftFormatChanged;
     private AnnotationSnapshot? selectedObject;
     private int transformHandle;
     private ImageRectangle proposedFrame;
@@ -79,8 +81,8 @@ public sealed partial class EditorViewport : UserControl
     internal bool TextCanUndo => IsTextEditing && InlineEditor.Document.CanUndo();
     internal bool TextCanRedo => IsTextEditing && InlineEditor.Document.CanRedo();
     internal string SelectedInlineText => IsTextEditing ? InlineEditor.Document.Selection.Text : "";
-    internal void UndoText() { if (TextCanUndo) InlineEditor.Document.Undo(); }
-    internal void RedoText() { if (TextCanRedo) InlineEditor.Document.Redo(); }
+    internal void UndoText() { if (TextCanUndo) { InlineEditor.Document.Undo(); UpdateTextDraftState(); } }
+    internal void RedoText() { if (TextCanRedo) { InlineEditor.Document.Redo(); UpdateTextDraftState(); } }
     internal PreviewTool Tool
     {
         get => tool;
@@ -109,11 +111,12 @@ public sealed partial class EditorViewport : UserControl
         UpdateRecognizedBands();
     }
 
-    internal void BeginTextEdit(TextEditDraft draft, OcrLineEditSnapshot? sourceLine = null)
+    internal void BeginTextEdit(TextEditDraft draft, OcrLineEditSnapshot? sourceLine = null, OcrLineSnapshot? sourceGeometry = null)
     {
         CancelGesture();
-        textDraft = draft;
+        textDraft = initialTextDraft = draft;
         recognizedDraftMask = sourceLine?.Mask;
+        ConfigureSourceTextSelection(sourceGeometry, draft.Text);
         var editorBackground = new SolidColorBrush(sourceLine is null ? Color.FromArgb(255, 255, 255, 255) : Color.FromArgb(0, 0, 0, 0));
         TextEditorFrame.Background = InlineEditor.Background = editorBackground;
         if (sourceLine is not null)
@@ -127,7 +130,6 @@ public sealed partial class EditorViewport : UserControl
             InlineEditor.Resources.Remove("TextControlBackgroundFocused");
             InlineEditor.Resources.Remove("TextControlBackgroundPointerOver");
         }
-        draftFormatChanged = false;
         loadingText = true;
         try
         {
@@ -136,35 +138,47 @@ public sealed partial class EditorViewport : UserControl
             if (!string.IsNullOrEmpty(draft.Rtf)) InlineEditor.Document.SetText(TextSetOptions.FormatRtf, draft.Rtf);
             else InlineEditor.Document.SetText(TextSetOptions.None, draft.Text);
             InlineEditor.Document.ClearUndoRedoHistory();
-            InlineEditor.Width = Math.Max(8, draft.LayoutWidth > 0 ? draft.LayoutWidth : Math.Min(Math.Max(80, draft.Text.Split('\n').Max(line => line.Length) * draft.FontSize * .65 + 12), Math.Max(8, view.ImageWidth - draft.Location.X)));
+            initialNativeText = ReadInlineText();
+            InlineEditor.Document.GetText(TextGetOptions.FormatRtf, out initialNativeRtf);
+            InlineEditor.Width = draft.LayoutWidth > 0 ? draft.LayoutWidth : Math.Min(
+                Math.Max(80, draft.Text.Split('\n').Max(line => line.Length) * draft.FontSize * .65 + 12),
+                Math.Max(8, view.ImageWidth - draft.Location.X));
             TextEditorFrame.Width = InlineEditor.Width + 2;
-            InlineEditor.MinHeight = Math.Max(draft.FontSize * 1.5, draft.MinimumHeight);
+            InlineEditor.Height = draft.MinimumHeight > 0 ? draft.MinimumHeight : double.NaN;
+            InlineEditor.MinHeight = draft.MinimumHeight > 0 ? 0 : draft.FontSize * 1.5;
             TextLayer.Visibility = Visibility.Visible;
             UpdateScene();
         }
         finally { loadingText = false; }
-        OnInlineTextChanged(InlineEditor, new RoutedEventArgs());
+        UpdateTextDraftState();
         InlineEditor.Focus(FocusState.Programmatic);
     }
 
     internal TextEditDraft? CaptureTextDraft()
     {
-        if (textDraft is null) return null;
-        InlineEditor.Document.GetText(TextGetOptions.None, out string plain);
+        if (textDraft is null || initialTextDraft is null) return null;
+        string plain = ReadInlineText();
         InlineEditor.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
-        // RichEdit contributes one terminal paragraph; preserve user-entered
-        // paragraphs and remove only that native terminator.
-        if (plain.EndsWith("\r", StringComparison.Ordinal)) plain = plain[..^1];
-        plain = plain.Replace("\r", "\n", StringComparison.Ordinal);
-        if ((!draftFormatChanged || !InlineEditor.Document.CanUndo()) && string.Equals(plain, textDraft.Text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal), StringComparison.Ordinal))
-        { plain = textDraft.Text; rtf = textDraft.Rtf; }
+        if (MatchesInitialText(plain, rtf)) return initialTextDraft;
         return textDraft with { Text = plain, Rtf = rtf };
     }
+
+    private string ReadInlineText()
+    {
+        InlineEditor.Document.GetText(TextGetOptions.None, out string plain);
+        // RichEdit contributes one terminal paragraph; preserve user-entered
+        // paragraphs and remove only that native terminator.
+        if (plain.EndsWith('\r')) plain = plain[..^1];
+        return plain.Replace("\r\n", "\n", StringComparison.Ordinal).Replace("\r", "\n", StringComparison.Ordinal);
+    }
+
+    private bool MatchesInitialText(string plain, string rtf) => initialTextDraft is not null &&
+        string.Equals(plain, initialNativeText, StringComparison.Ordinal) &&
+        string.Equals(rtf, initialNativeRtf, StringComparison.Ordinal);
 
     internal void FormatText(string? family, float? size, uint? argb, TextFontStyle? style)
     {
         if (textDraft is null) return;
-        draftFormatChanged = true;
         var format = InlineEditor.Document.Selection.CharacterFormat;
         if (family is not null) format.Name = family;
         if (size.HasValue) format.Size = size.Value * 0.75f;
@@ -179,13 +193,15 @@ public sealed partial class EditorViewport : UserControl
         InlineEditor.Document.Selection.CharacterFormat = format;
         textDraft = textDraft with { FontFamily = family ?? textDraft.FontFamily, FontSize = size ?? textDraft.FontSize,
             Argb = argb ?? textDraft.Argb, Style = style ?? textDraft.Style };
-        DraftChanged?.Invoke(this, EventArgs.Empty);
+        UpdateTextDraftState();
     }
 
     internal void EndTextEdit()
     {
-        textDraft = null;
+        textDraft = initialTextDraft = null;
+        initialNativeText = initialNativeRtf = "";
         recognizedDraftMask = null;
+        ClearSourceTextSelection();
         RecognizedDraftMask.Visibility = Visibility.Collapsed;
         TextLayer.Visibility = Visibility.Collapsed;
         InlineEditor.Document.SetText(TextSetOptions.None, "");
@@ -196,8 +212,9 @@ public sealed partial class EditorViewport : UserControl
     internal void SelectInlineText(int start, int length)
     {
         if (textDraft is null) return;
-        start = Math.Clamp(start, 0, textDraft.Text.Length);
-        int end = start + Math.Clamp(length, 0, textDraft.Text.Length - start);
+        int textLength = ReadInlineText().Length;
+        start = Math.Clamp(start, 0, textLength);
+        int end = start + Math.Clamp(length, 0, textLength - start);
         InlineEditor.Document.Selection.SetRange(start, end);
     }
 
@@ -210,17 +227,23 @@ public sealed partial class EditorViewport : UserControl
         else if (flag == TextFontStyle.Underline) format.Underline = enabled ? UnderlineType.Single : UnderlineType.None;
         InlineEditor.Document.Selection.CharacterFormat = format;
         textDraft = textDraft with { Style = enabled ? textDraft.Style | flag : textDraft.Style & ~flag };
-        draftFormatChanged = true;
-        DraftChanged?.Invoke(this, EventArgs.Empty);
+        UpdateTextDraftState();
     }
 
     private static Color ToColor(uint argb) => Color.FromArgb((byte)(argb >> 24), (byte)(argb >> 16), (byte)(argb >> 8), (byte)argb);
 
-    private void OnInlineTextChanged(object sender, RoutedEventArgs args)
+    private void OnInlineTextChanged(object sender, RoutedEventArgs args) => UpdateTextDraftState();
+
+    private void UpdateTextDraftState()
     {
         if (loadingText || textDraft is null) return;
-        InlineEditor.Document.GetText(TextGetOptions.None, out string text);
+        string text = ReadInlineText();
         TextDraftWithinLimit = text.Length <= 16000;
+        if (recognizedDraftMask is not null)
+        {
+            InlineEditor.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
+            ShowOriginalSourceText(MatchesInitialText(text, rtf));
+        }
         DraftChanged?.Invoke(this, EventArgs.Empty);
     }
 
@@ -283,6 +306,7 @@ public sealed partial class EditorViewport : UserControl
         gestureActive = false;
         panning = false;
         gestureDragged = false;
+        sourceSelectionPointer = null;
         dragRecognizedBands = null;
         gesturePoints.Clear();
         StrokePreview.Points.Clear();
@@ -367,11 +391,7 @@ public sealed partial class EditorViewport : UserControl
             }
             else SelectionFrame.Visibility = Visibility.Collapsed;
             UpdateRecognizedBands();
-            if (recognizedDraftMask is OcrBounds mask)
-            {
-                PositionRectangle(RecognizedDraftMask, mask.X, mask.Y, mask.Width, mask.Height);
-                RecognizedDraftMask.Visibility = Visibility.Visible;
-            }
+            UpdateSourceTextVisual();
             DrawObjectHandles();
             if (textDraft is not null)
             {
@@ -399,11 +419,21 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs args)
     {
-        if (!view.HasImage || gestureActive || !IsEnabled || IsTextEditing) return;
+        if (!view.HasImage || gestureActive || sourceSelectionPointer.HasValue || !IsEnabled) return;
         var current = args.GetCurrentPoint(Host);
         bool middle = current.Properties.IsMiddleButtonPressed;
         if (!middle && !current.Properties.IsLeftButtonPressed) return;
         CanvasPoint position = new(current.Position.X, current.Position.Y);
+        if (!middle && IsTextEditing)
+        {
+            if (TryBeginSourceSelection(position, args)) return;
+            if (!view.Contains(position))
+            {
+                args.Handled = true;
+                TextApplyRequested?.Invoke(this, EventArgs.Empty);
+                return;
+            }
+        }
         bool pan = middle || tool == PreviewTool.Pan;
         int handle = !middle && tool == PreviewTool.Select ? HitHandle(position) : 0;
         if (!pan && handle == 0 && !view.Contains(position)) return;
@@ -471,6 +501,7 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs args)
     {
+        if (TryContinueSourceSelection(args)) return;
         if (!gestureActive || args.Pointer.PointerId != pointerId) return;
         var current = args.GetCurrentPoint(Host);
         CanvasPoint position = new(current.Position.X, current.Position.Y);
@@ -555,6 +586,12 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs args)
     {
+        if (TryContinueSourceSelection(args))
+        {
+            sourceSelectionPointer = null;
+            Host.ReleasePointerCapture(args.Pointer);
+            return;
+        }
         if (!gestureActive || args.Pointer.PointerId != pointerId) return;
         if (transformHandle != 0 && selectedObject is not null)
         {
@@ -694,11 +731,13 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnPointerCanceled(object sender, PointerRoutedEventArgs args)
     {
+        if (sourceSelectionPointer == args.Pointer.PointerId) sourceSelectionPointer = null;
         if (gestureActive && args.Pointer.PointerId == pointerId) CancelGesture();
     }
 
     private void OnPointerCaptureLost(object sender, PointerRoutedEventArgs args)
     {
+        if (sourceSelectionPointer == args.Pointer.PointerId) sourceSelectionPointer = null;
         if (gestureActive && args.Pointer.PointerId == pointerId) CancelGesture();
     }
 

@@ -14,17 +14,35 @@ public sealed class DesktopPreferences
     public uint HighlighterArgb { get; set; } = 0xFFFFDD35;
     public double StrokeWidth { get; set; } = 3;
     public int CaptureDelaySeconds { get; set; }
+    public bool RememberCaptureDelay { get; set; } = true;
     public bool CaptureInNewWindow { get; set; }
+    public bool AskSaveEditedScreenshots { get; set; } = true;
+    public bool AddScreenshotBorder { get; set; }
+    public uint ScreenshotBorderArgb { get; set; } = 0xFF4DA3FF;
+    public int ScreenshotBorderWidth { get; set; } = 2;
     public bool UseHdrColorCorrection { get; set; }
     public bool HideTaskbars { get; set; } = true;
     public bool KeepPrimaryTaskbarVisible { get; set; } = true;
     public bool RequireCtrlForWheelZoom { get; set; } = true;
     public bool ResizeToSnip { get; set; } = true;
+    public bool StartCompact { get; set; } = true;
+    public bool ShowTooltips { get; set; } = true;
+    public string AnnotationToolbarPosition { get; set; } = "Top";
     public bool DefaultMicrophone { get; set; } = true;
     public bool DefaultSystemAudio { get; set; } = true;
+    public string DefaultMicrophoneDeviceId { get; set; } = "";
+    public string DefaultSystemAudioDeviceId { get; set; } = "";
+    public bool AutoCopyRecordingChanges { get; set; } = true;
+    public bool AutoSaveOriginalRecordings { get; set; } = true;
+    public bool AskSaveEditedRecordings { get; set; } = true;
     public bool HotkeysEnabled { get; set; }
+    public bool UsePrintScreen { get; set; }
+    public bool KeepShortcutsAfterClose { get; set; }
     public bool KeepRunningInTray { get; set; }
     public bool StartupWithWindows { get; set; }
+    public bool AutoCheckForUpdates { get; set; } = true;
+    public string LastUpdateCheckUtc { get; set; } = "";
+    public string EditorApplicationPath { get; set; } = "";
     public bool AutoCopyCaptures { get; set; } = true;
     public bool AutoSaveOriginalCaptures { get; set; }
     public string ScreenshotFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Snip Studio WinUI3");
@@ -38,6 +56,15 @@ public sealed class DesktopPreferences
         Theme = Theme switch { "Light" => "Light", "Dark" => "Dark", _ => "System" };
         StrokeWidth = double.IsFinite(StrokeWidth) ? Math.Clamp(StrokeWidth, 1, 100) : 3;
         CaptureDelaySeconds = Math.Clamp(CaptureDelaySeconds, 0, 10);
+        ScreenshotBorderWidth = Math.Clamp(ScreenshotBorderWidth, 1, 20);
+        AnnotationToolbarPosition = AnnotationToolbarPosition switch
+        {
+            "Right" => "Right", "Bottom" => "Bottom", "Left" => "Left", _ => "Top"
+        };
+        DefaultMicrophoneDeviceId ??= "";
+        DefaultSystemAudioDeviceId ??= "";
+        LastUpdateCheckUtc ??= "";
+        EditorApplicationPath ??= "";
         if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Snip Studio WinUI3");
         if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Snip Studio WinUI3");
     }

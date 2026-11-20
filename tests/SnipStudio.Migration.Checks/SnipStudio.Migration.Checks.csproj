@@ -13,5 +13,6 @@
   <ItemGroup>
     <ProjectReference Include="../../src/SnipStudio.Backend/SnipStudio.Backend.csproj" />
     <Compile Include="../../src/SnipStudio.WinUI/DesktopPreferences.cs" Link="Frontend/DesktopPreferences.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/LegacySettingsImport.cs" Link="Frontend/LegacySettingsImport.cs" />
   </ItemGroup>
 </Project>

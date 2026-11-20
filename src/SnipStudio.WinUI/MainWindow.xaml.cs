@@ -68,14 +68,15 @@ public sealed partial class MainWindow : Window
         AddShortcut(VirtualKey.C, VirtualKeyModifiers.Control | VirtualKeyModifiers.Shift, () => RecognizeAsync(copyOnly: true));
         AddShortcut(VirtualKey.P, VirtualKeyModifiers.Control, PrintAsync);
         AddShortcut(VirtualKey.Delete, VirtualKeyModifiers.None, DeleteSelectedAsync, respectsTextInput: true);
-        var editRecognized = new KeyboardAccelerator { Key = VirtualKey.F2 };
-        editRecognized.Invoked += async (_, args) =>
+        var editText = new KeyboardAccelerator { Key = VirtualKey.F2 };
+        editText.Invoked += async (_, args) =>
         {
-            if (busy || closed || applicationExitPending || selectedTool != PreviewTool.OcrSelect) return;
+            if (busy || closed || applicationExitPending || Viewport.IsTextEditing) return;
             args.Handled = true;
-            await EditSelectedOcrLineAsync();
+            if (selectedTool == PreviewTool.OcrSelect) await EditSelectedOcrLineAsync();
+            else await EditSelectedTextAnnotationAsync();
         };
-        Root.KeyboardAccelerators.Add(editRecognized);
+        Root.KeyboardAccelerators.Add(editText);
         AddShortcut(VirtualKey.F11, VirtualKeyModifiers.None, () => { ToggleFullScreen(); return Task.CompletedTask; });
         AddShortcut(VirtualKey.V, VirtualKeyModifiers.Control, PasteAsync, respectsTextInput: true);
         AddShortcut(VirtualKey.S, VirtualKeyModifiers.Control, () => RunActionAsync("Saving image…", SaveWithPickerAsync, commitDraft: false));
@@ -215,9 +216,17 @@ public sealed partial class MainWindow : Window
         finally { _ = Interlocked.CompareExchange(ref clipboardRead, null, pending); }
     }
 
-    private async Task<bool> ConfirmReplaceAsync()
+    private bool ShouldPromptToSave(bool applicationExit = false) =>
+        Viewport.IsTextEditing ||
+        session.IsDirty && (applicationExit || displayPath is null || preferences.AskSaveEditedScreenshots);
+
+    private Task<bool> ConfirmReplaceAsync() => ConfirmSaveChangesAsync(ShouldPromptToSave());
+
+    private Task<bool> ConfirmApplicationExitAsync() => ConfirmSaveChangesAsync(ShouldPromptToSave(applicationExit: true));
+
+    private async Task<bool> ConfirmSaveChangesAsync(bool shouldPrompt)
     {
-        if (!session.IsDirty && !Viewport.IsTextEditing) return true;
+        if (!shouldPrompt) return true;
         var dialog = new ContentDialog
         {
             XamlRoot = Root.XamlRoot,
@@ -441,7 +450,7 @@ public sealed partial class MainWindow : Window
         ContextRow.Visibility = session.HasImage && !contextDismissed && (ink || text || eraser || textActions) ? Visibility.Visible : Visibility.Collapsed;
         string closeLabel = textActions ? "Close text actions" : "Close tool options";
         AutomationProperties.SetName(ContextCloseButton, closeLabel);
-        ToolTipService.SetToolTip(ContextCloseButton, closeLabel);
+        SetWorkspaceToolTip(ContextCloseButton, closeLabel);
         UpdateOcrCommands();
     }
 
@@ -513,8 +522,7 @@ public sealed partial class MainWindow : Window
         bool enabled = !busy && !applicationExitPending;
         FileBar.IsEnabled = enabled;
         CaptureBar.IsEnabled = enabled;
-        ToolBar.IsEnabled = enabled;
-        ToolBar.Visibility = session.HasImage ? Visibility.Visible : Visibility.Collapsed;
+        UpdateAnnotationToolbarState(enabled);
         UpdateWindowMinimums();
         ContextBar.IsEnabled = enabled;
         InkContextBar.IsEnabled = enabled;
@@ -574,7 +582,7 @@ public sealed partial class MainWindow : Window
     {
         if (closed) return;
         StatusText.Text = message;
-        ToolTipService.SetToolTip(StatusText, message);
+        SetWorkspaceToolTip(StatusText, message);
     }
 
     private void OnRootSizeChanged(object sender, SizeChangedEventArgs args)
@@ -634,13 +642,17 @@ public sealed partial class MainWindow : Window
             return;
         }
         if (TryHideToTray()) { args.Cancel = true; return; }
-        if (!session.IsDirty && !Viewport.IsTextEditing) return;
+        if (!ShouldPromptToSave())
+        {
+            args.Cancel = !PrepareShortcutListenerForClose();
+            return;
+        }
         args.Cancel = true;
         closePending = true;
         try
         {
             bool confirmed = await RunActionAsync("Review unsaved changes…", ConfirmReplaceAsync, commitDraft: false);
-            if (confirmed && !closed) { allowClose = true; Close(); }
+            if (confirmed && !closed && PrepareShortcutListenerForClose()) { allowClose = true; Close(); }
         }
         finally { closePending = false; }
     }

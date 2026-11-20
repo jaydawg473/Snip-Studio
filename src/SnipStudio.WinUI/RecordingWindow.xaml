@@ -84,8 +84,11 @@
                             </Grid>
                         </Grid>
                     </StackPanel>
-                    <StackPanel x:Name="ExportRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                    <StackPanel x:Name="VideoFileActions" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
+                        <Button x:Name="CopyVideoFileButton" Content="Copy video file" Click="OnCopyVideoFileClicked" IsEnabled="False"/>
                         <Button x:Name="CopyVideoButton" Content="Save current video copy" Click="OnCopyVideoClicked" IsEnabled="False" VerticalAlignment="Bottom"/>
+                    </StackPanel>
+                    <StackPanel x:Name="ExportRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
                         <ComboBox x:Name="ExportPresetBox" Header="Smaller copy" SelectedIndex="0" Width="190">
                             <ComboBoxItem Content="Balanced · 720p"/><ComboBoxItem Content="Small · 480p"/><ComboBoxItem Content="Attachment target"/>
                         </ComboBox>

@@ -16,9 +16,11 @@ public sealed partial class MainWindow
     private static MainWindow? desktopOwner;
     private static bool applicationExitPending;
     private static bool installerExitQueued;
+    private static int sessionCaptureDelaySeconds;
     private readonly DesktopPreferencesStore preferencesStore = new();
     private DesktopPreferences preferences = new();
     private DesktopIntegrationService? desktopIntegration;
+    private MainWindow? shortcutListenerSuccessor;
     private readonly HashSet<RecordingWindow> recordingWindows = [];
     private bool explicitExit;
     private bool desktopVisualInitialized;
@@ -27,7 +29,8 @@ public sealed partial class MainWindow
     private CaptureKind selectedRecordingCaptureKind = CaptureKind.Rectangle;
     private bool recordingCaptureMode;
     private CaptureKind ActiveCaptureKind => recordingCaptureMode ? selectedRecordingCaptureKind : selectedCaptureKind;
-    private int ActiveCaptureDelaySeconds => recordingCaptureMode ? 0 : preferences.CaptureDelaySeconds;
+    private int ScreenshotDelaySeconds => preferences.RememberCaptureDelay ? preferences.CaptureDelaySeconds : sessionCaptureDelaySeconds;
+    private int ActiveCaptureDelaySeconds => recordingCaptureMode ? 0 : ScreenshotDelaySeconds;
     private nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
 
     private void InitializeDesktopIntegration()
@@ -50,14 +53,52 @@ public sealed partial class MainWindow
             desktopIntegration.RestoreRequested += (_, _) => { AppWindow.Show(); Activate(); };
             desktopIntegration.ExitRequested += async (_, _) => await RequestApplicationExitAsync();
             desktopIntegration.IntegrationFailed += (_, args) => SetStatus("Windows integration could not finish: " + args.Exception.Message);
-            desktopIntegration.SetHotkeysEnabled(preferences.HotkeysEnabled);
-            desktopIntegration.SetTrayEnabled(preferences.KeepRunningInTray);
-            if (preferencesStore.LoadWarning is string warning) SetStatus(warning);
+            ApplyDesktopIntegrationPreferences(desktopIntegration, preferences);
+            if ((preferencesStore.LoadWarning ?? desktopIntegration.GetPrintScreenSetupHint()) is string warning) SetStatus(warning);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
         {
             SetStatus("Optional desktop settings could not finish: " + exception.Message);
         }
+        if (desktopOwner == this) _ = CheckForAutomaticUpdateAsync();
+    }
+
+    private static void ApplyDesktopIntegrationPreferences(DesktopIntegrationService integration, DesktopPreferences settings)
+    {
+        var failures = new List<Exception>();
+        Apply(() => integration.SetHotkeysEnabled(settings.HotkeysEnabled));
+        Apply(() => integration.SetPrintScreenEnabled(settings.UsePrintScreen));
+        Apply(() => integration.SetTrayEnabled(settings.KeepRunningInTray ||
+            settings.KeepShortcutsAfterClose && HasRegisteredShortcut(integration)));
+        if (failures.Count > 0)
+            throw new InvalidOperationException(string.Join(" ", failures.Select(failure => failure.Message)), failures[0]);
+
+        void Apply(Action operation)
+        {
+            try { operation(); }
+            catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+            { failures.Add(failure); }
+        }
+    }
+
+    private static bool HasRegisteredShortcut(DesktopIntegrationService integration) => integration.HotkeysEnabled || integration.PrintScreenEnabled;
+
+    private async Task CheckForAutomaticUpdateAsync()
+    {
+        if (!preferences.AutoCheckForUpdates || desktopOwner != this) return;
+        DesktopUpdateInfo? update;
+        try
+        {
+            // Let the launcher render and give a user-initiated check priority.
+            await Task.Delay(TimeSpan.FromSeconds(2));
+            if (closed || !preferences.AutoCheckForUpdates || desktopOwner != this) return;
+            update = await Task.Run(() => DesktopUpdateService.CheckWhenDueAsync());
+        }
+        catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException) { return; }
+        if (closed || !preferences.AutoCheckForUpdates || update is not { NewerPublishedVersion: true } || PreviewNotice.IsOpen) return;
+        PreviewNotice.Title = "Snip Studio " + update.PublishedTag + " is available";
+        PreviewNotice.Message = "Open Check for updates to review the WinUI release.";
+        PreviewNotice.IsOpen = true;
     }
 
     private void ApplyVisualPreferences(bool initializeInk = true)
@@ -70,6 +111,7 @@ public sealed partial class MainWindow
             StrokeWidthBox.Value = preferences.StrokeWidth;
         }
         Viewport.RequireCtrlForWheelZoom = preferences.RequireCtrlForWheelZoom;
+        ApplyWorkspacePreferences();
         UpdateCaptureControls();
         SetTool(selectedTool, whileBusy: true, revealOptions: !contextDismissed);
     }
@@ -80,28 +122,58 @@ public sealed partial class MainWindow
         using var sizing = BeginSettingsWindowSizing();
         await Task.Yield();
         Root.UpdateLayout();
-        DesktopPreferences? draft = await DesktopDialogs.ShowSettingsAsync(Root.XamlRoot, preferences, integration);
-        if (draft is null) return false;
-        DesktopPreferences previous = preferences.Clone();
-        bool startupChanged = draft.StartupWithWindows != previous.StartupWithWindows;
-        try
+        DesktopPreferences previous = preferencesStore.Load();
+        DesktopPreferences settings = previous.Clone();
+        if (!previous.RememberCaptureDelay) settings.CaptureDelaySeconds = sessionCaptureDelaySeconds;
+        var view = new DesktopSettingsView(Root.XamlRoot, AppWindow.Id, settings, SavePreferences, ActionToken);
+        if (await view.ShowAsync() is null) return false;
+
+        preferences = preferencesStore.Load();
+        bool initializeInk = previous.InkArgb != preferences.InkArgb ||
+            previous.HighlighterArgb != preferences.HighlighterArgb || previous.StrokeWidth != preferences.StrokeWidth;
+        foreach (MainWindow editor in editorWindows)
         {
-            integration.SetHotkeysEnabled(draft.HotkeysEnabled);
-            integration.SetTrayEnabled(draft.KeepRunningInTray);
-            if (startupChanged) integration.SetStartupEnabled(draft.StartupWithWindows);
-            preferencesStore.Save(draft);
-            preferences = preferencesStore.Load();
-            foreach (MainWindow editor in editorWindows) { editor.preferences = preferences.Clone(); editor.ApplyVisualPreferences(initializeInk: false); }
+            editor.preferences = preferences.Clone();
+            editor.ApplyVisualPreferences(initializeInk);
         }
-        catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+        if (desktopOwner is MainWindow owner) _ = owner.CheckForAutomaticUpdateAsync();
+        SetStatus(integration.GetPrintScreenSetupHint() ?? "Settings saved.");
+        return true;
+
+        void SavePreferences(DesktopPreferences draft)
         {
-            var rollbackFailures = new List<string>();
-            try { integration.SetHotkeysEnabled(previous.HotkeysEnabled); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
-            try { integration.SetTrayEnabled(previous.KeepRunningInTray); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
-            if (startupChanged) try { integration.SetStartupEnabled(previous.StartupWithWindows); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
-            throw new InvalidOperationException("Settings were not saved. " + failure.Message + (rollbackFailures.Count > 0 ? " Review Windows integration settings: " + string.Join(" ", rollbackFailures) : " Previous desktop choices were restored."), failure);
+            int selectedDelay = draft.CaptureDelaySeconds;
+            if (!draft.RememberCaptureDelay) draft.CaptureDelaySeconds = 0;
+            DesktopPreferences active = desktopOwner?.preferences ?? preferences;
+            DesktopPreferences next = active.Clone();
+            if (draft.HotkeysEnabled != previous.HotkeysEnabled) next.HotkeysEnabled = draft.HotkeysEnabled;
+            if (draft.UsePrintScreen != previous.UsePrintScreen) next.UsePrintScreen = draft.UsePrintScreen;
+            if (draft.KeepRunningInTray != previous.KeepRunningInTray) next.KeepRunningInTray = draft.KeepRunningInTray;
+            if (draft.KeepShortcutsAfterClose != previous.KeepShortcutsAfterClose) next.KeepShortcutsAfterClose = draft.KeepShortcutsAfterClose;
+            if (draft.StartupWithWindows != previous.StartupWithWindows) next.StartupWithWindows = draft.StartupWithWindows;
+            bool shortcutsChanged = next.HotkeysEnabled != active.HotkeysEnabled ||
+                next.UsePrintScreen != active.UsePrintScreen || next.KeepRunningInTray != active.KeepRunningInTray ||
+                next.KeepShortcutsAfterClose != active.KeepShortcutsAfterClose;
+            bool startupChanged = next.StartupWithWindows != active.StartupWithWindows;
+            try
+            {
+                if (shortcutsChanged) ApplyDesktopIntegrationPreferences(integration, next);
+                if (startupChanged) integration.SetStartupEnabled(next.StartupWithWindows);
+                preferencesStore.Save(draft);
+                if (selectedDelay != settings.CaptureDelaySeconds || draft.RememberCaptureDelay != previous.RememberCaptureDelay)
+                    sessionCaptureDelaySeconds = selectedDelay;
+            }
+            catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+            {
+                var rollbackFailures = new List<string>();
+                if (shortcutsChanged)
+                    try { ApplyDesktopIntegrationPreferences(integration, active); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
+                if (startupChanged)
+                    try { integration.SetStartupEnabled(active.StartupWithWindows); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
+                string detail = rollbackFailures.Count == 0 ? "" : " Review Windows integration settings. " + string.Join(" ", rollbackFailures);
+                throw new InvalidOperationException("Settings were not saved. " + failure.Message + detail, failure);
+            }
         }
-        SetStatus("Settings saved for this WinUI build."); return true;
     }, commitDraft: false);
 
     private async void OnRecentClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Recent files", async () =>
@@ -178,6 +250,14 @@ public sealed partial class MainWindow
     {
         if (sender is not FrameworkElement { Tag: string tag } || !int.TryParse(tag, out int seconds) || seconds < 0 || seconds > 10) return;
         if (recordingCaptureMode || busy || closed || applicationExitPending) return;
+        string status = seconds == 0 ? "Capture delay off." : $"Capture starts after {seconds} seconds.";
+        if (!preferences.RememberCaptureDelay)
+        {
+            sessionCaptureDelaySeconds = seconds;
+            foreach (MainWindow editor in editorWindows) editor.UpdateCaptureControls();
+            SetStatus(status);
+            return;
+        }
         await RunActionAsync("Saving capture delay…", () =>
         {
             DesktopPreferences draft = preferences.Clone();
@@ -189,7 +269,7 @@ public sealed partial class MainWindow
                 editor.preferences = preferences.Clone();
                 editor.ApplyVisualPreferences(initializeInk: false);
             }
-            SetStatus(seconds == 0 ? "Capture delay off." : $"Capture starts after {seconds} seconds.");
+            SetStatus(status);
             return Task.FromResult(true);
         }, commitDraft: false);
         if (!closed) UpdateCaptureControls();
@@ -215,11 +295,11 @@ public sealed partial class MainWindow
         ScreenshotModeUnderline.Visibility = recordingCaptureMode ? Visibility.Collapsed : Visibility.Visible;
         RecordingModeUnderline.Visibility = recordingCaptureMode ? Visibility.Visible : Visibility.Collapsed;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureButton, recordingCaptureMode ? "New recording" : "New snip");
-        ToolTipService.SetToolTip(CaptureButton, recordingCaptureMode ? "New recording (Ctrl+N)" : "New snip (Ctrl+N)");
+        SetWorkspaceToolTip(CaptureButton, recordingCaptureMode ? "New recording (Ctrl+N)" : "New snip (Ctrl+N)");
         string shapeDescription = (recordingCaptureMode ? "Recording area: " : "Capture shape: ") + CaptureModeLabel.Text;
         Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(CaptureOptionsButton, shapeDescription);
-        ToolTipService.SetToolTip(CaptureOptionsButton, shapeDescription + ". Select New to start.");
-        ToolTipService.SetToolTip(DelayButton, recordingCaptureMode ? "Capture delay is unavailable in video mode" : "Screenshot capture delay");
+        SetWorkspaceToolTip(CaptureOptionsButton, shapeDescription + ". Select New to start.");
+        SetWorkspaceToolTip(DelayButton, recordingCaptureMode ? "Capture delay is unavailable in video mode" : "Screenshot capture delay");
         LauncherHint.Text = recordingCaptureMode ? "Press Ctrl+N to select a recording area." : "Press Ctrl+N to take a screenshot.";
         SetCaptureMenuChecks(CaptureModeMenu.Items);
         SetCaptureMenuChecks(CaptureDelayMenu.Items);
@@ -261,7 +341,17 @@ public sealed partial class MainWindow
         {
             bool newWindow = preferences.CaptureInNewWindow && session.HasImage;
             if (!newWindow && !await ConfirmReplaceAsync()) return false;
-            var request = new CaptureRequest { OwnerWindow = WindowHandle, Kind = kind, DelaySeconds = preferences.CaptureDelaySeconds, UseHdrColorCorrection = preferences.UseHdrColorCorrection, HideTaskbars = preferences.HideTaskbars, KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible };
+            var request = new CaptureRequest
+            {
+                OwnerWindow = WindowHandle,
+                Kind = kind,
+                DelaySeconds = ScreenshotDelaySeconds,
+                UseHdrColorCorrection = preferences.UseHdrColorCorrection,
+                HideTaskbars = preferences.HideTaskbars,
+                KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible,
+                ScreenshotBorderArgb = preferences.AddScreenshotBorder ? preferences.ScreenshotBorderArgb : null,
+                ScreenshotBorderWidth = preferences.ScreenshotBorderWidth
+            };
             CapturedImage? capture;
             try
             {
@@ -275,30 +365,29 @@ public sealed partial class MainWindow
                 var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Keep this partial scrolling capture?", Content = capture.Warning, PrimaryButtonText = "Keep capture", CloseButtonText = "Discard", DefaultButton = ContentDialogButton.Close };
                 if (await dialog.ShowAsync() != ContentDialogResult.Primary) { SetStatus("Partial capture discarded. Your previous snip is kept."); return false; }
             }
-            string captureName = "Snip Studio " + DateTime.Now.ToString("yyyy-MM-dd HHmmss");
+            string captureName = "Screenshot " + DateTime.Now.ToString("yyyy-MM-dd HHmmss");
             MainWindow capturedEditor = this;
+            EditorSession.CaptureBaseline baseline;
             long clipboardIntent = preferences.AutoCopyCaptures ? DesktopImageActions.BeginClipboardWrite() : 0;
             if (newWindow)
             {
                 capturedEditor = new MainWindow();
                 capturedEditor.Activate();
-                if (!await capturedEditor.OpenCapturedImageAsync(capture.PngBytes, captureName)) return false;
+                if (await capturedEditor.OpenCapturedImageAsync(capture.PngBytes, captureName) is not { } opened) return false;
+                baseline = opened;
             }
             else
             {
-                session.OpenImageBytes(capture.PngBytes); ResetDocumentSelection();
-                if (Viewport.IsTextEditing) Viewport.EndTextEdit();
-                displayPath = null; suggestedName = captureName;
+                baseline = OpenCaptureDocument(capture.PngBytes, captureName);
                 await RefreshPreviewAsync(resetView: true);
             }
             string feedback = capture.Warning ?? "";
             if (clipboardIntent != 0 && !capturedEditor.closed)
             {
-                long revision = capturedEditor.session.Revision;
                 try
                 {
                     if (await DesktopImageActions.CopyPngAsync(capture.PngBytes, clipboardIntent, () =>
-                        !capturedEditor.closed && capturedEditor.preferences.AutoCopyCaptures && capturedEditor.session.Revision == revision))
+                        !capturedEditor.closed && capturedEditor.preferences.AutoCopyCaptures && capturedEditor.session.Revision == baseline.Revision))
                         feedback += " Copied to the clipboard.";
                 }
                 catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
@@ -315,6 +404,12 @@ public sealed partial class MainWindow
                     string destination = Path.Combine(folder, captureName + "-" + Guid.NewGuid().ToString("N")[..6] + ".png");
                     await Task.Run(() => WriteOriginalCapture(destination, capture.PngBytes));
                     AddRecentSafely(destination);
+                    if (!capturedEditor.closed && capturedEditor.displayPath is null &&
+                        capturedEditor.session.TryRecordSavedCapture(baseline))
+                    {
+                        capturedEditor.displayPath = destination;
+                        capturedEditor.UpdateCommands();
+                    }
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException) { feedback += " Original capture could not be saved automatically: " + exception.Message; }
             }
@@ -385,7 +480,9 @@ public sealed partial class MainWindow
         RecordingWindow window;
         try { window = new RecordingWindow(path, initialRegion, captureWorkflow); }
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { ReportUnexpectedFailure(exception); return false; }
-        window.ConfigureDefaults(preferences.DefaultMicrophone, preferences.DefaultSystemAudio, preferences.RecordingFolder);
+        window.ConfigureDefaults(preferences.DefaultMicrophone, preferences.DefaultSystemAudio, preferences.RecordingFolder,
+            preferences.DefaultMicrophoneDeviceId, preferences.DefaultSystemAudioDeviceId, preferences.AutoCopyRecordingChanges,
+            preferences.AutoSaveOriginalRecordings, preferences.AskSaveEditedRecordings);
         recordingWindows.Add(window);
         allRecordingWindows.Add(window);
         window.RecordingStateChanged += (_, active) =>
@@ -476,11 +573,28 @@ public sealed partial class MainWindow
         var editor = new MainWindow(); editor.Activate();
     }
 
-    private Task<bool> OpenCapturedImageAsync(byte[] png, string name) => RunActionAsync("Opening capture…", async () =>
+    private EditorSession.CaptureBaseline OpenCaptureDocument(byte[] png, string name)
     {
-        session.OpenImageBytes(png); ResetDocumentSelection(); displayPath = null; suggestedName = name;
-        await RefreshPreviewAsync(resetView: true); SetStatus("Capture ready. " + ToolInstruction()); return true;
-    });
+        session.OpenImageBytes(png);
+        ResetDocumentSelection();
+        if (Viewport.IsTextEditing) Viewport.EndTextEdit();
+        displayPath = null;
+        suggestedName = name;
+        return session.GetCaptureBaseline();
+    }
+
+    private async Task<EditorSession.CaptureBaseline?> OpenCapturedImageAsync(byte[] png, string name)
+    {
+        EditorSession.CaptureBaseline baseline = default;
+        bool opened = await RunActionAsync("Opening capture…", async () =>
+        {
+            baseline = OpenCaptureDocument(png, name);
+            await RefreshPreviewAsync(resetView: true);
+            SetStatus("Capture ready. " + ToolInstruction());
+            return true;
+        });
+        return opened ? baseline : null;
+    }
 
     private async void OnUpdatesClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Checking release information…", async () => { await DesktopDialogs.ShowUpdatesAsync(Root.XamlRoot); return true; }, commitDraft: false);
     private void OnFullScreenClicked(object sender, RoutedEventArgs args) => ToggleFullScreen();
@@ -490,14 +604,20 @@ public sealed partial class MainWindow
         AppWindow.SetPresenter(AppWindow.Presenter.Kind == AppWindowPresenterKind.FullScreen ? AppWindowPresenterKind.Overlapped : AppWindowPresenterKind.FullScreen);
     }
 
-    private async void OnExternalEditorClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Choose an external image editor…", async () =>
+    private async void OnExternalEditorClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Opening the external image editor…", async () =>
     {
         if (!session.HasImage) return false;
-        var picker = new FileOpenPicker(AppWindow.Id) { CommitButtonText = "Open image in editor" };
-        picker.FileTypeFilter.Add(".exe");
-        var chosen = await picker.PickSingleFileAsync(); if (chosen is null) return false;
+        string editorPath = preferences.EditorApplicationPath;
+        if (string.IsNullOrWhiteSpace(editorPath))
+        {
+            var picker = new FileOpenPicker(AppWindow.Id) { CommitButtonText = "Open image in editor" };
+            picker.FileTypeFilter.Add(".exe");
+            var chosen = await picker.PickSingleFileAsync();
+            if (chosen is null) return false;
+            editorPath = chosen.Path;
+        }
         var image = await session.RenderPreviewAsync(ActionToken);
-        DesktopExternalEditorResult result = await DesktopExternalEditorService.OpenAsync(image.PngBytes, chosen.Path, WindowHandle, ActionToken);
+        DesktopExternalEditorResult result = await DesktopExternalEditorService.OpenAsync(image.PngBytes, editorPath, WindowHandle, ActionToken);
         externalSnapshotPath = result.SnapshotPath;
         ReloadExternalButton.IsEnabled = true;
         SetStatus("Opened an image copy in the signed editor. Retained working copy: " + result.SnapshotPath + ". Save its changes, then use Import external editor copy to reopen it."); return true;
@@ -517,7 +637,30 @@ public sealed partial class MainWindow
         try { return desktopIntegration.HideToTray(); }
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { SetStatus("The notification-area icon could not be reached: " + exception.Message); return false; }
     }
-    public bool TryStartInBackground() => TryHideToTray();
+    public bool TryStartInBackground() => TryHideToTray() || TryEnterShortcutListener();
+
+    private bool TryEnterShortcutListener()
+    {
+        if (desktopIntegration is not { } integration || !preferences.KeepShortcutsAfterClose || !HasRegisteredShortcut(integration)) return false;
+        try { return integration.HideToTray(); }
+        catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+        { SetStatus("The shortcut listener could not use the notification area: " + failure.Message); return false; }
+    }
+
+    private bool PrepareShortcutListenerForClose()
+    {
+        if (explicitExit || desktopIntegration is not { } integration || !preferences.KeepShortcutsAfterClose ||
+            !HasRegisteredShortcut(integration) || editorWindows.Any(editor => editor != this && !editor.closed)) return true;
+        // Create an empty launcher before closing the last editor so the same
+        // process can keep listening without keeping the document in memory.
+        try { shortcutListenerSuccessor = new MainWindow(); }
+        catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+        {
+            SetStatus("The shortcut listener could not start: " + failure.Message);
+            return false;
+        }
+        return true;
+    }
 
     private void DisposeDesktopIntegration()
     {
@@ -528,8 +671,11 @@ public sealed partial class MainWindow
         if (desktopOwner == this)
         {
             desktopOwner = null;
-            MainWindow? next = editorWindows.FirstOrDefault(editor => !editor.closed);
+            MainWindow? next = shortcutListenerSuccessor ?? editorWindows.FirstOrDefault(editor => !editor.closed);
             next?.InitializeDesktopIntegration();
+            if (shortcutListenerSuccessor is { } listener && !listener.TryEnterShortcutListener())
+                listener.Activate();
+            shortcutListenerSuccessor = null;
         }
     }
 
@@ -583,7 +729,7 @@ public sealed partial class MainWindow
                     editor.AppWindow.Show();
                     if (editor.AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
                     editor.Activate();
-                    bool confirmed = await editor.RunActionAsync("Review changes before exiting…", editor.ConfirmReplaceAsync, commitDraft: false);
+                    bool confirmed = await editor.RunActionAsync("Review changes before exiting…", editor.ConfirmApplicationExitAsync, commitDraft: false);
                     if (!confirmed) return;
                 }
                 reviewed.Add((editor, editor.session.Revision, editor.Viewport.CaptureTextDraft()));

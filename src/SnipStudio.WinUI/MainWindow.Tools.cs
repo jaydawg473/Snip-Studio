@@ -236,14 +236,18 @@ public sealed partial class MainWindow
             string family = SelectedFontFamily;
             float size = (float)(double.IsFinite(TextSizeBox.Value) ? TextSizeBox.Value : 18);
             var style = CurrentTextStyle;
-            float width = Math.Abs(last.X - first.X) >= 16 ? (float)Math.Abs(last.X - first.X) : Math.Min(320, session.ImageWidth - (float)first.X);
+            double dragWidth = Math.Abs(last.X - first.X), dragHeight = Math.Abs(last.Y - first.Y);
+            bool drewFrame = dragWidth >= 2 && dragHeight >= 2;
+            float width = drewFrame ? (float)Math.Round(dragWidth) : Math.Min(320, session.ImageWidth - (float)first.X);
+            float minimumHeight = drewFrame ? (float)Math.Round(dragHeight) : 0;
             draft = new(-1, "", session.CreateTextRtf("", family, size, style, textColor), family, style,
-                new ImagePoint(Math.Min(first.X, last.X), Math.Min(first.Y, last.Y)), textColor, size, Math.Max(8, width), 0);
+                drewFrame ? new ImagePoint(Math.Min(first.X, last.X), Math.Min(first.Y, last.Y)) : first,
+                textColor, size, Math.Max(drewFrame ? 1 : 8, width), minimumHeight);
         }
         BeginTextDraft(draft);
     }
 
-    private void BeginTextDraft(TextEditDraft draft, OcrLineEditSnapshot? recognizedLine = null)
+    private void BeginTextDraft(TextEditDraft draft, OcrLineEditSnapshot? recognizedLine = null, OcrLineSnapshot? sourceGeometry = null)
     {
         ocrLineDraft = recognizedLine;
         if (recognizedLine is not null) selectedAnnotationIndex = -1;
@@ -267,10 +271,23 @@ public sealed partial class MainWindow
         }
         finally { changingTextFormat = false; }
         Viewport.SetSelection(null);
-        Viewport.BeginTextEdit(draft, recognizedLine);
+        Viewport.BeginTextEdit(draft, recognizedLine, sourceGeometry);
         contextDismissed = false;
         UpdateToolContext();
         UpdateTextDraftCommands();
+    }
+
+    private Task EditSelectedTextAnnotationAsync()
+    {
+        if (Viewport.IsTextEditing || session.GetAnnotation(selectedAnnotationIndex) is not { Text: { } text } annotation)
+            return Task.CompletedTask;
+
+        return RunActionAsync("Opening text note…", () =>
+        {
+            SetTool(PreviewTool.Text, whileBusy: true);
+            BeginTextDraft(text.Location, text.Location, annotation);
+            return Task.FromResult(true);
+        });
     }
 
     private string SelectedFontFamily => !string.IsNullOrWhiteSpace(FontFamilyBox.Text) ? FontFamilyBox.Text.Trim()
@@ -302,12 +319,10 @@ public sealed partial class MainWindow
         UpdateSelection();
     }
 
-    private async Task<bool> ApplyTextDraftAsync() => await RunActionAsync("Applying text…", async () =>
+    private Task<bool> ApplyTextDraftAsync() => RunActionAsync("Keeping text…", () =>
     {
-        await RefreshPreviewAsync(resetView: false);
-        UpdateSelection();
         SetStatus("Text kept. Click text to edit it again.");
-        return true;
+        return Task.FromResult(true);
     });
 
     private void CancelTextDraft()

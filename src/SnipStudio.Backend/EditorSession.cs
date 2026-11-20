@@ -40,6 +40,25 @@ public sealed partial class EditorSession : IDisposable
     public int ImageHeight { get { VerifyAccess(); return document.ImageSize.Height; } }
     public long Revision { get { VerifyAccess(); return document.Revision; } }
 
+    public readonly record struct CaptureBaseline(object ImageIdentity, long Revision);
+
+    public CaptureBaseline GetCaptureBaseline()
+    {
+        VerifyAccess();
+        RequireImage();
+        return new(document.BaseIdentity, document.Revision);
+    }
+
+    // A saved original still belongs to this snip after annotation edits, but
+    // only the exact exported revision may be marked clean.
+    public bool TryRecordSavedCapture(CaptureBaseline baseline)
+    {
+        VerifyAccess();
+        if (!document.HasImage || !ReferenceEquals(document.BaseIdentity, baseline.ImageIdentity)) return false;
+        if (document.Revision == baseline.Revision) document.MarkSaved();
+        return true;
+    }
+
     public void Open(string path)
     {
         VerifyCanMutate();

@@ -15,6 +15,8 @@ public sealed class CaptureRequest
     public bool UseHdrColorCorrection { get; init; }
     public bool HideTaskbars { get; init; }
     public bool KeepPrimaryTaskbarVisible { get; init; } = true;
+    public uint? ScreenshotBorderArgb { get; init; }
+    public int ScreenshotBorderWidth { get; init; } = 2;
 }
 
 public sealed record CapturedImage(byte[] PngBytes, int Width, int Height,

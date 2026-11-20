@@ -43,16 +43,17 @@ public sealed partial class MainWindow
         }
         Root.Loaded += OnWindowSizingRootLoaded;
         Closed += OnWindowSizingClosed;
-        // Use the legacy launcher's 540x260 design size. Native XAML chrome is
-        // measured separately when a fresh image's preview becomes ready.
+        // Native XAML chrome is measured separately when a fresh image becomes ready.
         if (!session.HasImage)
         {
             double raster = WindowSizingRasterScale();
+            int width = preferences.StartCompact ? 540 : 1220;
+            int height = preferences.StartCompact ? 260 : 820;
             if (TryGetWindowSizingWorkArea(out RectInt32 work))
             {
                 applyingSnipWindowSize = true;
-                try { AppWindow.Resize(new SizeInt32(Math.Min(work.Width, (int)Math.Ceiling(540 * raster)),
-                    Math.Min(work.Height, (int)Math.Ceiling(260 * raster)))); }
+                try { AppWindow.Resize(new SizeInt32(Math.Min(work.Width, (int)Math.Ceiling(width * raster)),
+                    Math.Min(work.Height, (int)Math.Ceiling(height * raster)))); }
                 finally { applyingSnipWindowSize = false; }
             }
         }
@@ -63,8 +64,8 @@ public sealed partial class MainWindow
     private SizeInt32 MainWindowMinimumSize()
     {
         double raster = WindowSizingRasterScale();
-        int width = (int)Math.Ceiling((settingsWindowSizing ? 680 : 520) * raster);
-        int height = (int)Math.Ceiling((settingsWindowSizing ? 640 : session.HasImage ? 320 : 260) * raster);
+        int width = (int)Math.Ceiling((settingsWindowSizing ? 760 : 520) * raster);
+        int height = (int)Math.Ceiling((settingsWindowSizing ? 580 : session.HasImage ? 320 : 260) * raster);
         if (TryGetWindowSizingWorkArea(out RectInt32 work))
         {
             width = Math.Min(width, work.Width);
@@ -100,9 +101,9 @@ public sealed partial class MainWindow
             UpdateWindowMinimums();
             if (restored)
             {
-                SizeInt32 minimum = MainWindowMinimumSize();
                 ResizeWindowForDialog(new RectInt32(position.X, position.Y,
-                    Math.Max(size.Width, minimum.Width), Math.Max(size.Height, minimum.Height)));
+                    Math.Max(size.Width, (int)Math.Ceiling(900 * originalRaster)),
+                    Math.Max(size.Height, (int)Math.Ceiling(720 * originalRaster))));
             }
         }
         catch

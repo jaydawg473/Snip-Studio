@@ -103,24 +103,27 @@ public sealed partial class MainWindow
         });
     }
 
-    private async Task EditOcrLineAsync(OcrSnapshot source, int lineIndex, bool caretOnly = false)
+    private async Task EditOcrLineAsync(OcrSnapshot source, int lineIndex, ImagePoint? caretPoint = null)
     {
         OcrLineEditSnapshot edit = await session.PrepareRecognizedLineEditAsync(source, lineIndex, ActionToken);
         AnnotationSnapshot? existing = edit.ExistingAnnotationIndex >= 0 ? session.GetAnnotation(edit.ExistingAnnotationIndex) : null;
         int selectionStart = ocrSelection is { SelectionLength: > 0 } selection ? selection.SelectionStart : edit.Text.Length;
-        int selectionLength = caretOnly ? 0 : ocrSelection?.SelectionLength ?? 0;
+        int selectionLength = caretPoint.HasValue ? 0 : ocrSelection?.SelectionLength ?? 0;
         ClearOcrSelection();
         SetTool(PreviewTool.Text, whileBusy: true);
         if (existing?.Text is { } existingText)
         {
             BeginTextDraft(existingText.Location, existingText.Location, existing);
-            SetStatus("Editing the existing text. Apply or press Ctrl+Enter to keep it.");
+            if (string.Equals(existingText.Text, source.Lines[lineIndex].Text, StringComparison.Ordinal))
+                Viewport.SelectInlineText(selectionStart, selectionLength);
+            SetStatus("Editing the existing text. Choose Done or press Ctrl+Enter to keep it.");
             return;
         }
         BeginTextDraft(new TextEditDraft(-1, edit.Text, edit.Rtf, edit.FontFamily, edit.FontStyle, edit.Location,
-            edit.Argb, edit.FontSize, edit.LayoutWidth, 0), edit);
-        Viewport.SelectInlineText(selectionStart, selectionLength);
-        SetStatus("Edit this line. Apply or press Ctrl+Enter to keep the edit. Escape cancels.");
+            edit.Argb, edit.FontSize, edit.LayoutWidth, 0), edit, source.Lines[lineIndex]);
+        if (caretPoint is not ImagePoint point || !Viewport.PlaceSourceTextCaret(point))
+            Viewport.SelectInlineText(selectionStart, selectionLength);
+        SetStatus("Edit this line. Choose Done or press Ctrl+Enter to keep it. Escape cancels.");
     }
 
     private async void OnConvertOcrClicked(object sender, RoutedEventArgs args) =>
@@ -199,7 +202,7 @@ public sealed partial class MainWindow
         if (!gesture.IsDrag && ocrSelection.LineIndices is { Count: 1 } lines)
         {
             SetStatus("Matching source text…");
-            await EditOcrLineAsync(source, lines[0], caretOnly: true);
+            await EditOcrLineAsync(source, lines[0], gesture.Points[0]);
             return;
         }
         SetStatus(ocrSelection.Text.Length == 0 ? ToolInstruction() : "Text selected. Choose Copy selection or press Ctrl+C.");
@@ -221,7 +224,7 @@ public sealed partial class MainWindow
         ocrSelection = session.SelectRecognizedText(source, point, point);
         if (ocrSelection.LineIndices is not { Count: 1 } lines) return false;
         SetStatus("Matching source text…");
-        await EditOcrLineAsync(source, lines[0], caretOnly: true);
+        await EditOcrLineAsync(source, lines[0], point);
         return true;
     }
 

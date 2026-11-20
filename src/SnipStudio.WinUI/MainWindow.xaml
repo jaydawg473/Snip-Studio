@@ -67,15 +67,23 @@
                 <Style TargetType="AppBarSeparator" BasedOn="{StaticResource DefaultAppBarSeparatorStyle}"><Setter Property="Margin" Value="4,0" /></Style>
             <Thickness x:Key="AppBarButtonInnerBorderMargin">2,1,2,1</Thickness><Thickness x:Key="AppBarButtonInnerBorderCompactMargin">2,1,2,1</Thickness><Thickness x:Key="AppBarButtonContentViewboxMargin">12,7,0,7</Thickness><Thickness x:Key="AppBarButtonContentViewboxCollapsedMargin">0,7,0,7</Thickness><Thickness x:Key="AppBarButtonTextLabelOnRightMargin">8,9,12,3</Thickness><Thickness x:Key="AppBarToggleButtonTextLabelOnRightMargin">8,9,12,3</Thickness><Thickness x:Key="AppBarButtonSubItemChevronMargin">-23,13,12,0</Thickness><Thickness x:Key="AppBarButtonSubItemChevronLabelOnRightMargin">-7,13,12,0</Thickness></ResourceDictionary>
         </Grid.Resources>
+        <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto" />
+            <ColumnDefinition Width="*" />
+            <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <Grid Grid.Row="0" Background="{ThemeResource StudioToolbarBrush}" Padding="12,10,12,10" ColumnSpacing="8">
+        <Grid Grid.Row="0" Grid.ColumnSpan="3" Background="{ThemeResource StudioToolbarBrush}" Padding="12,10,12,10" ColumnSpacing="8">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <ContentControl x:Name="CaptureBar" IsTabStop="False" HorizontalAlignment="Left" HorizontalContentAlignment="Left" VerticalContentAlignment="Center">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
@@ -145,7 +153,7 @@
             </CommandBar>
         </Grid>
 
-        <StackPanel Grid.Row="1" Background="{ThemeResource StudioToolbarBrush}">
+        <Border x:Name="AnnotationToolbarHost" Grid.Row="1" Grid.ColumnSpan="3" Background="{ThemeResource StudioToolbarBrush}">
             <CommandBar x:Name="ToolBar" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" HorizontalContentAlignment="Left" Background="Transparent" Margin="12,6,12,6" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
                 <AppBarToggleButton x:Name="SelectButton" Label="Move" LabelPosition="Collapsed" Click="OnSelectClicked" ToolTipService.ToolTip="Select and move annotations"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
@@ -179,12 +187,13 @@
                 <AppBarElementContainer><Button x:Name="ExternalEditorButton" Style="{StaticResource StudioCaptureActionStyle}" MinWidth="132" Click="OnExternalEditorClicked" ToolTipService.ToolTip="Open a copy in an external image editor"><StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center"><FontIcon Glyph="&#xE70F;" FontSize="18"/><TextBlock Text="Edit in app" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 <CommandBar.SecondaryCommands>
                     <AppBarToggleButton x:Name="PanButton" Label="Move view" Click="OnPanClicked" ToolTipService.ToolTip="Pan the image; middle-drag also pans"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
-                    <AppBarToggleButton x:Name="OcrSelectButton" Label="Select recognized text" Click="OnOcrSelectClicked" />
-                    <AppBarButton x:Name="ObjectPropertiesButton" Label="Selected object properties" Click="OnObjectPropertiesClicked" />
-                    <AppBarButton x:Name="DeleteObjectButton" Icon="Delete" Label="Delete selected object" Click="OnDeleteObjectClicked" />
+                    <AppBarToggleButton x:Name="OcrSelectButton" Label="Select recognized text" Click="OnOcrSelectClicked" ToolTipService.ToolTip="Select recognized text"><AppBarToggleButton.Icon><FontIcon Glyph="&#xE8CB;" /></AppBarToggleButton.Icon></AppBarToggleButton>
+                    <AppBarButton x:Name="ObjectPropertiesButton" Icon="Setting" Label="Selected object properties" Click="OnObjectPropertiesClicked" ToolTipService.ToolTip="Selected object properties" />
+                    <AppBarButton x:Name="DeleteObjectButton" Icon="Delete" Label="Delete selected object" Click="OnDeleteObjectClicked" ToolTipService.ToolTip="Delete selected object" />
                 </CommandBar.SecondaryCommands>
             </CommandBar>
-            <Grid x:Name="ContextRow" Visibility="Collapsed" Background="{ThemeResource StudioOptionsBrush}" Padding="8,3,6,3" ColumnSpacing="6">
+        </Border>
+        <Grid x:Name="ContextRow" Grid.Row="2" Grid.ColumnSpan="3" Visibility="Collapsed" Background="{ThemeResource StudioOptionsBrush}" Padding="8,3,6,3" ColumnSpacing="6">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="Auto" /><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
                 <CommandBar x:Name="InkContextBar" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" Background="Transparent" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
@@ -205,7 +214,7 @@
                     <AppBarToggleButton x:Name="BoldButton" Icon="Bold" Label="Bold" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Bold" />
                     <AppBarToggleButton x:Name="ItalicButton" Icon="Italic" Label="Italic" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Italic" />
                     <AppBarToggleButton x:Name="UnderlineButton" Icon="Underline" Label="Underline" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Underline" />
-                    <AppBarElementContainer><Button x:Name="ApplyTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnApplyTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE73E;" FontSize="16"/><TextBlock Text="Apply" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
+                    <AppBarElementContainer><Button x:Name="ApplyTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnApplyTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE73E;" FontSize="16"/><TextBlock Text="Done" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                     <AppBarElementContainer><Button x:Name="CancelTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnCancelTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE711;" FontSize="16"/><TextBlock Text="Cancel" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 </CommandBar>
                 <CommandBar x:Name="OcrContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" Background="Transparent" Padding="0">
@@ -222,16 +231,25 @@
                     </CommandBar.SecondaryCommands>
                 </CommandBar>
                 <Button x:Name="ContextCloseButton" Grid.Column="2" Width="28" MinWidth="0" Height="28" Padding="0" Background="Transparent" BorderThickness="0" Content="×" FontSize="16" Click="OnContextCloseClicked" AutomationProperties.Name="Close tool options" ToolTipService.ToolTip="Close tool options" VerticalAlignment="Center" />
-            </Grid>
-        </StackPanel>
+        </Grid>
 
-        <StackPanel Grid.Row="2">
+        <StackPanel Grid.Row="3" Grid.ColumnSpan="3">
             <InfoBar x:Name="PreviewNotice" IsOpen="False" IsClosable="True" Severity="Informational" Title="Snip Studio" Message="Changes stay in this editor until you save or copy them." />
             <InfoBar x:Name="ErrorNotice" IsOpen="False" IsClosable="True" Severity="Error" Title="The action could not finish" />
         </StackPanel>
-        <local:EditorViewport x:Name="Viewport" Grid.Row="3" MinHeight="32" />
-        <TextBlock x:Name="LauncherHint" Grid.Row="3" Text="Press Ctrl+N to take a screenshot." FontSize="14" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24"/>
-        <Grid x:Name="StatusGrid" Grid.Row="4" Background="{ThemeResource StudioToolbarBrush}" Padding="12,2,12,2" ColumnSpacing="8" RowSpacing="2">
+        <ScrollViewer x:Name="SideAnnotationHost" Grid.Row="4" Width="50" Visibility="Collapsed"
+                      HorizontalScrollMode="Disabled" HorizontalScrollBarVisibility="Disabled"
+                      VerticalScrollMode="Enabled" VerticalScrollBarVisibility="Auto"
+                      IsTabStop="False" AutomationProperties.Name="Annotation toolbar" Background="{ThemeResource StudioToolbarBrush}">
+            <StackPanel x:Name="SideAnnotationCommands" HorizontalAlignment="Center" Padding="0,6">
+                <AppBarButton x:Name="SideExternalEditorButton" Icon="Edit" Label="Edit in app" IsCompact="True"
+                              LabelPosition="Collapsed" Click="OnExternalEditorClicked"
+                              ToolTipService.ToolTip="Open a copy in an external image editor" />
+            </StackPanel>
+        </ScrollViewer>
+        <local:EditorViewport x:Name="Viewport" Grid.Row="4" Grid.Column="1" MinHeight="32" />
+        <TextBlock x:Name="LauncherHint" Grid.Row="4" Grid.Column="1" Text="Press Ctrl+N to take a screenshot." FontSize="14" TextWrapping="Wrap" TextAlignment="Center" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24"/>
+        <Grid x:Name="StatusGrid" Grid.Row="7" Grid.ColumnSpan="3" Background="{ThemeResource StudioToolbarBrush}" Padding="12,2,12,2" ColumnSpacing="8" RowSpacing="2">
             <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
             <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
             <StackPanel x:Name="StatusInfo" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">

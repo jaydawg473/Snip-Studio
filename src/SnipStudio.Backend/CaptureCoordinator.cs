@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -37,7 +38,7 @@ public static class CaptureCoordinator
             token.ThrowIfCancellationRequested();
             using Bitmap? image = global::SnipStudio.CaptureService.CaptureWithWarnings(ToLegacyMode(request.Kind), out string warning);
             token.ThrowIfCancellationRequested();
-            return image is null ? null : await EncodeAsync(image, 1, warning, false, token);
+            return image is null ? null : await EncodeAsync(image, request, 1, warning, false, token);
         }, cancellationToken);
     }
 
@@ -116,11 +117,11 @@ public static class CaptureCoordinator
                 throw new OperationCanceledException("Scrolling capture canceled with Escape.", token);
             controller.FinishAndClose();
             token.ThrowIfCancellationRequested();
-            return await EncodeAsync(result.Image, result.FrameCount, result.Detail, result.StoppedEarly, token);
+            return await EncodeAsync(result.Image, request, result.FrameCount, result.Detail, result.StoppedEarly, token);
         }, cancellationToken);
     }
 
-    private static async Task<CapturedImage> EncodeAsync(Bitmap image, int frameCount, string? warning,
+    private static async Task<CapturedImage> EncodeAsync(Bitmap image, CaptureRequest request, int frameCount, string? warning,
         bool stoppedEarly, CancellationToken token)
     {
         // The capture thread owns the bitmap until this awaited encoder ends.
@@ -128,6 +129,15 @@ public static class CaptureCoordinator
         return await Task.Run(() =>
         {
             token.ThrowIfCancellationRequested();
+            if (request.ScreenshotBorderArgb is uint borderArgb)
+            {
+                using var graphics = Graphics.FromImage(image);
+                using var pen = new Pen(Color.FromArgb(unchecked((int)borderArgb)), request.ScreenshotBorderWidth)
+                {
+                    Alignment = PenAlignment.Inset
+                };
+                graphics.DrawRectangle(pen, 0, 0, width - 1, height - 1);
+            }
             using var bytes = new MemoryStream();
             image.Save(bytes, ImageFormat.Png);
             token.ThrowIfCancellationRequested();
@@ -220,6 +230,8 @@ public static class CaptureCoordinator
         ArgumentNullException.ThrowIfNull(request);
         if (!Enum.IsDefined(request.Kind)) throw new ArgumentOutOfRangeException(nameof(request), "Choose a supported capture mode.");
         if (request.DelaySeconds is < 0 or > 10) throw new ArgumentOutOfRangeException(nameof(request), "Capture delay must be between zero and ten seconds.");
+        if (request.ScreenshotBorderArgb is not null && request.ScreenshotBorderWidth is (< 1 or > 20))
+            throw new ArgumentOutOfRangeException(nameof(request), "Screenshot border width must be between one and twenty pixels.");
         if (recording && request.Kind is not CaptureKind.Rectangle and not CaptureKind.Window)
             throw new ArgumentException("Choose Rectangle or Window for a recording region.", nameof(request));
         HiddenCaptureOwner.ValidateWindow(request.OwnerWindow);
