@@ -6,9 +6,13 @@ This repository preserves the Git history of [stable Snip Studio](https://github
 
 ## Preview.4 reachability fixes
 
-The compact native capture row uses aligned controls and icons for capture menu entries, retaining the chosen layout and newer icons. Source minimums are 520 × 260 DIP for the empty launcher, 520 × 320 DIP for an editor with an image, and 640 × 480 DIP for recording; they scale with the display and are clamped to its available work area.
+The compact native capture row uses aligned controls and icons for capture menu entries, retaining the chosen layout and newer icons. Source minimums are 520 × 260 DIP for the empty launcher, 520 × 320 DIP for an image editor, 640 × 260 DIP for the compact recording bar and 640 × 480 DIP for advanced recording/review. They scale with the display and are clamped to its available work area.
 
 Opening Settings temporarily requests at least 680 × 640 DIP when possible, with vertically scrollable content and bounded dialog height. Closing restores the prior frame when the user has not resized it; an intentional resize is retained, and a move retains the chosen position. These are source contracts, not observed native results. Current build and minimum/Settings retests are pending.
+
+Recording uses the same select-then-New pattern as screenshots. The video icon selects mode only; camera/video states are exclusive. New/Ctrl+N then selects a Rectangle or Window. Cancel preserves the current image/draft and creates no recording window. Successful selection opens compact microphone/system-audio toggles, Start and Recording options. In this capture flow, only Start prepares a unique MP4 path in the configured folder; it does not ask for a save filename first. Stop finishes the file and opens review. Open video remains a separate file/review action.
+
+Folder preparation permits one outstanding request per recording window, with an eight-second UI wait and late-failure observation; a timeout does not claim that synchronous provider work was forcibly stopped. Earlier provisional preview.4 checks predate this route, so final build, signed tests, native recording and package acceptance remain pending.
 
 ## Preview.3 compact editor history
 
@@ -65,6 +69,6 @@ Installation, stable-channel replacement and public GitHub Release publication r
 
 ## Remaining work
 
-Build the current preview.4 source and verify a signed candidate. Native checks must cover capture-row alignment/menu access, launcher/editor/recording minimum tracking, Settings scrolling and Save/Cancel restoration, deliberate resizing/movement, and small/mixed-DPI work areas. Prior component/native/package evidence remains version-scoped in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md).
+Build the current preview.4 source and verify a signed candidate. Native checks must cover video-mode selection, New/region/cancel behavior, automatic recording destination and Stop/review, capture-row/menu access, minimum tracking, Settings scrolling/restore, deliberate resizing/movement and small/mixed-DPI work areas. Prior component/native/package evidence remains version-scoped in [VERIFICATION-WINUI.md](VERIFICATION-WINUI.md).
 
 Package-specific source/signature/hash and audit evidence belongs with the delivered candidate. Required broader native/device checks remain: Fit/manual zoom, mixed DPI, real capture/scrolling, recording/audio/video, clipboard/print/share, preferences/recovery, Shell/startup and installation. Measure startup, real capture/recording and longer-running memory with stated inputs before claiming a performance improvement. Component timings, compilation, one native sequence and package verification do not close all acceptance gates.

@@ -1,15 +1,17 @@
 # WinUI preview verification
 
-Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** Capture-row, native minimum-size and Settings reachability changes are implemented in source; the current build and native checks are pending.
+Updated November 20, 2026 for `0.7.0-preview.4`, application file version `0.7.0.4`. **Production release status: INSUFFICIENT EVIDENCE.** Capture-row, minimum-size, Settings and Snip-style recording-route changes are implemented in source. Final build, native and package checks for the new route are pending; earlier provisional preview.4 checks are not final acceptance.
 
 ## Preview.4 current gates
 
 | Change | Evidence and remaining check |
 | --- | --- |
 | Compact native capture row | Source aligns controls and includes capture-menu icons. Render, clipping, focus and menu access await the signed current candidate. |
-| Minimum sizes | Source requests launcher 520 × 260, image editor 520 × 320 and recording 640 × 480 DIP, converted for display scale and clamped to the work area. Native resize tracking, small displays and DPI changes are NOT TESTED for preview.4. |
+| Minimum sizes | Source requests launcher 520 × 260, image editor 520 × 320, compact recording 640 × 260 and advanced recording/review 640 × 480 DIP, converted for display scale and clamped to the work area. Native resize tracking, small displays and DPI changes are NOT TESTED for the final preview.4 route. |
 | Settings | Source temporarily enlarges the host toward 680 × 640 DIP, bounds the scrollable dialog, then restores prior bounds unless the user resized; manual movement retains its new position. Native Save/Cancel, scrolling and restore/move/resize behavior are NOT TESTED for preview.4. |
-| Current build, signed tests and package | Pending. No earlier assertion count, signature report or archive audit is a new preview.4 result. |
+| Recording route | Source makes camera/video mode exclusive; video selection alone opens no recorder. New/Ctrl+N selects Rectangle/Window first, cancellation preserves the image/draft, and successful selection opens compact audio/Start/options controls. Start alone prepares the unique configured-folder MP4; Stop finishes and opens review. Open video is separate. Native mode/selection/cancel/start/stop/device behavior is NOT TESTED. |
+| Folder preparation | Source allows one request per recording window with an eight-second await, observes late failure and blocks a duplicate request while it remains pending. This is not proof of provider cancellation or hardware recording. |
+| Current build, signed tests and package | Pending for the new recording route. Provisional preview.4 results before that route, and all earlier-version results, are not counted as final validation. |
 
 No new OCR accuracy or performance result is claimed. The hybrid WinUI/WinForms/GDI+ boundary and signing requirements remain unchanged. Real capture/recording/audio, physical DPI/monitors and installation still require separate evidence.
 

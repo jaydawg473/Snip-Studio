@@ -507,6 +507,13 @@ public sealed partial class RecordingWindow : Window
         metadataCancellation = CancellationTokenSource.CreateLinkedTokenSource(lifetime.Token);
         _ = LoadMetadataAsync(candidate.Path, ++videoGeneration, metadataCancellation.Token);
         UpdateCommands();
+        if (captureWorkflow)
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+            {
+                if (closed || !ReferenceEquals(player, candidate.Player)) return;
+                RecordingRoot.UpdateLayout();
+                RecordingBodyScroll.ChangeView(null, 0d, null, true);
+            });
         if (cleanupWarning != null)
         {
             VideoNotice.Title = "Video opened";
@@ -772,7 +779,8 @@ public sealed partial class RecordingWindow : Window
         bool hasSelection = candidateCopyPath != null;
         bool showReview = hasVideo || hasSelection;
         bool compact = captureWorkflow && !showReview && !recordingOptionsExpanded;
-        AdvancedRecordingOptionsPanel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        RecordingSettingsPanel.Visibility = captureWorkflow && showReview ? Visibility.Collapsed : Visibility.Visible;
+        AdvancedRecordingOptionsPanel.Visibility = !captureWorkflow || recordingOptionsExpanded ? Visibility.Visible : Visibility.Collapsed;
         SelectedAreaSummary.Visibility = captureWorkflow ? Visibility.Visible : Visibility.Collapsed;
         RecordingOptionsButton.Visibility = captureWorkflow && !showReview ? Visibility.Visible : Visibility.Collapsed;
         RecordingOptionsButton.IsEnabled = !busy && !active;
