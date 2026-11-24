@@ -10,6 +10,141 @@ using SnipStudio.WinUI.Backend;
 
 internal static partial class Program
 {
+    private static async Task CheckOcrNoteEditRoutingAsync()
+    {
+        using EditorSession session = new();
+        session.OpenImageBytes(CreateImage(440, 160));
+        const string noteText = "Actual note 0008";
+        int target = session.AddText(noteText, new(130, 36), 0xFF175AA0, 16, 150);
+        int other = session.AddText("X", new(16, 36), 0xFFAA1735, 16, 310);
+        TextAnnotationSnapshot note = session.GetAnnotation(target)!.Text!;
+        ImageRectangle ink = note.InkBounds;
+        var notePoint = new ImagePoint(ink.X + ink.Width / 2, ink.Y + ink.Height / 2);
+
+        Check(session.HitTest(notePoint, 3) == other,
+            "Move can still select the top note's frame above the other note's ink");
+        Check(session.HitTestTextInk(notePoint)?.Index == target,
+            "Text editing chooses the touched note's ink instead of the broad upper frame");
+        Check(session.HitTestTextInk(new ImagePoint(300, notePoint.Y)) is null,
+            "Blank space inside a broad frame does not claim OCR text for that note");
+
+        byte[] pixels = (await session.RenderPreviewAsync()).PngBytes;
+        long revision = session.Revision;
+        OcrLineEditSnapshot? linked = await session.PrepareRecognizedLineEditAsync(Recognition(noteText), 0);
+        Check(linked is not null && linked.ExistingAnnotationIndex == target && linked.Text == noteText &&
+            linked.Rtf == note.Rtf && linked.Argb == note.Argb && linked.Mask.Width == 0,
+            "A uniquely identified note opens with its exact text and formatting and no raster mask");
+
+        OcrLineEditSnapshot? blocked = await session.PrepareRecognizedLineEditAsync(Recognition("OCR misread"), 0);
+        Check(blocked is null, "A differently recognized string crossing an existing note cannot edit it or create a raster draft");
+        Check(session.Revision == revision && session.AnnotationCount == 2 &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(pixels),
+            "Blocked OCR routing leaves the document revision and rendered pixels intact");
+
+        int duplicate = session.AddText(noteText, note.Location, note.Argb, note.FontSize, note.LayoutWidth, note.Rtf);
+        Check(session.HitTestTextInk(notePoint)?.Index == duplicate,
+            "A direct click chooses the topmost of overlapping notes with identical text");
+        Check(await session.PrepareRecognizedLineEditAsync(Recognition(noteText), 0) is null,
+            "An OCR line without a direct click does not guess between two matching notes");
+
+        OcrSnapshot Recognition(string text)
+        {
+            var baseline = session.GetCaptureBaseline();
+            var native = new global::SnipStudio.TextRecognitionResult { Available = true, Text = text };
+            native.Lines.Add(new global::SnipStudio.TextLineRegion
+            {
+                Text = text,
+                Bounds = new RectangleF((float)ink.X, (float)ink.Y, (float)ink.Width, (float)ink.Height)
+            });
+            return new OcrSnapshot(session, baseline.ImageIdentity, baseline.Revision, native);
+        }
+    }
+
+    private static async Task CheckReviewedTranslationWritebackAsync()
+    {
+        const string originalNote = "Invoice 0008";
+        const string updatedNote = "Facture 0008";
+        const string originalRaster = "ORIGINAL IMAGE 42";
+        const string updatedRaster = "I";
+        const uint noteColor = 0xFF184989;
+        const TextFontStyle noteStyle = TextFontStyle.Bold | TextFontStyle.Italic;
+
+        using EditorSession session = new();
+        string rasterRtf = session.CreateTextRtf(originalRaster, "Segoe UI", 26, TextFontStyle.Regular, 0xFF000000);
+        var rasterLocation = new PointF(20, 92);
+        RectangleF rasterInk = global::SnipStudio.RichTextLayout.Measure(rasterRtf, 340).InkBounds;
+        rasterInk.Offset(rasterLocation);
+        using var bitmap = new Bitmap(420, 160);
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        {
+            graphics.Clear(Color.White);
+            global::SnipStudio.RichTextLayout.Draw(graphics, rasterRtf, 340, rasterLocation);
+        }
+        using var png = new MemoryStream();
+        bitmap.Save(png, ImageFormat.Png);
+        session.OpenImageBytes(png.ToArray());
+        int noteIndex = session.AddText(originalNote, new(20, 20), noteColor, 18, 220,
+            session.CreateTextRtf(originalNote, "Segoe UI", 18, noteStyle, noteColor), minimumHeight: 35);
+        TextAnnotationSnapshot note = session.GetAnnotation(noteIndex)!.Text!;
+        long before = session.Revision;
+        string originalPixels = PixelHash((await session.RenderPreviewAsync()).PngBytes);
+
+        OcrSnapshot recognized = Recognition(originalNote);
+        OcrConversionResult unchanged = await session.ApplyReviewedTranslationAsync(recognized, [0], [originalNote]);
+        Check(!unchanged.Applied && unchanged.ConvertedLineCount == 0 && session.Revision == before,
+            "Unchanged review does not claim a writeback or create Undo history");
+        OcrConversionResult noteOnly = await session.ApplyReviewedTranslationAsync(recognized, [0], [updatedNote]);
+        Check(noteOnly.Applied && noteOnly.ConvertedLineCount == 1 && noteOnly.LastAnnotationIndex == noteIndex &&
+            session.AnnotationCount == 1, "A reviewed existing note is updated in its original annotation slot");
+        TextAnnotationSnapshot edited = session.GetAnnotation(noteIndex)!.Text!;
+        Check(edited.Text == updatedNote && edited.Location == note.Location && edited.LayoutWidth == note.LayoutWidth &&
+            edited.MinimumHeight == note.MinimumHeight && edited.Argb == note.Argb && edited.FontSize == note.FontSize &&
+            edited.FontFamily == note.FontFamily && edited.FontStyle == note.FontStyle &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) != originalPixels,
+            "Note writeback changes rendered text and preserves authored geometry, color and style");
+        session.Undo();
+        Check(session.Revision == before && PixelHash((await session.RenderPreviewAsync()).PngBytes) == originalPixels,
+            "One Undo restores note-only writeback exactly");
+
+        OcrConversionResult caseMisread = await session.ApplyReviewedTranslationAsync(Recognition("invoice 0008"), [0], [updatedNote]);
+        Check(!caseMisread.Applied && caseMisread.Message.Contains("Line 1", StringComparison.Ordinal) &&
+            session.GetAnnotation(noteIndex)!.Text!.Text == originalNote,
+            "A case mismatch does not identify the note for reviewed translation");
+        OcrConversionResult tooLong = await session.ApplyReviewedTranslationAsync(recognized, [0], [new string('X', 16001)]);
+        Check(!tooLong.Applied && tooLong.Message.Contains("Line 1", StringComparison.Ordinal) && session.Revision == before,
+            "An oversized reviewed row is rejected with its source line and no change");
+        OcrConversionResult unfittable = await session.ApplyReviewedTranslationAsync(recognized, [0], [new string('W', 256)]);
+        Check(!unfittable.Applied && unfittable.Message.Contains("does not fit", StringComparison.Ordinal) && session.Revision == before,
+            "A reviewed row must fit the authored note without resizing or obscuring the image");
+        OcrConversionResult protectedRaster = await session.ApplyReviewedTranslationAsync(Recognition(originalNote, protectRaster: true),
+            [0, 1], [updatedNote, updatedRaster]);
+        Check(!protectedRaster.Applied && protectedRaster.Message.Contains("Line 2", StringComparison.Ordinal) &&
+            session.Revision == before && PixelHash((await session.RenderPreviewAsync()).PngBytes) == originalPixels,
+            "A protected raster row rejects the complete batch, including the already planned note");
+
+        OcrConversionResult mixed = await session.ApplyReviewedTranslationAsync(recognized, [0, 1], [updatedNote, updatedRaster]);
+        Check(mixed.Applied && mixed.ConvertedLineCount == 2 && session.GetAnnotations().Any(item => item.Text?.Text == updatedNote) &&
+            session.GetAnnotation(mixed.LastAnnotationIndex)?.Text?.Text == updatedRaster &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) != originalPixels,
+            "One reviewed operation writes both the note and the raster line visibly");
+        session.Undo();
+        Check(session.Revision == before && session.AnnotationCount == 1 && session.GetAnnotation(noteIndex)!.Text!.Text == originalNote &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == originalPixels,
+            "One Undo restores both source rows and the original captured pixels");
+
+        OcrSnapshot Recognition(string noteText, bool protectRaster = false)
+        {
+            var baseline = session.GetCaptureBaseline();
+            var native = new global::SnipStudio.TextRecognitionResult { Available = true, Text = noteText + "\n" + originalRaster };
+            ImageRectangle ink = note.InkBounds;
+            native.Lines.Add(new global::SnipStudio.TextLineRegion { Text = noteText,
+                Bounds = new RectangleF((float)ink.X, (float)ink.Y, (float)ink.Width, (float)ink.Height) });
+            native.Lines.Add(new global::SnipStudio.TextLineRegion { Text = originalRaster, Bounds = rasterInk });
+            if (protectRaster) native.ProtectedGraphics.Add(rasterInk);
+            return new OcrSnapshot(session, baseline.ImageIdentity, baseline.Revision, native);
+        }
+    }
+
     private sealed class OcrFixtureManifest
     {
         public OcrFixtureManifest() { }
@@ -114,7 +249,7 @@ internal static partial class Program
 
     private static void CheckDocumentIconRaster()
     {
-        using var image = new Bitmap(200, 94, PixelFormat.Format32bppArgb);
+        using var image = new Bitmap(200, 126, PixelFormat.Format32bppArgb);
         string[] iconPixels = [".########...", "#........#..", "#.........#.", "#..........#",
             "#....#.....#", "#...#.#....#", "#...###....#", "#...###....#", "#...#.####.#",
             "#.######.#.#", "#.#.#..###.#", "#..##......#", "#..........#", "#..........#", ".##########."];
@@ -124,10 +259,17 @@ internal static partial class Program
             graphics.Clear(Color.White);
             for (int y = 0; y < iconPixels.Length; y++)
                 for (int x = 0; x < iconPixels[y].Length; x++)
-                    if (iconPixels[y][x] == '#') graphics.FillRectangle(Brushes.Red, 12 + x, 10 + y, 1, 1);
+                    if (iconPixels[y][x] == '#')
+                    {
+                        graphics.FillRectangle(Brushes.Red, 12 + x, 10 + y, 1, 1);
+                        graphics.FillRectangle(Brushes.Red, 49 + x, 82 + y, 1, 1);
+                        graphics.FillRectangle(Brushes.Red, 135 + x, 82 + y, 1, 1);
+                    }
             graphics.TextRenderingHint = TextRenderingHint.SingleBitPerPixelGridFit;
             graphics.DrawString("00042_Aa.pdf", font, Brushes.Black, 29, 10);
             graphics.DrawString("@ A1", font, Brushes.Red, 11, 47);
+            graphics.DrawString("0008", font, Brushes.Black, 12, 83);
+            graphics.DrawString("@ A1", font, Brushes.Red, 69, 83);
         }
 
         static global::SnipStudio.TextLineRegion Line(string text, params (string Text, RectangleF Bounds)[] words)
@@ -161,6 +303,24 @@ internal static partial class Program
         refine.Invoke(null, [standalone, image]);
         Check(standalone.Lines.Count == 0 && standalone.Text.Length == 0 && standalone.RawText == "@" &&
             image.GetPixel(12, 13).ToArgb() == Color.Red.ToArgb(), "A standalone icon cannot be converted and its source pixels are untouched");
+
+        const string toolbarRaw = "0008 @ @ A1 Z]";
+        var toolbar = new global::SnipStudio.TextRecognitionResult { Available = true, Text = toolbarRaw };
+        toolbar.Lines.Add(Line(toolbarRaw, ("0008", new RectangleF(12, 85, 29, 13)),
+            ("@", new RectangleF(49, 83, 12, 13)), ("@", new RectangleF(69, 86, 13, 12)),
+            ("A1", new RectangleF(85, 86, 14, 12)), ("Z]", new RectangleF(135, 83, 12, 13))));
+        toolbar.Lines[0].RecognitionClipBounds = new RectangleF(8, 79, 145, 22);
+        refine.Invoke(null, [toolbar, image]);
+        Check(toolbar.RawText == toolbarRaw && toolbar.Lines.Select(line => line.Text).SequenceEqual(["0008", "@ A1"]),
+            "Proven middle and trailing icons are excluded while literal red punctuation and leading zeros are kept");
+        Check(toolbar.ProtectedGraphics.Count == 2 && toolbar.Lines.All(line =>
+                line.RecognitionClipBounds == new RectangleF(8, 79, 145, 22) &&
+                toolbar.ProtectedGraphics.All(icon => !icon.IntersectsWith(line.Bounds))),
+            "OCR fragments retain source clipping and avoid spanning either protected icon with an edit mask");
+        refine.Invoke(null, [toolbar, image]);
+        Check(toolbar.RawText == toolbarRaw && toolbar.Lines.Select(line => line.Text).SequenceEqual(["0008", "@ A1"]) &&
+            toolbar.ProtectedGraphics.Count == 2, "Repeated refinement preserves the verified labels and protection");
+        CheckJoinedGraphicPrefixes();
     }
 
     private static async Task<object> CheckRecognizedLineDraftAsync()
@@ -183,7 +343,8 @@ internal static partial class Program
         OcrSnapshot recognized = await session.RecognizeTextAsync(recognitionBudget.Token);
         OcrLineSnapshot line = recognized.Lines.Single(item => item.Words.Count > 0);
         using var matchingBudget = new CancellationTokenSource(TimeSpan.FromSeconds(95));
-        OcrLineEditSnapshot draft = await session.PrepareRecognizedLineEditAsync(recognized, line.Index, matchingBudget.Token);
+        OcrLineEditSnapshot draft = await session.PrepareRecognizedLineEditAsync(recognized, line.Index, matchingBudget.Token)
+            ?? throw new InvalidOperationException("The original-image fixture must have an editable source line.");
         Check(draft.ExistingAnnotationIndex < 0 && draft.Text == line.Text && draft.Mask.Width > 0,
             "Preparing a raster text draft keeps the original recognized string and its source mask");
         Check(IsSourcePixel(draft.Location), "The in-place OCR draft starts on the source-pixel grid");
@@ -196,12 +357,24 @@ internal static partial class Program
 
         const string replacement = "I";
         const uint color = 0xFF243982;
+        const uint fill = 0xFFFFF1D6;
         const float fontSize = 8;
         string rtf = session.CreateTextRtf(replacement, draft.FontFamily, fontSize, TextFontStyle.Regular, color);
-        int edited = session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize);
+        float width = draft.LayoutWidth - 2;
+        Expect<ArgumentOutOfRangeException>(() => session.ApplyRecognizedLineEdit(draft, replacement, rtf,
+            color, fontSize, draft.LayoutWidth + 2, fill), "Custom source width cannot exceed its protected layout");
+        Expect<ArgumentException>(() => session.ApplyRecognizedLineEdit(draft, replacement, rtf,
+            color, fontSize, width, 0x80FFF1D6), "Custom source fill must be opaque");
+        Check(session.Revision == revision && !session.CanUndo && session.AnnotationCount == 0,
+            "A rejected width or fill leaves the source text and history unchanged");
+        int edited = session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize, width, fill);
         var note = session.GetAnnotation(edited)?.Text;
         Check(note is { Text: replacement, Argb: color, FontSize: fontSize } && session.CanUndo,
             "Applying a changed recognized draft keeps its exact text, color and size");
+        byte[] changed = (await session.RenderPreviewAsync()).PngBytes;
+        Check(note?.LayoutWidth == width && Pixel(changed, (int)(draft.Mask.X + draft.Mask.Width - 1),
+            (int)(draft.Mask.Y + draft.Mask.Height - 1)) == fill && Pixel(changed, 0, 0) == Pixel(original, 0, 0),
+            "Advanced text keeps its custom width and fills the original source mask while unrelated pixels stay unchanged");
         Check(note != null && IsSourcePixel(note.Location), "Applying recognized text keeps whole-pixel placement in the exported image");
         Expect<InvalidOperationException>(() => session.ApplyRecognizedLineEdit(draft, replacement, rtf, color, fontSize),
             "A committed source draft cannot modify a newer revision again");
@@ -209,7 +382,8 @@ internal static partial class Program
         Check(session.Revision == revision && session.AnnotationCount == 0 && !session.CanUndo &&
             PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(original),
             "One Undo restores the original image and all pre-draft history");
-        return new { Passed = true, OriginalLine = line.Text, EditedText = replacement, UndoRestoredOriginalPixels = true, AlignedToSourcePixels = true };
+        return new { Passed = true, OriginalLine = line.Text, EditedText = replacement, UndoRestoredOriginalPixels = true,
+            AlignedToSourcePixels = true, CustomWidthAndFill = true };
     }
 
     private static bool IsSourcePixel(ImagePoint point) => point.X == Math.Truncate(point.X) && point.Y == Math.Truncate(point.Y);
@@ -220,6 +394,12 @@ internal static partial class Program
         var enclose = backend.GetMethod("EncloseSourcePixels", BindingFlags.Static | BindingFlags.NonPublic)!;
         var sample = (Rectangle)enclose.Invoke(null, [new RectangleF(10.25f, 11.75f, 8.5f, 5.5f)])!;
         Check(sample == Rectangle.FromLTRB(10, 11, 19, 18), "Style samples include both partially covered source edges");
+
+        var protect = backend.GetMethod("ProtectOcrPadding", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var protectedMask = (Rectangle)protect.Invoke(null,
+            [new Rectangle(9, 9, 2, 4), new RectangleF(9, 10, 1, 1), new RectangleF(10.25f, 10, 1, 1)])!;
+        Check(protectedMask == new Rectangle(9, 9, 1, 4),
+            "A fractional icon edge protects the entire touched pixel from the source mask");
 
         var align = backend.GetMethod("TryAlignOcrInk", BindingFlags.Static | BindingFlags.NonPublic)!;
         RectangleF ink = new(2, 3, 9, 6);

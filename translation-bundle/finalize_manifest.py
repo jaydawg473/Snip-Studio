@@ -1,4 +1,5 @@
 """Write the release gate atomically after package and notice review."""
+import gzip
 import hashlib
 import json
 import os
@@ -18,9 +19,24 @@ for item in draft["models"]:
     info = json.loads((directory / "model_info.json").read_text(encoding="utf-8"))
     if info["shortName"] != item["directory"]:
         raise RuntimeError("Incorrect model metadata")
-    for name in [item["files"]["model"], item["files"]["shortlist"], *item["files"]["vocabs"]]:
-        if not (directory / name).is_file():
-            raise RuntimeError("Missing required model data")
+    names = {item["files"]["model"], item["files"]["shortlist"], *item["files"]["vocabs"]}
+    sizes = item["expandedBytes"]
+    if set(sizes) != names:
+        raise RuntimeError("Invalid expanded model data inventory")
+    for name in names:
+        if Path(name).name != name or not (directory / name).is_file():
+            raise RuntimeError("Missing required compressed model data")
+        expected = sizes[name]
+        if type(expected) is not int or not 0 < expected <= 256 * 1024 * 1024:
+            raise RuntimeError("Invalid expanded model size")
+        actual = 0
+        with gzip.open(directory / name, "rb") as model_file:
+            while chunk := model_file.read(128 * 1024):
+                actual += len(chunk)
+                if actual > expected:
+                    raise RuntimeError("Expanded model exceeds reviewed size")
+        if actual != expected:
+            raise RuntimeError("Expanded model size differs from reviewed size")
 
 required_notices = [
     "licenses/NOTICES.txt", "licenses/Node-LICENSE.txt", "licenses/Bergamot-MPL-2.0.txt",

@@ -275,7 +275,11 @@ namespace SnipStudio
             finally { inspectionSlot.Release(); }
         }
 
-        public static Task TrimAsync(string sourcePath, string destinationPath, TimeSpan start, TimeSpan end)
+        public static Task TrimAsync(string sourcePath, string destinationPath, TimeSpan start, TimeSpan end) =>
+            TrimAsync(sourcePath, destinationPath, start, end, null);
+
+        internal static Task TrimAsync(string sourcePath, string destinationPath, TimeSpan start, TimeSpan end,
+            Func<string, CancellationToken, Action<string>> preparePublish)
         {
             string source = ValidateSource(sourcePath);
             if (String.IsNullOrWhiteSpace(destinationPath)) throw new ArgumentNullException("destinationPath");
@@ -286,7 +290,11 @@ namespace SnipStudio
                 throw new ArgumentException("Choose an .mp4 filename for the trimmed copy.", "destinationPath");
             if (!Directory.Exists(Path.GetDirectoryName(destination))) throw new DirectoryNotFoundException("The trimmed recording folder is unavailable.");
             if (start < TimeSpan.Zero || end <= start) throw new ArgumentException("Choose an end time after the start time.");
-            return Task.Run(delegate { TrimCore(source, destination, start.Ticks, end.Ticks, null, CancellationToken.None, null); });
+            return Task.Run(delegate
+            {
+                Action<string> publish = preparePublish?.Invoke(destination, CancellationToken.None);
+                TrimCore(source, destination, start.Ticks, end.Ticks, null, CancellationToken.None, null, false, publish);
+            });
         }
 
         public static VideoExportPlan CreateExportPlan(VideoMetadata metadata, long sourceBytes, VideoExportPreset preset, int targetMegabytes)
@@ -325,6 +333,20 @@ namespace SnipStudio
         public static Task<VideoExportResult> ExportAsync(string sourcePath, string destinationPath, VideoExportPlan plan,
             CancellationToken cancellationToken, IProgress<double> progress)
         {
+            return ExportCoreAsync(sourcePath, destinationPath, plan, cancellationToken, progress, enforceTargetLimit: false, null);
+        }
+
+        internal static Task<VideoExportResult> ExportWithPreparedDestinationAsync(string sourcePath, string destinationPath,
+            VideoExportPlan plan, CancellationToken cancellationToken, IProgress<double> progress, bool enforceTargetLimit,
+            Func<string, CancellationToken, Action<string>> preparePublish)
+        {
+            return ExportCoreAsync(sourcePath, destinationPath, plan, cancellationToken, progress, enforceTargetLimit, preparePublish);
+        }
+
+        private static Task<VideoExportResult> ExportCoreAsync(string sourcePath, string destinationPath, VideoExportPlan plan,
+            CancellationToken cancellationToken, IProgress<double> progress, bool enforceTargetLimit,
+            Func<string, CancellationToken, Action<string>> preparePublish)
+        {
             if (plan == null) throw new ArgumentNullException("plan");
             string source = ValidateSource(sourcePath);
             if (String.IsNullOrWhiteSpace(destinationPath)) throw new ArgumentNullException("destinationPath");
@@ -344,7 +366,8 @@ namespace SnipStudio
                 cancellationToken.ThrowIfCancellationRequested();
                 long sourceBytes = new FileInfo(source).Length;
                 if (sourceBytes != plan.SourceBytes) throw new InvalidOperationException("The recording changed after the export options were chosen. Open the options again.");
-                TrimCore(source, destination, 0, plan.Duration.Ticks, plan, cancellationToken, progress);
+                Action<string> publish = preparePublish?.Invoke(destination, cancellationToken);
+                TrimCore(source, destination, 0, plan.Duration.Ticks, plan, cancellationToken, progress, enforceTargetLimit, publish);
                 return new VideoExportResult { Path = destination, Bytes = new FileInfo(destination).Length,
                     SourceBytes = sourceBytes, TargetBytes = plan.TargetBytes };
             });
@@ -359,11 +382,12 @@ namespace SnipStudio
         }
 
         private static void TrimCore(string source, string destination, long start, long end, VideoExportPlan export,
-            CancellationToken cancellationToken, IProgress<double> progress)
+            CancellationToken cancellationToken, IProgress<double> progress, bool enforceTargetLimit, Action<string> publish)
         {
             string temporary = Path.Combine(Path.GetDirectoryName(destination), ".snip-trim-" + Guid.NewGuid().ToString("N") + ".mp4");
             bool published = false;
             bool finalized = false;
+            bool keepForRecovery = false;
             try
             {
                 using (NativeReader reader = new NativeReader(source, true))
@@ -484,23 +508,42 @@ namespace SnipStudio
                     }
                 }
                 cancellationToken.ThrowIfCancellationRequested();
-                if (export != null && new FileInfo(temporary).Length >= export.SourceBytes)
+                if (export != null)
                 {
-                    finalized = false;
-                    throw new InvalidOperationException("The encoded copy was not smaller, so it was not saved. Your original and destination are unchanged. Try trimming the video or choosing the Small preset.");
+                    long encodedBytes = new FileInfo(temporary).Length;
+                    if (enforceTargetLimit && export.TargetBytes > 0 && encodedBytes > export.TargetBytes)
+                    {
+                        finalized = false;
+                        throw new InvalidOperationException($"The encoded MP4 is {encodedBytes / 1000000.0:0.##} MB and exceeds the {export.TargetBytes / 1000000.0:0.##} MB attachment limit. Trim the recording or choose a larger target. Your original and destination are unchanged.");
+                    }
+                    if (encodedBytes >= export.SourceBytes)
+                    {
+                        finalized = false;
+                        throw new InvalidOperationException("The encoded copy was not smaller, so it was not saved. Your original and destination are unchanged. Try trimming the video or choosing the Small preset.");
+                    }
                 }
                 try
                 {
-                    if (File.Exists(destination)) File.Replace(temporary, destination, null);
+                    if (publish != null) publish(temporary);
+                    else if (File.Exists(destination)) File.Replace(temporary, destination, null);
                     else File.Move(temporary, destination);
                 }
-                catch (Exception error) { throw new RecordingSaveException(temporary, error); }
+                catch (Exception error) when (File.Exists(temporary) &&
+                    !(error is OperationCanceledException && cancellationToken.IsCancellationRequested))
+                {
+                    keepForRecovery = true;
+                    throw new RecordingSaveException(temporary, destination, error);
+                }
                 published = true;
                 if (progress != null) progress.Report(1);
             }
             finally
             {
-                if (!published && (!finalized || cancellationToken.IsCancellationRequested) && File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } }
+                if (!published && !keepForRecovery && (!finalized || cancellationToken.IsCancellationRequested) && File.Exists(temporary))
+                {
+                    try { File.Delete(temporary); }
+                    catch (Exception) { }
+                }
             }
         }
 

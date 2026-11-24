@@ -132,6 +132,38 @@ internal sealed class ViewportState
         return new(Math.Clamp(point.X, 0, ImageWidth), Math.Clamp(point.Y, 0, ImageHeight));
     }
 
+    internal CanvasPoint VisibleImageCenter()
+    {
+        CanvasPoint origin = DisplayOrigin;
+        double left = Math.Max(0, origin.X), right = Math.Min(Width, origin.X + DisplayWidth);
+        double top = Math.Max(0, origin.Y), bottom = Math.Min(Height, origin.Y + DisplayHeight);
+        return HasImage && right > left && bottom > top
+            ? ClampedImageAt(new CanvasPoint((left + right) / 2, (top + bottom) / 2))
+            : new(ImageWidth / 2.0, ImageHeight / 2.0);
+    }
+
+    internal (double X, double Y, double Width, double Height)? TextActionsGlowBounds(double spread)
+    {
+        if (!double.IsFinite(spread) || spread <= 0)
+            throw new ArgumentOutOfRangeException(nameof(spread));
+        if (!HasImage || Width <= 2 * spread || Height <= 2 * spread) return null;
+
+        CanvasPoint origin = DisplayOrigin;
+        double imageRight = origin.X + DisplayWidth;
+        double imageBottom = origin.Y + DisplayHeight;
+        if (Math.Min(Width, imageRight) <= Math.Max(0, origin.X) ||
+            Math.Min(Height, imageBottom) <= Math.Max(0, origin.Y)) return null;
+
+        // A fitted image keeps the halo outside its frame. When zoom or pan
+        // cuts off an edge, anchor that side of the halo to the visible canvas.
+        double padding = FrameThickness + spread;
+        double left = Math.Max(0, origin.X - padding);
+        double top = Math.Max(0, origin.Y - padding);
+        double width = Math.Min(Width, imageRight + padding) - left;
+        double height = Math.Min(Height, imageBottom + padding) - top;
+        return width > 2 * spread && height > 2 * spread ? (left, top, width, height) : null;
+    }
+
     private static void RequireFinite(params double[] values)
     {
         if (values.Any(value => !double.IsFinite(value)))

@@ -7,6 +7,8 @@ using System.Drawing.Imaging;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -14,7 +16,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using SnipStudio.WinUI.Backend;
 
-internal static class Program
+internal static partial class Program
 {
     private static int assertions;
 
@@ -59,7 +61,7 @@ internal static class Program
                 Passed = passed,
                 Assertions = assertions,
                 ElapsedMilliseconds = clock.ElapsedMilliseconds,
-                Scope = "Public backend API on an STA context; no WinUI controls, OCR, capture, clipboard, installation or hardware integration.",
+                Scope = "Public backend API on an STA context and local Authenticode verification. No WinUI controls, OCR, capture, clipboard, installation or hardware integration.",
                 Failure = failure
             }, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(Path.Combine(output, "backend-checks.json"), json, new UTF8Encoding(false));
@@ -70,6 +72,12 @@ internal static class Program
 
     private static async Task CheckWorkflowsAsync(string output)
     {
+        await CheckRedactionAsync(output);
+        await CheckEditableProjectsAsync(output);
+        await CheckAtomicSaveConflictsAsync(output);
+        CheckExecutableTrust(output);
+        await CheckShapeTransformsAsync();
+        await CheckShapePatternsAsync(output);
         byte[] source = CreateImage();
         byte[] preservedSource = (byte[])source.Clone();
         using EditorSession session = new();
@@ -215,7 +223,120 @@ internal static class Program
         Check(PixelHash(File.ReadAllBytes(closeSavePath)) == PixelHash(source), "Disposal does not release an encoder's bitmap early");
         disposing.Dispose();
         Expect<ObjectDisposedException>(() => _ = disposing.HasImage, "Disposed session rejects access");
+        await CheckImageOpeningAsync(output, source);
+        await CheckPreparedSaveTargetsAsync(output, source);
         Check(!Directory.EnumerateFiles(output, ".snip-*", SearchOption.TopDirectoryOnly).Any(), "All temporary encoding files are cleaned up");
+    }
+
+    private static async Task CheckImageOpeningAsync(string output, byte[] source)
+    {
+        string imagePath = Path.Combine(output, "source-open-async.png");
+        File.WriteAllBytes(imagePath, source);
+        using EditorSession session = new();
+        await session.OpenAsync(imagePath);
+        Check(!session.IsDirty && session.HasImage && PixelHash((await session.RenderPreviewAsync()).PngBytes) == PixelHash(source),
+            "Worker-decoded file opens clean with identical pixels");
+        await session.OpenImageBytesAsync(source);
+        Check(session.IsDirty && !session.CanUndo, "Worker-decoded clipboard bytes start an unsaved document");
+        session.AddRectangle(new(1, 1), new(30, 20), 0xFF223344, 3);
+        long editedRevision = session.Revision;
+        string editedPixels = PixelHash((await session.RenderPreviewAsync()).PngBytes);
+
+        await ExpectAsync<FileNotFoundException>(() => session.OpenAsync(Path.Combine(output, "missing-open-source.png")),
+            "Failed file read reports failure");
+        Check(session.IsDirty && session.CanUndo && session.Revision == editedRevision &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == editedPixels, "Failed open keeps the current edits and history");
+
+        using (var cancellation = new CancellationTokenSource())
+        {
+            Task clipboardRead = session.OpenImageBytesAsync(source, cancellation.Token);
+            cancellation.Cancel();
+            await ExpectAsync<OperationCanceledException>(() => clipboardRead, "Canceled image decode cannot replace the edit");
+        }
+        Check(session.IsDirty && session.CanUndo && session.Revision == editedRevision &&
+            PixelHash((await session.RenderPreviewAsync()).PngBytes) == editedPixels, "Canceled open keeps current pixels and history");
+
+        using EditorSession concurrent = new();
+        concurrent.OpenImageBytes(source);
+        Task pending = concurrent.OpenAsync(imagePath);
+        concurrent.AddRectangle(new(1, 1), new(20, 25), 0xFF334455, 3);
+        long currentRevision = concurrent.Revision;
+        await ExpectAsync<InvalidOperationException>(() => pending, "An earlier file decode refuses to replace a newer edit");
+        Check(concurrent.Revision == currentRevision && concurrent.IsDirty && concurrent.CanUndo,
+            "A stale file decode cannot clear newer edits or history");
+        Check(File.ReadAllBytes(imagePath).SequenceEqual(source), "Opening the source leaves the file bytes untouched");
+    }
+
+    private static async Task CheckPreparedSaveTargetsAsync(string output, byte[] source)
+    {
+        using EditorSession session = new();
+        session.OpenImageBytes(source);
+        session.AddRectangle(new(1, 1), new(30, 20), 0xFF883344, 3);
+        long revision = session.Revision;
+        byte[] competing = "A second writer created this file after the save path was chosen."u8.ToArray();
+
+        string appeared = Path.Combine(output, "destination-appeared.png");
+        ImageSaveTarget absentTarget = EditorSession.PrepareSaveTarget(appeared);
+        File.WriteAllBytes(appeared, competing);
+        await ExpectAsync<IOException>(() => session.SavePreparedAsync(absentTarget), "A previously absent target cannot replace a competing file");
+        Check(File.ReadAllBytes(appeared).SequenceEqual(competing), "Save conflict preserves all bytes of the newly created destination");
+
+        string changed = Path.Combine(output, "destination-changed.png");
+        File.WriteAllBytes(changed, "An existing file accepted for replacement."u8.ToArray());
+        ImageSaveTarget outdatedTarget = EditorSession.PrepareSaveTarget(changed);
+        File.WriteAllBytes(changed, competing);
+        await ExpectAsync<IOException>(() => session.SavePreparedAsync(outdatedTarget), "A changed existing target requires renewed selection");
+        Check(File.ReadAllBytes(changed).SequenceEqual(competing), "A changed existing target keeps the newer writer's bytes");
+
+        string removed = Path.Combine(output, "destination-removed.png");
+        File.WriteAllBytes(removed, competing);
+        ImageSaveTarget deletedTarget = EditorSession.PrepareSaveTarget(removed);
+        File.Delete(removed);
+        await ExpectAsync<IOException>(() => session.SavePreparedAsync(deletedTarget), "A removed existing target requires renewed selection");
+        Check(!File.Exists(removed), "A stale save cannot recreate a concurrently deleted destination");
+        Check(session.IsDirty && session.CanUndo && session.Revision == revision, "All save conflicts keep the edits dirty and undoable");
+
+        string exportPath = Path.Combine(output, "uncommitted-image-export.png");
+        SaveSnapshotResult exported = await session.ExportPreparedAsync(EditorSession.PrepareSaveTarget(exportPath));
+        Check(exported.SavedCurrentRevision && session.IsDirty && session.CanUndo && session.Revision == revision &&
+            PixelHash(File.ReadAllBytes(exportPath)) == PixelHash((await session.RenderPreviewAsync()).PngBytes),
+            "Export writes the focused revision without clearing unsaved editable work");
+
+        SaveSnapshotResult saved = await session.SavePreparedAsync(EditorSession.PrepareSaveTarget(changed));
+        Check(saved.SavedCurrentRevision && !session.IsDirty &&
+            PixelHash(File.ReadAllBytes(changed)) == PixelHash((await session.RenderPreviewAsync()).PngBytes),
+            "An explicitly reselected unchanged target saves the frozen revision and clears the dirty state");
+    }
+
+    private static void CheckExecutableTrust(string output)
+    {
+        MethodInfo[] trustImports = typeof(DesktopExecutableTrust).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+            .Where(method => method.GetCustomAttribute<DllImportAttribute>()?.Value == "wintrust.dll")
+            .ToArray();
+        Check(trustImports.Length == 3 && trustImports.All(method =>
+                method.GetCustomAttribute<DefaultDllImportSearchPathsAttribute>()?.Paths == DllImportSearchPath.System32),
+            "Authenticode verification loads Wintrust from System32");
+
+        string application = Path.Combine(AppContext.BaseDirectory, typeof(Program).Assembly.GetName().Name + ".exe");
+        Check(DesktopExecutableTrust.VerifySignedTimestampedExecutable(application, requireAutomationForge: true) == "Automation Forge LLC",
+            "Trust accepts the signed test application and its publisher");
+        if (Environment.ProcessPath is string host && !string.Equals(host, application, StringComparison.OrdinalIgnoreCase))
+        {
+            string hostPublisher = DesktopExecutableTrust.VerifySignedTimestampedExecutable(host);
+            Check(!string.IsNullOrWhiteSpace(hostPublisher), "Trust accepts the signed runtime host");
+            if (!string.Equals(hostPublisher, "Automation Forge LLC", StringComparison.Ordinal))
+                Expect<InvalidOperationException>(() => DesktopExecutableTrust.VerifySignedTimestampedExecutable(host, requireAutomationForge: true),
+                    "Restricted trust rejects a different publisher");
+        }
+
+        string invalid = Path.Combine(output, "invalid-executable.txt");
+        File.WriteAllText(invalid, "Non-executable Authenticode input fixture");
+        Expect<ArgumentException>(() => DesktopExecutableTrust.VerifySignedTimestampedExecutable(invalid),
+            "Trust rejects a non-executable path");
+        string invalidImage = Path.ChangeExtension(invalid, ".exe");
+        File.Move(invalid, invalidImage);
+        Expect<InvalidOperationException>(() => DesktopExecutableTrust.VerifySignedTimestampedExecutable(invalidImage),
+            "Trust rejects an invalid executable image without launching it");
     }
 
     private static byte[] CreateImage(bool transparent = false)

@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 
 namespace SnipStudio.WinUI.Backend;
@@ -10,6 +11,8 @@ public enum CaptureKind { Rectangle, Freeform, Window, Monitor, AllMonitors }
 public sealed class CaptureRequest
 {
     public nint OwnerWindow { get; init; }
+    public bool KeepOwnerVisible { get; init; }
+    public IReadOnlyList<nint> AdditionalWindowsToHide { get; init; } = Array.Empty<nint>();
     public CaptureKind Kind { get; init; } = CaptureKind.Rectangle;
     public int DelaySeconds { get; init; }
     public bool UseHdrColorCorrection { get; init; }
@@ -23,6 +26,8 @@ public sealed record CapturedImage(byte[] PngBytes, int Width, int Height,
     int FrameCount = 1, string? Warning = null, bool StoppedEarly = false);
 
 public sealed record CaptureProgress(int FrameCount, int Height, string Status);
+
+public enum ScrollingReviewAppearance { Light, Dark }
 
 public readonly record struct CaptureRectangle(int X, int Y, int Width, int Height)
 {

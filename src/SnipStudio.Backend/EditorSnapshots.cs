@@ -12,7 +12,11 @@ public readonly record struct ImagePoint(double X, double Y);
 public sealed record PreviewSnapshot(long Revision, byte[] PngBytes);
 
 /// <summary>Identifies the revision published to disk and whether it is still current.</summary>
-public sealed record SaveSnapshotResult(long Revision, bool SavedCurrentRevision, string Path);
+public sealed record SaveSnapshotResult(long Revision, bool SavedCurrentRevision, string Path)
+{
+    // This target always describes the bytes emitted by this save.
+    public ImageSaveTarget? SavedTarget { get; internal init; }
+}
 
 /// <summary>A detached rectangle in source-image pixels.</summary>
 public readonly record struct ImageRectangle(double X, double Y, double Width, double Height)
@@ -36,10 +40,16 @@ public sealed record TextAnnotationSnapshot(string Text, string Rtf, string Font
 
 public sealed record ShapeAnnotationSnapshot(AnnotationShape Shape, uint? FillArgb, uint? OutlineArgb,
     float OutlineWidth, int FillOpacity, int OutlineOpacity, ImageRectangle GeometryBounds,
-    IReadOnlyList<ImagePoint> Endpoints);
+    IReadOnlyList<ImagePoint> Endpoints)
+{
+    /// <summary>Clockwise image-space angle. Closed shapes rotate around the center of GeometryBounds.</summary>
+    public float RotationDegrees { get; init; }
+    public global::SnipStudio.ShapeOutlinePattern OutlinePattern { get; init; }
+}
 
 public sealed record ShapeStyleEdit(uint? FillArgb, uint? OutlineArgb, float OutlineWidth,
-    int FillOpacity = 100, int OutlineOpacity = 100);
+    int FillOpacity = 100, int OutlineOpacity = 100,
+    global::SnipStudio.ShapeOutlinePattern OutlinePattern = global::SnipStudio.ShapeOutlinePattern.Solid);
 
 public sealed record EmojiAnnotationSnapshot(string Key, string Glyph, string DisplayName,
     ImageRectangle Frame, float RotationDegrees);

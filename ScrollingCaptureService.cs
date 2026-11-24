@@ -46,14 +46,17 @@ namespace SnipStudio
         public int Height { get { return Image == null ? 0 : Image.Height; } }
         public ScrollingCaptureEndReason EndReason { get; private set; }
         public string Detail { get; private set; }
+        internal int[] JoinRows { get; private set; }
         public bool StoppedEarly { get { return EndReason != ScrollingCaptureEndReason.NoFurtherMovement && EndReason != ScrollingCaptureEndReason.UserStopped; } }
 
-        internal ScrollingCaptureResult(Bitmap image, int frameCount, ScrollingCaptureEndReason reason, string detail)
+        internal ScrollingCaptureResult(Bitmap image, int frameCount, ScrollingCaptureEndReason reason, string detail,
+            int[] joinRows)
         {
             Image = image;
             FrameCount = frameCount;
             EndReason = reason;
             Detail = detail;
+            JoinRows = joinRows;
         }
 
         public void Dispose()
@@ -297,7 +300,7 @@ namespace SnipStudio
                         return new SettledFrame(ScrollingCaptureEndReason.TargetChanged,
                             ex.Message + " The accepted portion is preserved for review.");
                     }
-                    catch (InvalidOperationException ex)
+                    catch (Exception ex) when (ex is InvalidOperationException || ex is TimeoutException)
                     {
                         return new SettledFrame(ScrollingCaptureEndReason.CaptureFailed,
                             "Capture stopped: " + ex.Message + " The accepted portion is preserved for review.");
@@ -393,7 +396,7 @@ namespace SnipStudio
             try
             {
                 Report(report, session, detail);
-                return new ScrollingCaptureResult(image, session.FrameCount, reason, detail);
+                return new ScrollingCaptureResult(image, session.FrameCount, reason, detail, session.GetJoinRows());
             }
             catch { image.Dispose(); throw; }
         }

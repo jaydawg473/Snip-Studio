@@ -38,7 +38,12 @@ public static class DesktopExecutableTrust
         try
         {
             fileInfoPointer = Marshal.AllocHGlobal(Marshal.SizeOf<TrustFileInfo>());
-            Marshal.StructureToPtr(new TrustFileInfo { Size = (uint)Marshal.SizeOf<TrustFileInfo>(), FilePath = fullPath }, fileInfoPointer, false);
+            Marshal.StructureToPtr(new TrustFileInfo
+            {
+                Size = (uint)Marshal.SizeOf<TrustFileInfo>(),
+                FilePath = fullPath,
+                FileHandle = fileLease.SafeFileHandle.DangerousGetHandle()
+            }, fileInfoPointer, false);
             fileInfoInitialized = true;
             data.FileInfo = fileInfoPointer;
             int result = WinVerifyTrust(0, ref action, ref data);
@@ -75,6 +80,7 @@ public static class DesktopExecutableTrust
                 if (fileInfoInitialized) Marshal.DestroyStructure<TrustFileInfo>(fileInfoPointer);
                 Marshal.FreeHGlobal(fileInfoPointer);
             }
+            GC.KeepAlive(fileLease);
         }
     }
 
@@ -94,7 +100,15 @@ public static class DesktopExecutableTrust
     // remains owned by WinVerifyTrust until WTD_STATEACTION_CLOSE.
     [StructLayout(LayoutKind.Sequential)] private struct ProviderCertificate
     { public uint Size; public nint CertificateContext; }
-    [DllImport("wintrust.dll", ExactSpelling = true)] private static extern int WinVerifyTrust(nint owner, ref Guid action, ref TrustData data);
-    [DllImport("wintrust.dll", ExactSpelling = true)] private static extern nint WTHelperProvDataFromStateData(nint stateData);
-    [DllImport("wintrust.dll", ExactSpelling = true)] private static extern nint WTHelperGetProvSignerFromChain(nint provider, uint signerIndex, [MarshalAs(UnmanagedType.Bool)] bool counterSigner, uint counterSignerIndex);
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    private static extern int WinVerifyTrust(nint owner, ref Guid action, ref TrustData data);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    private static extern nint WTHelperProvDataFromStateData(nint stateData);
+
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
+    [DllImport("wintrust.dll", ExactSpelling = true)]
+    private static extern nint WTHelperGetProvSignerFromChain(nint provider, uint signerIndex, [MarshalAs(UnmanagedType.Bool)] bool counterSigner, uint counterSignerIndex);
 }

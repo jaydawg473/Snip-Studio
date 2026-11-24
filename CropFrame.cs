@@ -13,8 +13,12 @@ namespace SnipStudio
         internal static CropFrameHandle HitTest(Rectangle frame, PointF point, float radius)
         {
             if (frame.Width <= 0 || frame.Height <= 0 || !Finite(radius) || radius <= 0 || !Finite(point.X) || !Finite(point.Y)) return CropFrameHandle.None;
-            bool left = Math.Abs(point.X - frame.Left) <= radius, right = Math.Abs(point.X - frame.Right) <= radius;
-            bool top = Math.Abs(point.Y - frame.Top) <= radius, bottom = Math.Abs(point.Y - frame.Bottom) <= radius;
+            float leftDistance = Math.Abs(point.X - frame.Left), rightDistance = Math.Abs(point.X - frame.Right);
+            float topDistance = Math.Abs(point.Y - frame.Top), bottomDistance = Math.Abs(point.Y - frame.Bottom);
+            bool left = leftDistance <= radius && leftDistance <= rightDistance;
+            bool right = rightDistance <= radius && rightDistance < leftDistance;
+            bool top = topDistance <= radius && topDistance <= bottomDistance;
+            bool bottom = bottomDistance <= radius && bottomDistance < topDistance;
             if (left && top) return CropFrameHandle.Left | CropFrameHandle.Top;
             if (right && top) return CropFrameHandle.Right | CropFrameHandle.Top;
             if (left && bottom) return CropFrameHandle.Left | CropFrameHandle.Bottom;

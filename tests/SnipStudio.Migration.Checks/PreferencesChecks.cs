@@ -1,7 +1,9 @@
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using SnipStudio.WinUI;
+using SnipStudio.WinUI.Backend;
 
 internal static partial class Program
 {
@@ -64,9 +66,46 @@ internal static partial class Program
             Expect<ArgumentException>(() => parallelResult.AddRecent(invalid), "Invalid recent path is rejected without writing: " + invalid.Replace("\n", "<newline>"));
         Expect<ArgumentException>(() => new DesktopPreferencesStore("relative-settings.json"), "Relative settings destination is rejected");
         Check(File.ReadAllBytes(parallelPath).SequenceEqual(beforeInvalid), "Invalid recent paths preserve every existing settings byte");
+        CheckRecentHistoryPolicy();
+
+        string videoRecentPath = Path.Combine(folder, "recent-videos.json");
+        var videoRecent = new DesktopPreferencesStore(videoRecentPath);
+        foreach (string extension in new[] { ".MOV", ".avi", ".m4v", ".webm", ".mkv", ".snipstudio" })
+        {
+            string video = Path.Combine(folder, "00007_Aa" + extension);
+            videoRecent.AddRecent(video);
+            Check(new DesktopPreferencesStore(videoRecentPath).RecentPaths[0] == video,
+                "A supported recent video round-trips with its exact path: " + extension);
+        }
+
+        string inkPath = Path.Combine(folder, "remembered-ink.json");
+        var openSettings = new DesktopPreferencesStore(inkPath);
+        DesktopPreferences openDraft = openSettings.Load();
+        openDraft.Theme = "Dark";
+        openDraft.LastScreenshotCaptureKind = CaptureKind.Freeform;
+        var inkStore = new DesktopPreferencesStore(inkPath);
+        await Task.WhenAll(Enumerable.Range(0, 8)
+            .Select(index => Task.Run(() => new DesktopPreferencesStore(inkPath).RememberInk((uint)index, false, false))));
+        Check(new DesktopPreferencesStore(inkPath).Load().RecentInkColors.ToHashSet()
+            .SetEquals(Enumerable.Range(0, 8).Select(index => (uint)index)), "Concurrent ink changes retain all eight swatches");
+        DesktopPreferences detachedInk = inkStore.RememberInk(1, true, false);
+        detachedInk.RecentInkColors[0] = 99;
+        Check(inkStore.Load().RecentInkColors[0] == 1, "Remembered ink snapshots cannot mutate persisted state");
+        inkStore.RememberInk(8, false, true);
+        string lastSaveFolder = Path.Combine(folder, "other-output");
+        inkStore.RememberLastSaveFolder(lastSaveFolder);
+        openSettings.Save(openDraft);
+        DesktopPreferences rememberedChoices = new DesktopPreferencesStore(inkPath).Load();
+        Check(rememberedChoices.Theme == "Dark" && rememberedChoices.LastScreenshotCaptureKind == CaptureKind.Freeform
+            && rememberedChoices.InkArgb == 1 && rememberedChoices.HighlighterArgb == 8
+            && rememberedChoices.LastSaveFolder == lastSaveFolder && rememberedChoices.RecentInkColors is [8, 1, ..]
+            && rememberedChoices.RecentInkColors.Length == 8,
+            "Saving an older Settings draft retains recent colors and Save As folder while persisting capture shape");
 
         CheckUnknownPreferenceJson(folder);
         CheckSettingsRecovery(folder);
+        CheckIncompleteSettingsRecovery(folder);
+        CheckStartupEntryOwnership();
         CheckSettingsWriteFailure(folder);
         CheckSettingsBackupRefresh(folder);
         await CheckSettingsAtomicSharingAsync(folder);
@@ -140,6 +179,83 @@ internal static partial class Program
         defaults.Theme = "Light"; defaultsStore.Save(defaults);
         Check(new DesktopPreferencesStore(doublePath).Load().Theme == "Light" && File.ReadAllBytes(doublePath + ".bak").SequenceEqual(badBackup),
             "Explicitly saving defaults recovers the primary while retaining the old backup");
+    }
+
+    private static void CheckIncompleteSettingsRecovery(string folder)
+    {
+        foreach ((string label, string incomplete) in new[]
+        {
+            ("null-envelope", "null"),
+            ("missing-preferences", """{"RecentPaths":[]}"""),
+            ("null-preferences", """{"Preferences":null,"RecentPaths":[]}""")
+        })
+        {
+            string path = Path.Combine(folder, label + ".json");
+            string backupPath = path + ".bak";
+            string marker = Path.Combine(folder, "00004_Kept.pdf");
+            string opened = Path.Combine(folder, "00005_New.png");
+            byte[] goodBackup = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+            {
+                Preferences = new { Theme = "Dark", StrokeWidth = 13.5 },
+                RecentPaths = new[] { marker },
+                FutureEnvelope = new { Identifier = "00004" }
+            }));
+            byte[] badPrimary = Encoding.UTF8.GetBytes(incomplete);
+            File.WriteAllBytes(backupPath, goodBackup);
+            File.WriteAllBytes(path, badPrimary);
+
+            var store = new DesktopPreferencesStore(path);
+            DesktopPreferences loaded = store.Load();
+            Check(store.LoadWarning is not null && loaded.Theme == "Dark" && loaded.StrokeWidth == 13.5 &&
+                store.RecentPaths.SequenceEqual(new[] { marker }),
+                label + " restores real values from the saved backup instead of treating incomplete JSON as defaults");
+            Check(File.ReadAllBytes(path).SequenceEqual(badPrimary) && File.ReadAllBytes(backupPath).SequenceEqual(goodBackup),
+                label + " recovery reads leave both files intact");
+
+            store.AddRecent(opened);
+            var reopened = new DesktopPreferencesStore(path);
+            DesktopPreferences recovered = reopened.Load();
+            Check(reopened.LoadWarning is null && recovered.Theme == "Dark" && recovered.StrokeWidth == 13.5 &&
+                reopened.RecentPaths.SequenceEqual(new[] { opened, marker }),
+                label + " automatic recent-path publication keeps recovered settings and history");
+            using JsonDocument written = JsonDocument.Parse(File.ReadAllBytes(path));
+            Check(written.RootElement.GetProperty("FutureEnvelope").GetProperty("Identifier").GetString() == "00004" &&
+                File.ReadAllBytes(backupPath).SequenceEqual(goodBackup),
+                label + " publication preserves unknown backup fields and never rotates the good backup out");
+            string archived = Directory.GetFiles(folder, label + ".json.unreadable-*.json").Single();
+            Check(File.ReadAllBytes(archived).SequenceEqual(badPrimary), label + " incomplete primary is archived unchanged");
+        }
+
+        string emptyPath = Path.Combine(folder, "empty-preferences.json");
+        File.WriteAllText(emptyPath, """{"Preferences":{},"RecentPaths":[]}""");
+        var empty = new DesktopPreferencesStore(emptyPath);
+        Check(empty.Load().Theme == "System" && empty.LoadWarning is null,
+            "A present empty preferences object still loads with defaults for optional existing fields");
+
+        string onlyBackupPath = Path.Combine(folder, "unreadable-backup-only.json");
+        File.WriteAllText(onlyBackupPath + ".bak", "null");
+        var unreadableBackup = new DesktopPreferencesStore(onlyBackupPath);
+        Check(unreadableBackup.Load().Theme == "System" && unreadableBackup.LoadWarning is not null &&
+            !File.Exists(onlyBackupPath) && File.ReadAllText(onlyBackupPath + ".bak") == "null",
+            "A corrupt backup without a primary reports defaults and leaves the backup unchanged");
+    }
+
+    private static void CheckStartupEntryOwnership()
+    {
+        // Exercise the predicate shared by enable, disable and rollback.
+        // These fixtures never read or write the actual Run registry key.
+        var canChange = typeof(DesktopIntegrationService)
+            .GetMethod("StartupValueCanChange", BindingFlags.NonPublic | BindingFlags.Static)!
+            .CreateDelegate<Func<object?, string, bool>>();
+        const string command = "\"C:\\Preview\\SnipStudio.WinUI3.Preview.exe\" --background";
+        Check(canChange(null, command), "A missing startup value allows registration");
+        Check(canChange(command, command) && canChange(command.ToUpperInvariant(), command),
+            "The current installation owns its exact startup command, including ordinary Windows path case variations");
+        Check(!canChange(command.Replace(@"C:\Preview", @"C:\Installed", StringComparison.Ordinal), command),
+            "Enabling or restoring startup cannot overwrite another installation's registration");
+        Check(!canChange(command.Replace("--background", "--different", StringComparison.Ordinal), command),
+            "A different registered command line is not treated as this installation's registration");
+        Check(!canChange(7, command) && !canChange("", command), "An occupied unsupported registry value is preserved");
     }
 
     private static void CheckSettingsWriteFailure(string folder)

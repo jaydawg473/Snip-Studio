@@ -22,6 +22,39 @@ namespace SnipStudio.WinUI.Backend
             return document.HitTestAnnotation(ConvertPoint(point, nameof(point)), radius);
         }
 
+        public AnnotationSnapshot? HitTestMovableAnnotation(ImagePoint point, float radius = 4)
+        {
+            VerifyAccess();
+            RequireImage();
+            ValidateRadius(radius);
+            return GetAnnotation(document.HitTestMovableAnnotation(ConvertPoint(point, nameof(point)), radius));
+        }
+
+        public AnnotationSnapshot? HitTestAnnotationOutline(ImagePoint point, float radius)
+        {
+            VerifyAccess();
+            RequireImage();
+            ValidateRadius(radius);
+            return GetAnnotation(document.HitTestAnnotationOutline(ConvertPoint(point, nameof(point)), radius));
+        }
+
+        public AnnotationSnapshot? HitTestTextInk(ImagePoint point, float radius = 3)
+        {
+            int topFrame = HitTest(point, radius);
+            if (document.GetTextAnnotation(topFrame) is null) return null;
+
+            PointF pixel = ConvertPoint(point, nameof(point));
+            for (int index = topFrame; index >= 0; index--)
+            {
+                if (document.GetTextAnnotation(index) is not { } note || note.InkBounds.IsEmpty) continue;
+                RectangleF ink = note.InkBounds;
+                float tolerance = Math.Min(2, radius);
+                ink.Inflate(tolerance, tolerance);
+                if (ink.Contains(pixel)) return GetAnnotation(index);
+            }
+            return null;
+        }
+
         public AnnotationSnapshot? GetAnnotation(int index)
         {
             VerifyAccess();
@@ -52,7 +85,9 @@ namespace SnipStudio.WinUI.Backend
                 return new AnnotationSnapshot(index, document.Revision, AnnotationKind.Shape, bounds, null,
                     new ShapeAnnotationSnapshot(FromLegacyShape(shapeTool.Value), style.FillEnabled ? ToArgb(style.FillColor) : null,
                         style.OutlineEnabled ? ToArgb(style.OutlineColor) : null, style.OutlineWidth,
-                        style.FillOpacity, style.OutlineOpacity, ToImageRectangle(geometry), Array.AsReadOnly(copiedEndpoints)), null) { Owner = this };
+                        style.FillOpacity, style.OutlineOpacity, ToImageRectangle(geometry), Array.AsReadOnly(copiedEndpoints))
+                    { RotationDegrees = document.GetShapeRotation(index), OutlinePattern = style.OutlinePattern },
+                    null) { Owner = this };
             }
             return new AnnotationSnapshot(index, document.Revision, AnnotationKind.Ink, bounds, null, null, null) { Owner = this };
         }
@@ -74,24 +109,37 @@ namespace SnipStudio.WinUI.Backend
         }
 
         public bool AddShape(AnnotationShape shape, ImagePoint start, ImagePoint end,
-            uint outlineArgb, float width, uint? fillArgb = null)
+            uint outlineArgb, float width, uint? fillArgb = null,
+            global::SnipStudio.ShapeOutlinePattern outlinePattern = global::SnipStudio.ShapeOutlinePattern.Solid,
+            int outlineOpacity = 100)
         {
             VerifyCanMutate();
             RequireImage();
             ValidateWidth(width);
             return document.AddShape(ToLegacyShape(shape), ConvertPoint(start, nameof(start)), ConvertPoint(end, nameof(end)),
-                new global::SnipStudio.ShapeStyle(fillArgb.HasValue ? FromArgb(fillArgb.Value) : Color.Empty, FromArgb(outlineArgb), width));
+                new global::SnipStudio.ShapeStyle(fillArgb.HasValue ? FromArgb(fillArgb.Value) : Color.Empty,
+                    FromArgb(outlineArgb), width, 100, outlineOpacity, outlinePattern));
         }
 
         public bool UpdateShapeStyle(int index, uint? fillArgb, uint? outlineArgb, float outlineWidth,
-            int fillOpacity = 100, int outlineOpacity = 100)
+            int fillOpacity = 100, int outlineOpacity = 100, global::SnipStudio.ShapeOutlinePattern? outlinePattern = null)
         {
             VerifyCanMutate();
             RequireImage();
             ValidateWidth(outlineWidth);
             return document.UpdateShapeAnnotationStyle(index, new global::SnipStudio.ShapeStyle(
                 fillArgb.HasValue ? FromArgb(fillArgb.Value) : Color.Empty,
-                outlineArgb.HasValue ? FromArgb(outlineArgb.Value) : Color.Empty, outlineWidth, fillOpacity, outlineOpacity));
+                outlineArgb.HasValue ? FromArgb(outlineArgb.Value) : Color.Empty, outlineWidth, fillOpacity, outlineOpacity,
+                outlinePattern ?? document.GetShapeAnnotationStyle(index)?.OutlinePattern ?? global::SnipStudio.ShapeOutlinePattern.Solid));
+        }
+
+        public bool UpdateShapeOutlineWidth(AnnotationSnapshot selection, float width)
+        {
+            RequireCurrentSelection(selection);
+            if (selection.Shape is not { } shape)
+                throw new ArgumentException("Select a shape to change its outline width.", nameof(selection));
+            return UpdateShapeStyle(selection.Index, shape.FillArgb, shape.OutlineArgb, width,
+                shape.FillOpacity, shape.OutlineOpacity, shape.OutlinePattern);
         }
 
         public bool UpdateShapeEndpoints(int index, ImagePoint start, ImagePoint end)
@@ -124,6 +172,14 @@ namespace SnipStudio.WinUI.Backend
         {
             RequireCurrentSelection(snapshot);
             return MoveAnnotation(snapshot.Index, delta);
+        }
+
+        /// <summary>Returns the exact constrained translation without changing the selected object or its history.</summary>
+        public ImagePoint ConstrainAnnotationMove(AnnotationSnapshot snapshot, ImagePoint delta)
+        {
+            RequireCurrentSelection(snapshot);
+            PointF allowed = document.ConstrainMove(snapshot.Index, ToFinitePoint(delta, nameof(delta)));
+            return Math.Abs(allowed.X) < .0001f && Math.Abs(allowed.Y) < .0001f ? new ImagePoint(0, 0) : ToImagePoint(allowed);
         }
 
         public bool RemoveAnnotation(int index)
@@ -252,20 +308,27 @@ namespace SnipStudio.WinUI.Backend
                     throw new ArgumentException("Shape styling applies to shape objects only.", nameof(style));
                 convertedStyle = ConvertShapeStyle(style);
             }
-            if (rotationDegrees.HasValue && (!float.IsFinite(rotationDegrees.Value) || selection.Kind != AnnotationKind.Emoji))
-                throw new ArgumentException("Only emoji stickers support a finite rotation angle.", nameof(rotationDegrees));
+            if (rotationDegrees.HasValue && (!float.IsFinite(rotationDegrees.Value) || selection.Kind is not (AnnotationKind.Shape or AnnotationKind.Emoji)))
+                throw new ArgumentException("Choose a finite rotation angle for a shape or sticker.", nameof(rotationDegrees));
             if (bounds == ObjectFrame(selection) && style is null && rotationDegrees is null) return false;
             return document.UpdateAdapterAnnotationProperties(selection.Index, frame, convertedStyle, rotationDegrees);
         }
 
-        /// <summary>The legacy document supports rotation for emoji stickers.</summary>
+        /// <summary>Sets a shape or sticker to the given clockwise angle around its center.</summary>
         public bool RotateAnnotation(int index, float rotationDegrees)
         {
             VerifyCanMutate();
             RequireImage();
             if (!float.IsFinite(rotationDegrees)) throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
-            global::SnipStudio.EmojiAnnotationInfo? emoji = document.GetEmojiAnnotation(index);
-            return emoji != null && document.UpdateEmojiAnnotationBounds(index, emoji.Frame, rotationDegrees);
+            AnnotationSnapshot? selection = GetAnnotation(index);
+            return selection != null && RotateAnnotation(selection, rotationDegrees);
+        }
+
+        public bool RotateAnnotation(AnnotationSnapshot selection, float rotationDegrees)
+        {
+            RequireCurrentSelection(selection);
+            if (!float.IsFinite(rotationDegrees)) throw new ArgumentOutOfRangeException(nameof(rotationDegrees));
+            return document.RotateAdapterAnnotation(selection.Index, rotationDegrees);
         }
 
         public int AddText(string text, ImagePoint location, uint argb, float fontSize,
@@ -354,8 +417,12 @@ namespace SnipStudio.WinUI.Backend
             // outside the new frame. A no-op properties change or style-only
             // edit must retain those exact coordinates rather than clamp them.
             bool unchanged = original != null && bounds == ObjectFrame(original);
-            PointF first = unchanged ? ToFinitePoint(new ImagePoint(bounds.Left, bounds.Top), name) : ConvertPoint(new ImagePoint(bounds.Left, bounds.Top), name);
-            PointF last = unchanged ? ToFinitePoint(new ImagePoint(bounds.Right, bounds.Bottom), name) : ConvertPoint(new ImagePoint(bounds.Right, bounds.Bottom), name);
+            bool rotated = original?.Shape is { Shape: AnnotationShape.Rectangle or AnnotationShape.Ellipse, RotationDegrees: not 0 };
+            if (rotated && !unchanged && (bounds.Width > MaximumImageDimension || bounds.Height > MaximumImageDimension ||
+                Math.Abs(bounds.Left) > MaximumImageDimension * 2 || Math.Abs(bounds.Top) > MaximumImageDimension * 2))
+                throw new ArgumentOutOfRangeException(name, "Keep the resized shape near the image.");
+            PointF first = unchanged || rotated ? ToFinitePoint(new ImagePoint(bounds.Left, bounds.Top), name) : ConvertPoint(new ImagePoint(bounds.Left, bounds.Top), name);
+            PointF last = unchanged || rotated ? ToFinitePoint(new ImagePoint(bounds.Right, bounds.Bottom), name) : ConvertPoint(new ImagePoint(bounds.Right, bounds.Bottom), name);
             return RectangleF.FromLTRB(first.X, first.Y, last.X, last.Y);
         }
 
@@ -401,7 +468,7 @@ namespace SnipStudio.WinUI.Backend
             ValidateWidth(style.OutlineWidth);
             return new global::SnipStudio.ShapeStyle(style.FillArgb.HasValue ? FromArgb(style.FillArgb.Value) : Color.Empty,
                 style.OutlineArgb.HasValue ? FromArgb(style.OutlineArgb.Value) : Color.Empty,
-                style.OutlineWidth, style.FillOpacity, style.OutlineOpacity);
+                style.OutlineWidth, style.FillOpacity, style.OutlineOpacity, style.OutlinePattern);
         }
 
         private static PointF ToFinitePoint(ImagePoint value, string name)
@@ -450,9 +517,7 @@ namespace SnipStudio.WinUI.Backend
 
 namespace SnipStudio
 {
-    // These document transactions live with the adapter. The inherited released
-    // renderer remains byte-for-byte intact and history owns the same immutable
-    // objects/frames as the existing editing operations.
+    // The adapter uses the same immutable annotation transactions as existing edits.
     public sealed partial class EditorDocument
     {
         internal bool UpdateAdapterPlainText(int index, string text, Color color, float fontSize, float width, float minimumHeight)
@@ -489,6 +554,7 @@ namespace SnipStudio
                 if (emoji != null)
                 {
                     float rotation = rotationDegrees.HasValue ? NormalizeEmojiRotation(rotationDegrees.Value) : emoji.RotationDegrees;
+                    if (SameRotation(rotation, emoji.RotationDegrees)) rotation = emoji.RotationDegrees;
                     if (emoji.Frame == frame && emoji.RotationDegrees == rotation) return false;
                     replacement = CreateEmojiAnnotationPreview(index, frame, rotation);
                 }
@@ -499,12 +565,7 @@ namespace SnipStudio
                     ShapeStyle originalStyle = GetShapeAnnotationStyle(index);
                     ShapeStyle nextStyle = style ?? originalStyle;
                     if (tool == EditorTool.Rectangle || tool == EditorTool.Ellipse)
-                    {
-                        Annotation geometry = CreateClosedShapeResizePreview(index, frame);
-                        RectangleF next = geometry is RectangleAnnotation ? ((RectangleAnnotation)geometry).GeometryBounds : ((EllipseAnnotation)geometry).GeometryBounds;
-                        if (next == GetClosedShapeBounds(index) && originalStyle.SameAs(nextStyle)) return false;
-                        replacement = ((IStyledShape)geometry).WithStyle(nextStyle);
-                    }
+                        return UpdateClosedShape(index, frame, nextStyle, rotationDegrees);
                     else
                     {
                         PointF[] old = GetShapeEndpoints(index);
@@ -514,12 +575,58 @@ namespace SnipStudio
                         PointF Scale(PointF point) => new PointF(frame.Left + (spanX == 0 ? .5f : (point.X - left) / spanX) * frame.Width,
                             frame.Top + (spanY == 0 ? .5f : (point.Y - top) / spanY) * frame.Height);
                         PointF first = Scale(old[0]), last = Scale(old[1]);
+                        if (rotationDegrees.HasValue)
+                            RotateEndpoints(ref first, ref last, rotationDegrees.Value);
                         if (first == old[0] && last == old[1] && originalStyle.SameAs(nextStyle)) return false;
                         replacement = CreateAdapterEndpointAnnotation(tool.Value, first, last, nextStyle);
                     }
                 }
             }
             return replacement != null && ReplaceAnnotation(index, replacement);
+        }
+
+        internal bool RotateAdapterAnnotation(int index, float rotationDegrees)
+        {
+            RequireImage();
+            ClosedShapeAnnotation closed = GetClosedShape(index);
+            if (closed != null)
+                return UpdateClosedShape(index, closed.GeometryBounds, null, rotationDegrees);
+
+            EmojiAnnotation emoji = GetEmojiAnnotationObject(index);
+            if (emoji != null)
+            {
+                float angle = NormalizeEmojiRotation(rotationDegrees);
+                return !SameRotation(angle, emoji.RotationDegrees) && UpdateEmojiAnnotationBounds(index, emoji.Frame, angle);
+            }
+
+            PointF[] endpoints = GetShapeEndpoints(index);
+            if (endpoints.Length != 2) return false;
+            PointF first = endpoints[0], last = endpoints[1];
+            if (!RotateEndpoints(ref first, ref last, rotationDegrees)) return false;
+            ShapeStyle style = GetShapeAnnotationStyle(index);
+            // Keep the rotated vector and its midpoint even when the image
+            // clips an endpoint. Reconstructing from new bounds reverses some arrows.
+            Annotation replacement = GetShapeAnnotationTool(index) == EditorTool.Arrow
+                ? new ArrowAnnotation(first, last, style) : new LineAnnotation(first, last, style);
+            return ReplaceAnnotation(index, replacement);
+        }
+
+        private static bool RotateEndpoints(ref PointF first, ref PointF last, float degrees)
+        {
+            float delta = NormalizeEmojiRotation(NormalizeEmojiRotation(degrees) - GetEndpointRotation(first, last));
+            if (SameRotation(delta, 0)) return false;
+            float cardinal = (float)Math.Round(delta / 90.0) * 90;
+            if (SameRotation(cardinal, delta)) delta = NormalizeEmojiRotation(cardinal);
+            RotationComponents(delta, out double cosine, out double sine);
+            double centerX = ((double)first.X + last.X) / 2, centerY = ((double)first.Y + last.Y) / 2;
+            double x = ((double)last.X - first.X) / 2, y = ((double)last.Y - first.Y) / 2;
+            double horizontal = x * cosine - y * sine, vertical = x * sine + y * cosine;
+            PointF nextFirst = new((float)(centerX - horizontal), (float)(centerY - vertical));
+            PointF nextLast = new((float)(centerX + horizontal), (float)(centerY + vertical));
+            if (nextFirst == first && nextLast == last) return false;
+            first = nextFirst;
+            last = nextLast;
+            return true;
         }
 
         internal bool ReplaceShapeEndpoints(int index, PointF start, PointF end, ShapeStyle? style = null)

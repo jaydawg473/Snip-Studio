@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text;
 
 namespace SnipStudio.WinUI;
@@ -10,10 +11,9 @@ internal static class StartupDiagnostics
     private static readonly object Sync = new();
     private static readonly UTF8Encoding Encoding = new(false);
 
-    // This preview-specific path is separate from stable Snip Studio preferences.
     internal static string LogPath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "SnipStudio.WinUI3.Preview", "diagnostics", "startup.log");
+        "SnipStudio", "diagnostics", "startup.log");
 
     internal static void Stage(string name) => Write(name, null);
     internal static void Failure(string name, Exception exception) => Write(name, exception);
@@ -23,17 +23,7 @@ internal static class StartupDiagnostics
         // Diagnostic I/O must never hide, replace or handle the original fault.
         try
         {
-            var entry = new StringBuilder();
-            entry.Append(DateTimeOffset.UtcNow.ToString("O")).Append(' ').Append(name).AppendLine();
-            for (int depth = 0; exception is not null && depth < 3; depth++, exception = exception.InnerException)
-            {
-                entry.Append("type=").Append(exception.GetType().FullName)
-                    .Append(" hresult=0x").Append(exception.HResult.ToString("X8")).AppendLine();
-                entry.Append("message=").AppendLine(Limit(Redact(exception.Message), 2_000));
-                entry.Append("stack=").AppendLine(Limit(Redact(exception.StackTrace ?? "<unavailable>"), 4_000));
-            }
-            string text = Limit(Redact(entry.ToString()), MaximumEntryCharacters) + Environment.NewLine;
-            byte[] bytes = Encoding.GetBytes(text);
+            byte[] bytes = Encoding.GetBytes(FormatEntry(DateTimeOffset.UtcNow, name, exception));
             lock (Sync)
             {
                 string path = LogPath;
@@ -66,22 +56,20 @@ internal static class StartupDiagnostics
         else Directory.CreateDirectory(path);
     }
 
-    private static string Redact(string text)
+    internal static string FormatEntry(DateTimeOffset timestamp, string stage, Exception? exception)
     {
-        string application = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        string profile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (application.Length > 0)
+        // Callers provide fixed stage labels. Exception messages and source
+        // file names can contain private paths or data from outside the app.
+        var entry = new StringBuilder();
+        entry.Append(timestamp.ToString("O")).Append(' ').Append(stage).AppendLine();
+        for (int depth = 0; exception is not null && depth < 3; depth++, exception = exception.InnerException)
         {
-            text = text.Replace(application, "[application]", StringComparison.OrdinalIgnoreCase);
-            text = text.Replace(application.Replace('\\', '/'), "[application]", StringComparison.OrdinalIgnoreCase);
+            entry.Append("type=").Append(exception.GetType().FullName)
+                .Append(" hresult=0x").Append(exception.HResult.ToString("X8")).AppendLine();
+            string trace = new StackTrace(exception, fNeedFileInfo: false).ToString();
+            entry.Append("stack=").AppendLine(trace.Length == 0 ? "<unavailable>" : Limit(trace.TrimEnd(), 4_000));
         }
-        if (profile.Length > 0)
-        {
-            text = text.Replace(profile, "[user-profile]", StringComparison.OrdinalIgnoreCase);
-            text = text.Replace(profile.Replace('\\', '/'), "[user-profile]", StringComparison.OrdinalIgnoreCase);
-        }
-        return text;
+        return Limit(entry.ToString().TrimEnd('\r', '\n'), MaximumEntryCharacters) + Environment.NewLine;
     }
 
     private static string Limit(string text, int characters) =>

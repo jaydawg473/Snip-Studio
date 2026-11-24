@@ -16,9 +16,10 @@ namespace SnipStudio.WinUI.Backend;
 /// to validate executable signatures. Each invocation rechecks and locks the
 /// original publisher binary plus the complete pinned code/model manifest.
 /// </summary>
-internal static class TranslationRuntimeTrust
+internal static partial class TranslationRuntimeTrust
 {
-    private const string ManifestSha256 = "38C255C3E6CBC7F067A4122901D9328C4FC9954BC7005AA421796F9B1CC0C5D2";
+    private const string CompressedManifestSha256 = "9FA6B3A66B5CEB699A1A6FC6F529B7BB5077589F9931DDC7248F78C6EC31F9D8";
+    private const string RawManifestSha256 = "38C255C3E6CBC7F067A4122901D9328C4FC9954BC7005AA421796F9B1CC0C5D2";
     private const string NodeSha256 = "86FC4785327DB5F5C7558DC6156C543B433C313E813A222E088086222AB4AFA6";
     private const int MaximumManifestBytes = 64 * 1024;
     private static readonly Guid GenericVerifyV2 = new("00AAC56B-CD44-11d0-8CC2-00C04FC295EE");
@@ -36,7 +37,8 @@ internal static class TranslationRuntimeTrust
             lease.LockDirectoryChain(root);
             string manifestPath = ChildPath(root, "bundle.json");
             FileStream manifest = lease.Open(manifestPath);
-            if (manifest.Length <= 0 || manifest.Length > MaximumManifestBytes || Hash(manifest, token) != ManifestSha256)
+            if (manifest.Length <= 0 || manifest.Length > MaximumManifestBytes ||
+                Hash(manifest, token) is not (CompressedManifestSha256 or RawManifestSha256))
                 throw Blocked("The offline translation manifest does not match the reviewed release.");
             manifest.Position = 0;
             using JsonDocument document = JsonDocument.Parse(manifest, new JsonDocumentOptions { MaxDepth = 12 });

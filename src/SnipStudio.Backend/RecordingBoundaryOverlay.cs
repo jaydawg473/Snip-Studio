@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Threading;
 using System.Windows.Forms;
@@ -22,14 +23,30 @@ public sealed class RecordingBoundaryOverlay : IDisposable
         if (Thread.CurrentThread.GetApartmentState() != ApartmentState.STA)
             throw new InvalidOperationException("Create and show the recording outline on the application's STA UI thread.");
         ownerThread = Environment.CurrentManagedThreadId;
-        // This is the same intersection used by ScreenRecorder.StartAsync.
-        // Pass Region to the recorder so both own the same physical rectangle.
+        Region = ClipToDesktop(requestedRegion);
+        boundary = new global::SnipStudio.RecordingBoundary(Region.Rectangle);
+    }
+
+    public static RecordingRegion ClipToDesktop(RecordingRegion requestedRegion)
+    {
+        // Match ScreenRecorder's physical rectangle before creating any optional outline HWNDs.
         Rectangle clipped = Rectangle.Intersect(requestedRegion.Rectangle, SystemInformation.VirtualScreen);
         if (clipped.Width < 2 || clipped.Height < 2)
             throw new ArgumentException("The selected recording area is no longer available on the desktop.", nameof(requestedRegion));
-        Region = new(clipped.X, clipped.Y, clipped.Width, clipped.Height);
-        boundary = new global::SnipStudio.RecordingBoundary(clipped);
+        return AsRegion(clipped);
     }
+
+    public static IReadOnlyList<RecordingRegion> GetMonitorWorkAreas(RecordingRegion region)
+    {
+        // Screen.WorkingArea is already in desktop coordinates, including on monitors to the left or above primary.
+        Screen preferred = Screen.FromRectangle(region.Rectangle);
+        var workAreas = new List<RecordingRegion> { AsRegion(preferred.WorkingArea) };
+        foreach (Screen screen in Screen.AllScreens)
+            if (!screen.Equals(preferred)) workAreas.Add(AsRegion(screen.WorkingArea));
+        return workAreas;
+    }
+
+    private static RecordingRegion AsRegion(Rectangle bounds) => new(bounds.X, bounds.Y, bounds.Width, bounds.Height);
 
     public RecordingRegion Region { get; }
     public bool HasCompleteOutline { get { VerifyAccess(); return boundary.HasCompleteOutline; } }

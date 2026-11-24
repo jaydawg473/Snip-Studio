@@ -7,7 +7,6 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
-using NativeOcr = SnipStudio.TextRecognition;
 using NativeLine = SnipStudio.TextLineRegion;
 using NativeStyle = SnipStudio.SourceTextStyle;
 using NativeFamily = SnipStudio.SourceTextFamilyContext;
@@ -21,8 +20,8 @@ public sealed partial class EditorSession
 
     /// <summary>
     /// Recognizes a detached view of the current image locally. The legacy
-    /// recognizer owns its copy, enforces one native recognizer at a time, and
-    /// shares a thirty-second budget across initial and dense-row recovery.
+    /// recognizer owns its copy. Small English images can also receive an
+    /// independent, bounded local read before the snapshot is returned.
     /// </summary>
     public async Task<OcrSnapshot> RecognizeTextAsync(CancellationToken cancellationToken = default)
     {
@@ -48,7 +47,7 @@ public sealed partial class EditorSession
             try
             {
                 using Bitmap snapshot = document.RenderImage();
-                work = NativeOcr.RecognizeAsync(snapshot, request.Token);
+                work = OfflineOcrEngine.RecognizeAsync(snapshot, request.Token);
             }
             catch { forwardCancellation.Dispose(); request.Dispose(); throw; }
             ocrNativePending = work;
@@ -110,8 +109,9 @@ public sealed partial class EditorSession
     {
         var selection = SelectOcrGeometry(snapshot, start, end);
         if (!selection.HasSelection)
-            return new OcrSelectionSnapshot(snapshot, "", Array.Empty<OcrBounds>(), Array.Empty<int>());
+            return new OcrSelectionSnapshot(snapshot, "", Array.Empty<OcrBounds>(), Array.Empty<OcrBounds>(), Array.Empty<int>());
         var bands = selection.SelectedLineBounds().Select(OcrSnapshot.FromRectangle).ToArray();
+        var wordBands = new List<OcrBounds>();
         var lines = new List<int>();
         var selectedWords = new List<(int LineIndex, int WordIndex)>();
         int flatIndex = 0;
@@ -124,15 +124,19 @@ public sealed partial class EditorSession
                 if (word == null || string.IsNullOrWhiteSpace(word.Text) || !ValidOcrBounds(word.Bounds)) continue;
                 bool chosen = selection.IsSelected(flatIndex++);
                 selectedLine |= chosen;
-                if (chosen) selectedWords.Add((index, wordIndex));
+                if (chosen)
+                {
+                    selectedWords.Add((index, wordIndex));
+                    wordBands.Add(OcrSnapshot.FromRectangle(word.Bounds));
+                }
             }
             if (selectedLine) lines.Add(index);
         }
         int lineIndex = selection.SelectedLineIndex;
         if (lineIndex >= 0 &&
             selection.TryGetSelectedCharacterRange(snapshot.Lines[lineIndex].Text, out int rangeStart, out int rangeLength))
-            return new OcrSelectionSnapshot(snapshot, selection.SelectedText, bands, lines, selectedWords, rangeStart, rangeLength);
-        return new OcrSelectionSnapshot(snapshot, selection.SelectedText, bands, lines, selectedWords);
+            return new OcrSelectionSnapshot(snapshot, selection.SelectedText, bands, wordBands, lines, selectedWords, rangeStart, rangeLength);
+        return new OcrSelectionSnapshot(snapshot, selection.SelectedText, bands, wordBands, lines, selectedWords);
     }
 
     /// <summary>Returns only the live highlight geometry while a user drags across recognized words.</summary>
@@ -144,6 +148,15 @@ public sealed partial class EditorSession
             : Array.Empty<OcrBounds>();
     }
 
+    /// <summary>Previews each selected word without highlighting the gaps between words.</summary>
+    public IReadOnlyList<OcrBounds> PreviewRecognizedWordSelection(OcrSnapshot snapshot, ImagePoint start, ImagePoint end)
+    {
+        var selection = SelectOcrGeometry(snapshot, start, end);
+        return selection.HasSelection
+            ? selection.SelectedWordBounds().Select(OcrSnapshot.FromRectangle).ToArray()
+            : Array.Empty<OcrBounds>();
+    }
+
     private global::SnipStudio.TextOverlaySelection SelectOcrGeometry(OcrSnapshot snapshot, ImagePoint start, ImagePoint end)
     {
         VerifyAccess();
@@ -151,21 +164,20 @@ public sealed partial class EditorSession
         PointF first = ConvertPoint(start, nameof(start));
         PointF last = ConvertPoint(end, nameof(end));
         var selection = snapshot.SelectionGeometry;
-        if (snapshot.NativeResult.ProtectedGraphics.Any(graphic => graphic.Contains(first)))
-        {
-            selection.Clear();
-            return selection;
-        }
-        int anchor = selection.HitTest(first, 8);
-        if (anchor < 0) selection.Clear();
-        else selection.Select(anchor, first == last ? anchor : selection.Nearest(last));
+        bool click = first == last;
+        bool startsOnGraphic = snapshot.NativeResult.ProtectedGraphics.Any(graphic => graphic.Contains(first));
+        int anchor = startsOnGraphic ? -1 : click ? selection.HitTest(first, 8) : selection.HitTestNear(first, 2.5f);
+        // Dragging from a file icon is useful for selecting its neighboring
+        // row. It never treats the icon itself as editable text on a click.
+        if (!click && anchor < 0) selection.SelectArea(first, last);
+        else selection.Select(anchor, click ? anchor : selection.Nearest(last));
         return selection;
     }
 
     public bool DeleteRecognizedText(OcrSnapshot snapshot, ImagePoint start, ImagePoint end) =>
         DeleteRecognizedSelection(snapshot, SelectRecognizedText(snapshot, start, end));
 
-    /// <summary>Erases only selected native word bands; all other source typography remains raster-exact.</summary>
+    /// <summary>Erases the selected source words as a single undoable change.</summary>
     public bool DeleteRecognizedSelection(OcrSnapshot snapshot, OcrSelectionSnapshot selection)
     {
         VerifyCanMutate();
@@ -174,47 +186,51 @@ public sealed partial class EditorSession
         if (!ReferenceEquals(selection.Source, snapshot))
             throw new InvalidOperationException("The text selection belongs to a different extraction. Select text again before deleting it.");
         if (selection.Bands.Count == 0) return false;
+        // A tilted word's axis-aligned bounding box can include unrelated
+        // pixels outside the actual word, even when no other word overlaps.
+        if (HasAngledOcrGeometry(snapshot))
+            throw new InvalidOperationException("Rotate the snip before deleting recognized text. The source pixels were kept.");
         if (selection.Bands.Count != selection.LineIndices.Count || selection.Bands.Count > 4096)
             throw new InvalidOperationException("The text selection no longer matches its source lines. Nothing was deleted.");
-        var masks = new List<Rectangle>(selection.Bands.Count);
-        var backgrounds = new List<Color>(selection.Bands.Count);
+        var runs = new List<(int LineIndex, RectangleF Ink)>(selection.Bands.Count);
         for (int at = 0; at < selection.Bands.Count; at++)
         {
-            OcrBounds value = selection.Bands[at];
-            RectangleF selected = new((float)value.X, (float)value.Y, (float)value.Width, (float)value.Height);
             int sourceIndex = selection.LineIndices[at];
-            if (sourceIndex < 0 || sourceIndex >= snapshot.NativeResult.Lines.Count || !ValidOcrBounds(selected))
+            if (sourceIndex < 0 || sourceIndex >= snapshot.NativeResult.Lines.Count)
                 throw new InvalidOperationException("The text selection has invalid source geometry. Nothing was deleted.");
-            if (FindExistingOcrTextNote(selected) >= 0)
-                throw new InvalidOperationException("This selection overlaps entered text. Select the original text note and edit it directly; no source pixels were deleted.");
-            Rectangle mask = Rectangle.Intersect(new Rectangle(Point.Empty, document.ImageSize), Rectangle.FromLTRB(
-                (int)Math.Floor(selected.Left) - 2, (int)Math.Floor(selected.Top) - 2,
-                (int)Math.Ceiling(selected.Right) + 2, (int)Math.Ceiling(selected.Bottom) + 2));
-            NativeLine sourceLine = snapshot.NativeResult.Lines[sourceIndex];
-            if (!sourceLine.RecognitionClipBounds.IsEmpty)
-                mask = Rectangle.Intersect(mask, Rectangle.Ceiling(sourceLine.RecognitionClipBounds));
-            foreach (RectangleF graphic in snapshot.NativeResult.ProtectedGraphics)
-                mask = ProtectOcrPadding(mask, selected, graphic);
-            for (int lineIndex = 0; lineIndex < snapshot.NativeResult.Lines.Count; lineIndex++)
+            var words = snapshot.NativeResult.Lines[sourceIndex].Words;
+            RectangleF run = RectangleF.Empty;
+            int initialCount = runs.Count;
+            for (int wordIndex = 0; wordIndex < words.Count; wordIndex++)
             {
-                NativeLine line = snapshot.NativeResult.Lines[lineIndex];
-                mask = ProtectOcrPadding(mask, selected, line.ExcludedGraphicBounds);
-                // Native line geometry remains protective evidence even when
-                // one of its word boxes is empty, missing or invalid. Missing
-                // word boxes never establish blank pixels beside a selection.
-                if (lineIndex != sourceIndex && ValidOcrBounds(line.Bounds))
-                    mask = ProtectOcrPadding(mask, selected, line.Bounds);
-                for (int wordIndex = 0; wordIndex < line.Words.Count; wordIndex++)
+                var word = words[wordIndex];
+                if (string.IsNullOrWhiteSpace(word.Text) || !ValidOcrBounds(word.Bounds)) continue;
+                if (!selection.IncludesWord(sourceIndex, wordIndex))
                 {
-                    var word = line.Words[wordIndex];
-                    if (word == null || !ValidOcrBounds(word.Bounds)) continue;
-                    // Use exact native word indices, not floating-point union
-                    // containment. Fractional OCR boxes can lose a boundary ULP
-                    // when converted to a rectangle's Width and back to Right.
-                    if (lineIndex == sourceIndex && selection.IncludesWord(lineIndex, wordIndex)) continue;
-                    mask = ProtectOcrPadding(mask, selected, word.Bounds);
+                    FinishRun(sourceIndex, ref run);
+                    continue;
                 }
+                RectangleF bounds = word.Bounds;
+                // Preserve space that the two word masks (two pixels of padding
+                // each) would leave untouched. It may contain unrecognized art.
+                const float combinedPadding = 4;
+                if (!run.IsEmpty && (bounds.Left > run.Right + combinedPadding || run.Left > bounds.Right + combinedPadding ||
+                    bounds.Top > run.Bottom + combinedPadding || run.Top > bounds.Bottom + combinedPadding))
+                    FinishRun(sourceIndex, ref run);
+                run = run.IsEmpty ? bounds : RectangleF.Union(run, bounds);
             }
+            FinishRun(sourceIndex, ref run);
+            if (runs.Count == initialCount)
+                throw new InvalidOperationException("The text selection has invalid source geometry. Nothing was deleted.");
+        }
+
+        var masks = new List<Rectangle>(runs.Count);
+        var backgrounds = new List<Color>(runs.Count);
+        foreach ((int lineIndex, RectangleF ink) in runs)
+        {
+            if (FindExistingOcrTextNote(ink) >= 0)
+                throw new InvalidOperationException("This selection overlaps entered text. Select the original text note and edit it directly; no source pixels were deleted.");
+            Rectangle mask = BuildSelectedOcrMask(snapshot, selection, lineIndex, ink);
             if (mask.Width < 1 || mask.Height < 1)
                 throw new InvalidOperationException("This selection overlaps protected graphics or neighboring text. Nothing was deleted.");
             SampleOcrColors(mask, out Color background, out _);
@@ -223,6 +239,15 @@ public sealed partial class EditorSession
         }
         RequireCurrentOcr(snapshot);
         return document.EraseRecognizedRegions(masks, backgrounds, snapshot.ImageIdentity, snapshot.Revision);
+
+        void FinishRun(int sourceIndex, ref RectangleF ink)
+        {
+            if (ink.IsEmpty) return;
+            if (runs.Count == 4096)
+                throw new InvalidOperationException("Select a smaller area to delete recognized text. Nothing was deleted.");
+            runs.Add((sourceIndex, ink));
+            ink = RectangleF.Empty;
+        }
     }
 
     /// <summary>
@@ -234,8 +259,8 @@ public sealed partial class EditorSession
         IReadOnlyList<int>? lineIndices = null, CancellationToken cancellationToken = default) =>
         ConvertRecognizedTextCoreAsync(snapshot, lineIndices, null, cancellationToken);
 
-    /// <summary>Estimates an editable line in place without replacing the source pixels or creating an Undo step.</summary>
-    public async Task<OcrLineEditSnapshot> PrepareRecognizedLineEditAsync(OcrSnapshot source, int lineIndex,
+    /// <summary>Prepares a draft without changing pixels or Undo history. An ambiguous note overlap returns null.</summary>
+    public async Task<OcrLineEditSnapshot?> PrepareRecognizedLineEditAsync(OcrSnapshot source, int lineIndex,
         CancellationToken cancellationToken = default)
     {
         VerifyAccess();
@@ -252,11 +277,11 @@ public sealed partial class EditorSession
         NativeLine line = source.NativeResult.Lines[lineIndex];
         if (string.IsNullOrWhiteSpace(line.Text) || line.Text.Length > MaximumTextCharacters || !ValidOcrBounds(line.Bounds))
             throw new InvalidOperationException("This recognized line cannot be edited in place. You can still copy the extracted text.");
-        int existing = FindEditableOcrNote(line);
+        if (!TryFindEditableOcrNote(line, out int existing)) return null;
         if (existing >= 0 && document.GetTextAnnotation(existing) is { } note)
             return new OcrLineEditSnapshot(source, existing, note.Text, note.Rtf, note.FontFamily,
                 (TextFontStyle)note.FontStyle, note.Location, note.Color, note.FontSize, note.LayoutWidth, note.MinimumHeight);
-        if (source.TextAngle.HasValue && (!double.IsFinite(source.TextAngle.Value) || Math.Abs(source.TextAngle.Value) > 2))
+        if (HasAngledOcrGeometry(source))
             throw new InvalidOperationException("Angled source text cannot be edited in place. Copy it or rotate the snip and try again.");
 
         Rectangle mask = BuildOcrMask(source, lineIndex);
@@ -303,28 +328,39 @@ public sealed partial class EditorSession
     }
 
     /// <summary>Commits changed text as one Undo step, retaining the original ink position and protected source area.</summary>
-    public int ApplyRecognizedLineEdit(OcrLineEditSnapshot draft, string text, string rtf, uint argb, float fontSize)
+    public int ApplyRecognizedLineEdit(OcrLineEditSnapshot draft, string text, string rtf, uint argb, float fontSize) =>
+        ApplyRecognizedLineEdit(draft, text, rtf, argb, fontSize, null, null);
+
+    /// <summary>Commits a source draft with an optional protected width and replacement fill.</summary>
+    public int ApplyRecognizedLineEdit(OcrLineEditSnapshot draft, string text, string rtf, uint argb,
+        float fontSize, float? layoutWidth, uint? replacementBackground)
     {
         VerifyCanMutate();
         ArgumentNullException.ThrowIfNull(draft);
         RequireCurrentOcr(draft.Source);
-        ValidateText(text, fontSize, draft.LayoutWidth, draft.MinimumHeight, rtf);
+        float width = layoutWidth ?? draft.LayoutWidth;
+        uint background = replacementBackground ?? draft.BackgroundArgb;
+        ValidateText(text, fontSize, width, draft.MinimumHeight, rtf);
         if (string.IsNullOrWhiteSpace(text))
             throw new ArgumentException("Enter text to keep this edit. To remove source words, cancel and use Delete selection.", nameof(text));
+        if (replacementBackground.HasValue && (draft.ExistingAnnotationIndex >= 0 || (background >> 24) != 255))
+            throw new ArgumentException("Choose an opaque replacement fill for a source image line.", nameof(replacementBackground));
+        if (draft.ExistingAnnotationIndex < 0 && (width <= 0 || width > draft.LayoutWidth))
+            throw new ArgumentOutOfRangeException(nameof(layoutWidth), "Keep the text box within the protected source line.");
         if (string.Equals(text, draft.Text, StringComparison.Ordinal) && string.Equals(rtf, draft.Rtf, StringComparison.Ordinal) &&
-            argb == draft.Argb && fontSize == draft.FontSize)
+            argb == draft.Argb && fontSize == draft.FontSize && width == draft.LayoutWidth && background == draft.BackgroundArgb)
             return -1;
         if (draft.ExistingAnnotationIndex >= 0)
-            return UpdateText(draft.ExistingAnnotationIndex, text, argb, fontSize, draft.LayoutWidth, rtf, draft.MinimumHeight)
+            return UpdateText(draft.ExistingAnnotationIndex, text, argb, fontSize, width, rtf, draft.MinimumHeight)
                 ? draft.ExistingAnnotationIndex : -1;
 
         ArgumentException.ThrowIfNullOrWhiteSpace(rtf);
-        RectangleF ink = global::SnipStudio.RichTextLayout.Measure(rtf, draft.LayoutWidth).InkBounds;
+        RectangleF ink = global::SnipStudio.RichTextLayout.Measure(rtf, width).InkBounds;
         RectangleF layout = draft.ProtectedLayout;
         if (!TryAlignOcrInk(draft.SourceInk.Location, layout, ink, out PointF location))
             throw new InvalidOperationException("The edit needs more room than this source line has. Shorten the text or reduce its font size.");
         var replacement = new global::SnipStudio.RecognizedTextReplacement(draft.SourceMask, location, text, rtf,
-            FromArgb(argb), FromArgb(draft.BackgroundArgb), fontSize, draft.LayoutWidth, layout, ink);
+            FromArgb(argb), FromArgb(background), fontSize, width, layout, ink);
         int index = document.ReplaceRecognizedTextBlocks(new[] { replacement }, draft.Source.ImageIdentity, draft.Source.Revision);
         if (index < 0)
             throw new InvalidOperationException("The snip changed. Recognize the current image before editing it.");
@@ -350,17 +386,21 @@ public sealed partial class EditorSession
         var reviewed = new Dictionary<int, string>();
         for (int index = 0; index < lineIndices.Count; index++)
         {
-            string text = reviewedSegments[index] ?? throw new ArgumentException("A reviewed translation line is missing.", nameof(reviewedSegments));
-            if (string.IsNullOrWhiteSpace(text) || text.Length > 16000)
-                throw new ArgumentException("Each reviewed translation must contain 1 to 16,000 characters.", nameof(reviewedSegments));
-            if (!reviewed.TryAdd(lineIndices[index], text))
+            int sourceIndex = lineIndices[index];
+            if ((uint)sourceIndex >= (uint)snapshot.Lines.Count)
+                throw new ArgumentOutOfRangeException(nameof(lineIndices), "Choose lines from this recognition result.");
+            string text = reviewedSegments[index];
+            if (string.IsNullOrWhiteSpace(text) || text.Length > MaximumTextCharacters)
+                return Task.FromResult(ReviewedLineFailure(sourceIndex, "Enter between 1 and 16,000 characters or leave the line unchanged."));
+            if (!reviewed.TryAdd(sourceIndex, text))
                 throw new ArgumentException("A source line was selected more than once. Nothing was replaced.", nameof(lineIndices));
         }
         return ConvertRecognizedTextCoreAsync(snapshot, lineIndices, reviewed, cancellationToken);
     }
 
     private async Task<OcrConversionResult> ConvertRecognizedTextCoreAsync(OcrSnapshot snapshot,
-        IReadOnlyList<int>? lineIndices, IReadOnlyDictionary<int, string>? reviewedTranslation, CancellationToken cancellationToken)
+        IReadOnlyList<int>? lineIndices, IReadOnlyDictionary<int, string>? reviewedTranslation, CancellationToken cancellationToken,
+        OcrTextReview? review = null, bool isTranslation = true)
     {
         VerifyCanMutate();
         cancellationToken.ThrowIfCancellationRequested();
@@ -368,7 +408,8 @@ public sealed partial class EditorSession
         RequireCurrentOcr(snapshot);
         RequireOcrContext();
         if (!snapshot.Available) return OcrFailure(snapshot.Message.Length == 0 ? "Windows text recognition is unavailable." : snapshot.Message);
-        if (snapshot.TextAngle.HasValue && (!double.IsFinite(snapshot.TextAngle.Value) || Math.Abs(snapshot.TextAngle.Value) > 2))
+        bool angled = HasAngledOcrGeometry(snapshot);
+        if (reviewedTranslation == null && angled)
             return OcrFailure("Angled text cannot be replaced safely. Copy the extracted text or rotate the snip and recognize it again.");
         if (ocrWorkActive) throw new InvalidOperationException("Text recognition or source-style matching is already running.");
         var requested = new SortedSet<int>();
@@ -381,7 +422,8 @@ public sealed partial class EditorSession
             requested.Add(index);
         }
         if (requested.Count == 0) return OcrFailure("No recognized lines were selected.");
-        if (requested.Count > 4096 || requested.Sum(index => (long)(reviewedTranslation == null ? snapshot.Lines[index].Text.Length : reviewedTranslation[index].Length)) > 512 * 1024)
+        if (requested.Count > 4096 || requested.Sum(index => (long)(reviewedTranslation?[index].Length ??
+            review?.FindLine(index).Text.Length ?? snapshot.Lines[index].Text.Length)) > 512 * 1024)
             return OcrFailure("This selection is too large to convert in one edit. Select fewer lines; the complete extraction is kept.");
 
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -391,7 +433,8 @@ public sealed partial class EditorSession
         try
         {
             var replacements = new List<global::SnipStudio.RecognizedTextReplacement>();
-            int keptNotes = 0, keptOriginals = 0, lastExistingNote = -1;
+            var noteEdits = new Dictionary<int, global::SnipStudio.EditorDocument.TextAnnotation>();
+            int keptNotes = 0, lastExistingNote = -1;
             NativeFamily? family = null;
             bool familyPrepared = false;
             foreach (int index in requested)
@@ -399,25 +442,59 @@ public sealed partial class EditorSession
                 token.ThrowIfCancellationRequested();
                 RequireCurrentOcr(snapshot);
                 NativeLine line = snapshot.NativeResult.Lines[index];
-                if (string.IsNullOrWhiteSpace(line.Text)) continue;
-                string replacementText = reviewedTranslation == null ? line.Text : reviewedTranslation[index];
-                if (reviewedTranslation != null && string.Equals(replacementText, line.Text, StringComparison.Ordinal))
+                OcrReviewLine? segment = review?.FindLine(index);
+                bool partialLine = segment is { IsWholeLine: false };
+                string originalText = segment?.Text ?? line.Text;
+                RectangleF inkBounds = partialLine ? segment!.SourceInk : line.Bounds;
+                if (string.IsNullOrWhiteSpace(originalText))
                 {
-                    keptOriginals++;
+                    if (reviewedTranslation != null)
+                        return ReviewedLineFailure(index, "This line has no original recognized text to replace.");
                     continue;
                 }
-                if (line.Text.Length > 16000)
-                    return OcrFailure("One recognized line exceeds the 16,000-character text-note limit. No text was replaced.");
-                if (!ValidOcrBounds(line.Bounds)) return OcrFailure("A recognized line has invalid positions. No text was replaced.");
-                int existing = FindExistingOcrTextNote(line.Bounds);
+                string replacementText = reviewedTranslation == null ? originalText : reviewedTranslation[index];
+                if (reviewedTranslation != null && string.Equals(replacementText, originalText, StringComparison.Ordinal))
+                    continue;
+                if (originalText.Length > MaximumTextCharacters)
+                    return reviewedTranslation == null
+                        ? OcrFailure("One recognized line exceeds the 16,000-character text-note limit. No text was replaced.")
+                        : ReviewedLineFailure(index, "The original text exceeds the text-note limit. Leave this line unchanged.");
+                if (!ValidOcrBounds(inkBounds))
+                    return reviewedTranslation == null ? OcrFailure("A recognized line has invalid positions. No text was replaced.")
+                        : ReviewedLineFailure(index, "The original text position is invalid. Recognize the snip again or leave this line unchanged.");
+                int existing = FindExistingOcrTextNote(inkBounds);
                 if (existing >= 0)
                 {
-                    // An OCR guess must never replace or recolor entered work.
-                    // Edit the existing annotation directly instead.
-                    keptNotes++;
-                    lastExistingNote = existing;
+                    if (reviewedTranslation == null)
+                    {
+                        // A plain OCR conversion must leave editable notes alone.
+                        keptNotes++;
+                        lastExistingNote = existing;
+                        continue;
+                    }
+
+                    if (partialLine)
+                        return ReviewedLineFailure(index, "The selected words are part of an editable note. Edit the note directly or leave this row unchanged.");
+                    var note = document.GetTextAnnotation(existing)!;
+                    if (!IsWholeReviewedNote(snapshot, index, existing, note) || noteEdits.ContainsKey(existing))
+                        return ReviewedLineFailure(index, "This row does not identify one complete editable note. Edit the note directly or leave this row unchanged.");
+                    var edit = document.PrepareReviewedTextNote(existing, replacementText, out string failure);
+                    if (edit == null)
+                        return ReviewedLineFailure(index, failure);
+                    if (ReviewedNoteCoversNeighbor(snapshot, index, existing, note.InkBounds, edit.InkBounds))
+                        return ReviewedLineFailure(index, "The reviewed text would cover nearby content. Shorten it or leave this line unchanged.");
+                    noteEdits.Add(existing, edit);
                     continue;
                 }
+                if (angled)
+                    return ReviewedLineFailure(index, "Angled image text cannot be replaced safely. Leave this row unchanged or rotate and recognize the snip again.");
+                Rectangle mask = partialLine
+                    ? BuildSelectedOcrMask(snapshot, review!.Selection!, index, inkBounds)
+                    : BuildOcrMask(snapshot, index);
+                if (mask.Width < 1 || mask.Height < 1)
+                    return reviewedTranslation == null
+                        ? OcrFailure("A source text region overlaps protected graphics or neighboring text. No text was replaced.")
+                        : ReviewedLineFailure(index, "The source crosses protected graphics or nearby text. Leave this line unchanged.");
                 if (!familyPrepared)
                 {
                     family = await EstimateOcrFamilyAsync(snapshot, token);
@@ -425,32 +502,51 @@ public sealed partial class EditorSession
                     token.ThrowIfCancellationRequested();
                     RequireCurrentOcr(snapshot);
                 }
-                Rectangle mask = BuildOcrMask(snapshot, index);
-                if (mask.Width < 1 || mask.Height < 1)
-                    return OcrFailure("A source text region overlaps protected graphics or neighboring text. No text was replaced.");
-                var (foreground, background, style, layout) = await MatchOcrLineStyleAsync(snapshot, index, mask, family, token);
-                var replacement = PrepareOcrReplacement(replacementText, line.Bounds, mask, layout, foreground, background,
-                    style, reviewedTranslation != null, token);
+                global::SnipStudio.RecognizedTextReplacement? replacement;
+                try
+                {
+                    var (foreground, background, style, layout) = await MatchOcrLineStyleAsync(snapshot, index, mask, family, token,
+                        partialLine ? segment : null, partialLine ? review!.Selection : null);
+                    replacement = PrepareOcrReplacement(replacementText, inkBounds, mask, layout, foreground, background,
+                        style, reviewedTranslation != null && isTranslation, token);
+                }
+                catch (InvalidOperationException exception) when (reviewedTranslation != null)
+                {
+                    return ReviewedLineFailure(index, exception.Message);
+                }
                 if (replacement == null)
-                    return OcrFailure("Recognized line " + (index + 1) + " does not fit its protected source region. No text was replaced; copy or edit the extraction separately.");
+                    return reviewedTranslation == null
+                        ? OcrFailure("Recognized line " + (index + 1) + " does not fit its protected source region. No text was replaced; copy or edit the extraction separately.")
+                        : ReviewedLineFailure(index, "The reviewed text does not fit the space around the original. Shorten it or leave this line unchanged.");
                 replacements.Add(replacement);
             }
             token.ThrowIfCancellationRequested();
             RequireCurrentOcr(snapshot);
-            if (replacements.Count == 0)
+            int appliedCount = replacements.Count + noteEdits.Count;
+            if (appliedCount == 0)
                 return keptNotes > 0
                     ? new OcrConversionResult(true, lastExistingNote, 0, "Existing editable text was kept. Select the text note to edit it directly.")
-                    : keptOriginals > 0
-                        ? new OcrConversionResult(true, -1, 0, "The reviewed translation is unchanged. Original screenshot pixels were kept.")
+                    : reviewedTranslation != null
+                        ? OcrFailure("Nothing to apply. The reviewed text matches the original.")
                         : OcrFailure("No source text was available to convert.");
-            int lastIndex = document.ReplaceRecognizedTextBlocks(replacements, snapshot.ImageIdentity, snapshot.Revision);
+            int lastIndex;
+            try
+            {
+                lastIndex = document.ReplaceRecognizedTextBlocks(replacements, snapshot.ImageIdentity, snapshot.Revision, noteEdits);
+            }
+            catch (ArgumentException exception)
+            {
+                return reviewedTranslation != null
+                    ? OcrFailure(exception.Message.Split('\n')[0] + " Review the affected lines or leave them unchanged. The snip was kept.")
+                    : OcrFailure("The converted text could not fit safely around nearby content. The original snip was kept. Select fewer lines or copy the recognized text.");
+            }
             if (lastIndex < 0) return OcrFailure("The snip changed. No text was replaced; recognize the current image again.");
-            return new OcrConversionResult(true, lastIndex, replacements.Count,
-                (reviewedTranslation == null ? "Converted " : "Applied reviewed translation to ") + replacements.Count +
-                " line" + (replacements.Count == 1 ? "" : "s") +
+            return new OcrConversionResult(true, lastIndex, appliedCount,
+                (reviewedTranslation == null ? "Converted " : isTranslation ? "Applied reviewed translation to " : "Updated ") + appliedCount +
+                " line" + (appliedCount == 1 ? "" : "s") +
                 (reviewedTranslation == null
                     ? " to editable text. Recognized strings were preserved verbatim; compare them with the image. Fonts are estimated. Undo restores the original pixels."
-                    : ". Font appearance is estimated; unchanged lines retain their original pixels. Undo restores the original.") +
+                    : ". Undo restores the original snip.") +
                 (keptNotes == 0 ? "" : " Existing text notes were kept."));
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -461,35 +557,62 @@ public sealed partial class EditorSession
     }
 
     private async Task<(Color Foreground, Color Background, NativeStyle Style, RectangleF Layout)> MatchOcrLineStyleAsync(
-        OcrSnapshot snapshot, int index, Rectangle mask, NativeFamily? family, CancellationToken token)
+        OcrSnapshot snapshot, int index, Rectangle mask, NativeFamily? family, CancellationToken token,
+        OcrReviewLine? segment = null, OcrSelectionSnapshot? selection = null)
     {
         token.ThrowIfCancellationRequested();
         RequireCurrentOcr(snapshot);
         NativeLine line = snapshot.NativeResult.Lines[index];
         SampleOcrColors(mask, out Color background, out Color foreground);
-        Rectangle bounds = Rectangle.Intersect(new Rectangle(Point.Empty, document.ImageSize), EncloseSourcePixels(line.Bounds));
+        string sourceText = segment?.Text ?? line.Text;
+        Rectangle bounds = Rectangle.Intersect(new Rectangle(Point.Empty, document.ImageSize),
+            EncloseSourcePixels(segment?.SourceInk ?? line.Bounds));
         using Bitmap source = document.CopyBaseRegion(bounds);
         Rectangle local = new(Point.Empty, source.Size);
         NativeStyle style = await Task.Run(() => global::SnipStudio.SourceTextMatcher.EstimateWithFamilyContext(
-            source, local, line.Text, foreground, background, token, family), CancellationToken.None);
+            source, local, sourceText, foreground, background, token, family), CancellationToken.None);
         token.ThrowIfCancellationRequested();
         RequireCurrentOcr(snapshot);
         // RichEdit refinement stays on the editor's STA after the background match.
-        style = global::SnipStudio.SourceTextMatcher.RefineSizeOnUi(source, local, line.Text, foreground, background, style, token);
-        RectangleF layout = VerifiedOcrLayout(snapshot, index, mask, background, token);
+        style = global::SnipStudio.SourceTextMatcher.RefineSizeOnUi(source, local, sourceText, foreground, background, style, token);
+        RectangleF layout = VerifiedOcrLayout(snapshot, index, mask, background, token, selection);
         return (foreground, background, style, layout);
     }
 
     /// <summary>Highlights native word bands without changing their reading order or replacing any text.</summary>
-    public bool HighlightRecognizedText(OcrSnapshot snapshot, ImagePoint start, ImagePoint end, uint argb)
+    public bool HighlightRecognizedText(OcrSnapshot snapshot, ImagePoint start, ImagePoint end, uint argb,
+        byte? highlighterAlpha = null)
     {
         VerifyCanMutate();
         RequireCurrentOcr(snapshot);
         var bands = global::SnipStudio.TextSnapSelection.BuildBands(snapshot.NativeResult.Lines,
             ConvertPoint(start, nameof(start)), ConvertPoint(end, nameof(end)), 8);
         if (bands.Count == 0) return false;
-        document.AddHighlightBands(bands, Color.FromArgb(unchecked((int)argb)));
+        document.AddHighlightBands(bands, Color.FromArgb(unchecked((int)argb)), highlighterAlpha);
         return true;
+    }
+
+    public IReadOnlyList<OcrBounds> PreviewSnappedHighlight(OcrSnapshot snapshot, ImagePoint start, ImagePoint end, double tolerance)
+    {
+        VerifyAccess();
+        return GetSnappedHighlightBands(snapshot, start, end, tolerance).Select(OcrSnapshot.FromRectangle).ToArray();
+    }
+
+    public OcrSnapshot? ApplySnappedHighlight(OcrSnapshot snapshot, ImagePoint start, ImagePoint end, double tolerance,
+        uint argb, byte? highlighterAlpha = null)
+    {
+        VerifyCanMutate();
+        var bands = GetSnappedHighlightBands(snapshot, start, end, tolerance);
+        if (bands.Count == 0) return null;
+        document.AddHighlightBands(bands, Color.FromArgb(unchecked((int)argb)), highlighterAlpha);
+        return new OcrSnapshot(this, document.BaseIdentity, document.Revision, snapshot.NativeResult);
+    }
+
+    private List<RectangleF> GetSnappedHighlightBands(OcrSnapshot snapshot, ImagePoint start, ImagePoint end, double tolerance)
+    {
+        RequireCurrentOcr(snapshot);
+        return global::SnipStudio.TextSnapSelection.BuildStrokeBands(snapshot.NativeResult.Lines,
+            ConvertPoint(start, nameof(start)), ConvertPoint(end, nameof(end)), (float)tolerance);
     }
 
     private bool OcrSnapshotMatches(OcrSnapshot snapshot) => !disposed && ReferenceEquals(snapshot.Owner, this) &&
@@ -510,6 +633,46 @@ public sealed partial class EditorSession
 
     private static OcrConversionResult OcrFailure(string message) => new(false, -1, 0, message);
 
+    private static OcrConversionResult ReviewedLineFailure(int index, string message) =>
+        OcrFailure($"Line {index + 1}: {message} The snip was kept.");
+
+    private bool IsWholeReviewedNote(OcrSnapshot snapshot, int index, int existing, global::SnipStudio.TextAnnotationInfo note)
+    {
+        NativeLine line = snapshot.NativeResult.Lines[index];
+        RectangleF overlap = RectangleF.Intersect(line.Bounds, note.InkBounds);
+        if (!string.Equals(note.Text, line.Text, StringComparison.Ordinal) ||
+            overlap.Width * overlap.Height < line.Bounds.Width * line.Bounds.Height * .7f)
+            return false;
+
+        for (int candidate = 0; candidate < document.AnnotationCount; candidate++)
+            if (candidate != existing && document.GetTextAnnotation(candidate) is { } other &&
+                other.InkBounds.IntersectsWith(line.Bounds)) return false;
+        for (int candidate = 0; candidate < snapshot.NativeResult.Lines.Count; candidate++)
+            if (candidate != index && note.InkBounds.IntersectsWith(snapshot.NativeResult.Lines[candidate].Bounds))
+                return false;
+        return true;
+    }
+
+    private bool ReviewedNoteCoversNeighbor(OcrSnapshot snapshot, int index, int existing, RectangleF before, RectangleF after)
+    {
+        for (int candidate = 0; candidate < document.AnnotationCount; candidate++)
+            if (candidate != existing && document.GetTextAnnotation(candidate) is { } other &&
+                NewlyCovers(other.InkBounds)) return true;
+        for (int candidate = 0; candidate < snapshot.NativeResult.Lines.Count; candidate++)
+        {
+            NativeLine line = snapshot.NativeResult.Lines[candidate];
+            if ((candidate != index && NewlyCovers(line.Bounds)) || NewlyCovers(line.ExcludedGraphicBounds))
+                return true;
+        }
+        return snapshot.NativeResult.ProtectedGraphics.Any(NewlyCovers);
+
+        bool NewlyCovers(RectangleF area)
+        {
+            RectangleF overlap = RectangleF.Intersect(after, area);
+            return !overlap.IsEmpty && !before.Contains(overlap);
+        }
+    }
+
     private int FindExistingOcrTextNote(RectangleF bounds)
     {
         for (int index = document.AnnotationCount - 1; index >= 0; index--)
@@ -520,8 +683,9 @@ public sealed partial class EditorSession
         return -1;
     }
 
-    private int FindEditableOcrNote(NativeLine line)
+    private bool TryFindEditableOcrNote(NativeLine line, out int existing)
     {
+        existing = -1;
         bool overlapsNote = false;
         string recognized = string.Concat(line.Text.Where(c => !char.IsWhiteSpace(c)));
         for (int index = document.AnnotationCount - 1; index >= 0; index--)
@@ -535,11 +699,12 @@ public sealed partial class EditorSession
             // geometry identify that note as the source of this OCR line.
             if (overlap.Width * overlap.Height >= line.Bounds.Width * line.Bounds.Height * .7f &&
                 string.Concat(note.Text.Where(c => !char.IsWhiteSpace(c))).Contains(recognized, StringComparison.OrdinalIgnoreCase))
-                return index;
+            {
+                if (existing >= 0) return false;
+                existing = index;
+            }
         }
-        if (overlapsNote)
-            throw new InvalidOperationException("This line overlaps an editable note. Use the Text tool to edit that note directly.");
-        return -1;
+        return !overlapsNote || existing >= 0;
     }
 
     private Rectangle BuildOcrMask(OcrSnapshot snapshot, int sourceIndex)
@@ -552,6 +717,9 @@ public sealed partial class EditorSession
         mask = ProtectOcrPadding(mask, text, line.ExcludedGraphicBounds);
         foreach (RectangleF graphic in snapshot.NativeResult.ProtectedGraphics)
             mask = ProtectOcrPadding(mask, text, graphic);
+        for (int index = 0; index < document.AnnotationCount; index++)
+            if (document.GetTextAnnotation(index) is { } note)
+                mask = ProtectOcrPadding(mask, text, note.InkBounds);
         if (!line.RecognitionClipBounds.IsEmpty)
             mask = Rectangle.Intersect(mask, Rectangle.Ceiling(line.RecognitionClipBounds));
         for (int index = 0; index < snapshot.NativeResult.Lines.Count; index++)
@@ -567,11 +735,13 @@ public sealed partial class EditorSession
 
     private static Rectangle ProtectOcrPadding(Rectangle mask, RectangleF text, RectangleF obstacle)
     {
-        if (obstacle.IsEmpty || !mask.IntersectsWith(Rectangle.Ceiling(obstacle))) return mask;
-        if (obstacle.Right <= text.Left) return Rectangle.FromLTRB(Math.Max(mask.Left, (int)Math.Ceiling(obstacle.Right)), mask.Top, mask.Right, mask.Bottom);
-        if (obstacle.Left >= text.Right) return Rectangle.FromLTRB(mask.Left, mask.Top, Math.Min(mask.Right, (int)Math.Floor(obstacle.Left)), mask.Bottom);
-        if (obstacle.Bottom <= text.Top) return Rectangle.FromLTRB(mask.Left, Math.Max(mask.Top, (int)Math.Ceiling(obstacle.Bottom)), mask.Right, mask.Bottom);
-        if (obstacle.Top >= text.Bottom) return Rectangle.FromLTRB(mask.Left, mask.Top, mask.Right, Math.Min(mask.Bottom, (int)Math.Floor(obstacle.Top)));
+        if (!ValidOcrBounds(obstacle)) return mask;
+        Rectangle occupied = EncloseSourcePixels(obstacle);
+        if (!mask.IntersectsWith(occupied)) return mask;
+        if (obstacle.Right <= text.Left) return Rectangle.FromLTRB(Math.Max(mask.Left, occupied.Right), mask.Top, mask.Right, mask.Bottom);
+        if (obstacle.Left >= text.Right) return Rectangle.FromLTRB(mask.Left, mask.Top, Math.Min(mask.Right, occupied.Left), mask.Bottom);
+        if (obstacle.Bottom <= text.Top) return Rectangle.FromLTRB(mask.Left, Math.Max(mask.Top, occupied.Bottom), mask.Right, mask.Bottom);
+        if (obstacle.Top >= text.Bottom) return Rectangle.FromLTRB(mask.Left, mask.Top, mask.Right, Math.Min(mask.Bottom, occupied.Top));
         // Ambiguous overlap must not be erased or treated as proof of text.
         return Rectangle.Empty;
     }
@@ -676,7 +846,8 @@ public sealed partial class EditorSession
         return context;
     }
 
-    private RectangleF VerifiedOcrLayout(OcrSnapshot snapshot, int sourceIndex, Rectangle mask, Color background, CancellationToken token)
+    private RectangleF VerifiedOcrLayout(OcrSnapshot snapshot, int sourceIndex, Rectangle mask, Color background, CancellationToken token,
+        OcrSelectionSnapshot? selection = null)
     {
         // Extra horizontal room is allowed only where the original pixels are
         // exactly the sampled background. This prevents a long filename from
@@ -691,6 +862,10 @@ public sealed partial class EditorSession
             right = LimitOcrRight(other.Bounds, mask, right);
             right = LimitOcrRight(other.ExcludedGraphicBounds, mask, right);
         }
+        if (selection != null)
+            for (int wordIndex = 0; wordIndex < line.Words.Count; wordIndex++)
+                if (!selection.IncludesWord(sourceIndex, wordIndex) && ValidOcrBounds(line.Words[wordIndex].Bounds))
+                    right = LimitOcrRight(line.Words[wordIndex].Bounds, mask, right);
         for (int index = 0; index < document.AnnotationCount; index++)
             right = LimitOcrRight(document.GetAnnotationBounds(index), mask, right);
         if (!line.RecognitionClipBounds.IsEmpty) right = Math.Min(right, (int)Math.Floor(line.RecognitionClipBounds.Right));
@@ -800,6 +975,9 @@ public sealed partial class EditorSession
         location = new PointF(x - measuredInk.Left, y - measuredInk.Top);
         return true;
     }
+
+    private static bool HasAngledOcrGeometry(OcrSnapshot snapshot) =>
+        snapshot.TextAngle is double angle && (!double.IsFinite(angle) || Math.Abs(angle) > 2);
 
     private static bool ValidOcrBounds(RectangleF bounds) => float.IsFinite(bounds.X) && float.IsFinite(bounds.Y) &&
         float.IsFinite(bounds.Right) && float.IsFinite(bounds.Bottom) && bounds.Width > 0 && bounds.Height > 0;

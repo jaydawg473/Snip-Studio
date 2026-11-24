@@ -69,7 +69,7 @@ internal static partial class Program
                 CompletedGroups = completedGroups,
                 Performance = performance,
                 ElapsedMilliseconds = clock.ElapsedMilliseconds,
-                Scope = "Public editing backend on an STA context, exact input-value fidelity, rendered pixels/history, a separate STA hidden-control message-loop lifecycle, public OCR DTO ownership, pre-canceled capture validation, and video-copy byte/atomic-failure behavior using opaque non-video fixtures. No native WinUI interaction, live OCR accuracy, capture pixels, scrolling, recording/audio/codecs/playback, installation, or physical monitor acceptance.",
+                Scope = "Public editing backend on an STA context, exact values, rendered pixels/history, a hidden-control message loop, OCR ownership and cancellation, capture validation, synthetic scrolling partial-result and taskbar restoration checks, and atomic video copy with opaque fixtures. No native WinUI interaction, live OCR accuracy, live capture/scrolling, recording/audio/playback, installation, or physical monitor acceptance.",
                 Failure = failure
             };
             string json = JsonSerializer.Serialize(evidence, new JsonSerializerOptions { WriteIndented = true });
@@ -85,7 +85,13 @@ internal static partial class Program
         completedGroups.Add("Autosave marks only the exact captured revision and rejects stale image identity");
         await CheckShapeSelectionAndMovementAsync();
         completedGroups.Add("Shape pixels, selection, movement and history");
+        await CheckAnnotationDragPreviewAsync();
+        completedGroups.Add("Detached object drag layers preserve stacking, transparency and history");
+        CheckObjectGestureGeometry();
+        completedGroups.Add("Object drag threshold, rotation, anchored resize, arrow preview, and visible placement point");
+        CheckCropFrameGeometry();
         await CheckCropAndSourceRemovalAsync(output);
+        await CheckBoundImageOpenAndFinalPublicationAsync(output);
         completedGroups.Add("Crop, source-area removal, atomic export and reopening");
         await CheckTextFidelityAsync();
         completedGroups.Add("Exact text values, source style values, edits and history");
@@ -101,18 +107,66 @@ internal static partial class Program
         await CheckEndpointPropertiesAsync();
         completedGroups.Add("Line and arrow endpoints plus styling commit as one undoable edit");
         CheckOcrDtoOwnership();
+        CheckOcrVerticalReadingOrder();
         completedGroups.Add("Public OCR line and word ownership and exact strings");
         CheckNativeOcrSelectionIndex();
         completedGroups.Add("OCR selection preserves original row indices and duplicate-word character offsets");
+        CheckOcrBlankStartSelection();
+        completedGroups.Add("Blank-start OCR drags select an area without pulling in neighboring text");
+        CheckRecognizedTextSpotlightLayout();
+        completedGroups.Add("Recognized-text reveal bands preserve original ink and dense Explorer spacing");
+        await CheckTaskbarDiscardProtocolAsync();
+        completedGroups.Add("Taskbar discard protocol requires confirmed consent and rechecks each target");
+        CheckRecognizedTable();
+        completedGroups.Add("OCR table geometry, exact cells, and safe clipboard formats");
+        CheckOfflineOcrRecovery();
+        CheckOcrFilenameSpacing();
+        await CheckColoredCaretRecoveryAsync();
+        CheckOcrExtensionFootprint();
+        CheckTerminalOcrRecovery();
+        CheckTerminalOcrPathReview();
+        CheckTerminalOcrSwitchReview();
+        CheckTerminalOcrPromptRecovery();
+        CheckTerminalOcrSideLabels();
+        CheckSparseOcrColumnRecovery();
+        CheckCorroboratedInteriorOcrRecovery();
+        CheckGraphicAdjacentOcrRecovery();
+        await CheckCorroboratedOcrTimestampRecoveryAsync();
+        await CheckSplitOcrColonRecoveryAsync();
+        CheckClippedEdgeOcrRecovery();
+        CheckInterruptedLineOcrRecovery();
+        await CheckFragmentedOcrRowsAsync();
+        CheckOcrRichTextStability();
+        CheckAngledOcrSelection();
+        await CheckAngledOcrEraseAsync();
+        CheckOfflinePrivacyBoundaries();
+        completedGroups.Add("Independent OCR row, timestamp, terminal and clipped-edge agreement, reading order and protected geometry");
+        CheckDocumentIconRaster();
+        completedGroups.Add("OCR excludes raster-proven icons and preserves original text and source clipping");
+        await CheckOcrNoteEditRoutingAsync();
+        completedGroups.Add("Editable note ink takes priority over another note's frame and ambiguous OCR overlaps preserve the image");
+        await CheckReviewedTranslationWritebackAsync();
+        completedGroups.Add("Reviewed translation updates eligible notes and raster text together with one Undo");
+        await CheckRecognizedTextReviewAsync();
+        completedGroups.Add("Batch OCR editing and selected-word translation preserve surrounding pixels and undo together");
+        await CheckInkOpacityAsync(output);
+        completedGroups.Add("Shapes and freehand or snapped highlights preserve chosen opacity");
+        await CheckNativeOcrCancellationAsync();
+        completedGroups.Add("Windows OCR cancellation and completion return independently before cleanup");
         await CheckCancellationAndInvalidEditsAsync();
         completedGroups.Add("Pre-canceled OCR and invalid edits preserve current work");
         await CheckCaptureRequestCancellationAsync();
         completedGroups.Add("Capture request rejection and pre-canceled calls without desktop input");
+        await CheckCaptureFailureRecoveryAsync();
+        CheckRecordingAdjustmentRepaint();
+        completedGroups.Add("Recording area moves and resizes repaint the same desktop pixels as a clean render");
         await CheckVideoCopyAsync(output);
         completedGroups.Add("Video-copy file transaction, exact bytes, cancellation and failure preservation (non-video fixture)");
         await CheckPreferencesAsync(output);
         CheckLegacySettingsImport(output);
         completedGroups.Add("Settings stale per-field merges, parallel recent writes, recovery and unknown JSON preservation");
+        CheckDesktopShellContracts();
+        completedGroups.Add("Taskbar capture arguments and exact repository installer links");
         PrepareSettingsWorkerFixture(output);
         await MeasureLargeImageWorkAsync(output);
         completedGroups.Add("Controlled large-image operation timings and sampled process memory");
@@ -330,6 +384,82 @@ internal static partial class Program
         {
             Expect<NotSupportedException>(() => mutableView.Clear(), "OCR read-only word collection rejects caller mutation");
             Check(line.Words.Count == 2, "Rejected OCR collection mutation preserves recognized words");
+        }
+
+        using var session = new EditorSession();
+        session.OpenImageBytes(CreateImage(360, 120));
+        var baseline = session.GetCaptureBaseline();
+        const string firstRow = identifier + "  0042";
+        const string raw = firstRow + " " + identifier + " " + identifier;
+        var result = new global::SnipStudio.TextRecognitionResult { Available = true, Text = raw, RawText = raw };
+        result.Lines.Add(new() { Text = firstRow });
+        result.Lines.Add(new() { Text = identifier });
+        result.Lines.Add(new() { Text = identifier });
+        var snapshot = new OcrSnapshot(session, baseline.ImageIdentity, baseline.Revision, result);
+        Check(snapshot.Text == firstRow + "\r\n" + identifier + "\r\n" + identifier,
+            "Copy-all text preserves Windows line breaks, exact spacing, leading zeros and repeated rows even when the provider aggregate is flat");
+        Check(snapshot.RawText == raw, "Formatting copy-all text retains the original provider output for diagnostics");
+
+        result.Lines.Clear();
+        result.Text = "first\nsecond\rthird";
+        var textOnly = new OcrSnapshot(session, baseline.ImageIdentity, baseline.Revision, result);
+        Check(textOnly.Text == "first\r\nsecond\r\nthird", "Copy-all preserves line breaks in text-only recognition without word geometry");
+    }
+
+    private static void CheckOcrVerticalReadingOrder()
+    {
+        using var session = new EditorSession();
+        session.OpenImageBytes(CreateImage(760, 300));
+        var baseline = session.GetCaptureBaseline();
+        var heading = Row("First in the image", 220, 16);
+        var timestamp = Row("4:16 PM", 645, 44, 54);
+        var body = Row("Details  0008", 10, 80);
+        var duplicate = Row("Details  0008", 24, 111);
+        var fragment = Row("Separate run on the same row", 655, 109, 95);
+        var next = Row("Next row", 28, 147);
+        var detail = Row("Another row", 10, 183);
+        var indented = Row("Label after two icons", 51, 217);
+        var beforeLast = Row("A second body row", 10, 250);
+        var last = Row("End", 10, 280);
+        var source = new global::SnipStudio.TextRecognitionResult { Available = true, RawText = "Unchanged provider result" };
+        source.Lines.AddRange([timestamp, heading, body, duplicate, fragment, next, detail, indented, beforeLast, last]);
+
+        OcrSnapshot snapshot = Snapshot(source);
+        string expected = string.Join("\r\n", new[] { heading, timestamp, body, duplicate, fragment, next, detail, indented, beforeLast, last }.Select(line => line.Text));
+        Check(snapshot.Text == expected && snapshot.RawText == source.RawText && ReferenceEquals(source.Lines[0], timestamp),
+            "A timestamp no longer jumps above the heading in a single vertical flow, while row fragments and OCR output remain intact");
+        var selection = session.SelectRecognizedText(snapshot, new(230, 20), new(20, 285));
+        Check(selection.Text == expected && selection.LineIndices.SequenceEqual(Enumerable.Range(0, 10)) &&
+            snapshot.Lines[1].Bounds.X == 645, "Copy and on-image selection use the same line order and preserve duplicate text and positions");
+
+        foreach (int offset in new[] { 0, 7 })
+        {
+            var left = new[] { Row("A", 10, 32), Row("B", 10, 68), Row("C", 10, 104), Row("D", 10, 140) };
+            var right = new[] { Row("E", 240, 68 + offset), Row("F", 240, 104 + offset) };
+            source.Lines.Clear();
+            source.Lines.AddRange(left.Concat(right));
+            Check(Snapshot(source).Text == "A\r\nB\r\nC\r\nD\r\nE\r\nF",
+                offset == 0 ? "Aligned table columns keep provider order" : "Staggered columns keep provider order");
+        }
+
+        source.Lines.Clear();
+        source.Lines.AddRange([next, body, last]);
+        source.TextAngle = 15;
+        Check(Snapshot(source).Text == "Next row\r\nDetails  0008\r\nEnd",
+            "Angled text keeps provider order");
+        source.TextAngle = null;
+        source.Lines.Add(Row("Missing bounds", float.NaN, 22));
+        Check(Snapshot(source).Lines[0].Text == next.Text, "Invalid geometry keeps provider order");
+
+        OcrSnapshot Snapshot(global::SnipStudio.TextRecognitionResult result) =>
+            new(session, baseline.ImageIdentity, baseline.Revision, result);
+
+        static global::SnipStudio.TextLineRegion Row(string text, float x, float y, float width = 130)
+        {
+            RectangleF bounds = new(x, y, width, 12);
+            var row = new global::SnipStudio.TextLineRegion { Text = text, Bounds = bounds };
+            row.Words.Add(new global::SnipStudio.TextWordRegion { Text = text, Bounds = bounds });
+            return row;
         }
     }
 
@@ -607,6 +737,36 @@ internal static partial class Program
         Check(!Directory.EnumerateFiles(output, ".snip-video-copy-*", SearchOption.TopDirectoryOnly).Any(), "Canceled and failed copies leave no temporary file");
         await VideoReviewService.SaveCopyAsync(source, copy);
         Check(File.ReadAllBytes(copy).SequenceEqual(opaque), "Copy retries successfully after a failed atomic replacement");
+
+        string contested = Path.Combine(output, "opaque-video-copy-contested.mp4");
+        ImageSaveTarget cleared = AtomicImageWriter.PrepareDestination(contested);
+        File.WriteAllBytes(contested, existing);
+        await ExpectAsync<IOException>(() => Task.Run(() =>
+            VideoReviewService.SavePreparedCopy(source, cleared, CancellationToken.None, maximumBytes: null)),
+            "Video copy cannot replace a destination created after selection");
+        Check(File.ReadAllBytes(contested).SequenceEqual(existing), "A later-created video destination keeps every competing byte");
+
+        ImageSaveTarget chosen = AtomicImageWriter.PrepareDestination(contested);
+        DateTime written = File.GetLastWriteTimeUtc(contested);
+        DateTime created = File.GetCreationTimeUtc(contested);
+        byte[] later = (byte[])existing.Clone();
+        later[^1] ^= 1;
+        File.WriteAllBytes(contested, later);
+        File.SetLastWriteTimeUtc(contested, written);
+        Check(File.GetCreationTimeUtc(contested) == created && File.GetLastWriteTimeUtc(contested) == written &&
+            new FileInfo(contested).Length == existing.Length, "The competing video update preserves the original file metadata");
+        await ExpectAsync<IOException>(() => Task.Run(() =>
+            VideoReviewService.SavePreparedCopy(source, chosen, CancellationToken.None, maximumBytes: null)),
+            "Video copy rejects an external edit that preserves timestamps and length");
+        Check(File.ReadAllBytes(contested).SequenceEqual(later), "The conflicting video destination remains byte-exact");
+
+        ImageSaveTarget confirmed = AtomicImageWriter.PrepareDestination(contested);
+        await Task.Run(() => VideoReviewService.SavePreparedCopy(source, confirmed, CancellationToken.None, maximumBytes: null));
+        Check(File.ReadAllBytes(contested).SequenceEqual(opaque) && File.ReadAllBytes(source).SequenceEqual(opaque),
+            "An explicitly reselected video destination accepts the complete staged copy");
+        Check(!Directory.EnumerateFiles(output, ".snip-video-copy-*").Any() &&
+            !Directory.EnumerateFiles(output, ".snip-winui-recovery-*").Any(),
+            "Safe video replacement leaves no staging files or obsolete recovery copies");
     }
 
     private static object SampleMemory(string stage)

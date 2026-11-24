@@ -4,17 +4,24 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Title="Snip Studio — Record video">
     <Grid x:Name="RecordingRoot" Padding="16" RowSpacing="12" SizeChanged="OnLayoutSizeChanged" Background="{ThemeResource ApplicationPageBackgroundThemeBrush}">
+        <Grid.KeyboardAccelerators>
+            <KeyboardAccelerator Key="Escape" Invoked="OnCancelRecordingCountdown"/>
+        </Grid.KeyboardAccelerators>
         <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition x:Name="RecordingBodyRow" Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
         <Grid x:Name="RecordingHeader" ColumnSpacing="12">
             <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <TextBlock x:Name="RecordingHeading" Text="Record video" FontSize="24" FontWeight="SemiBold" TextWrapping="Wrap"/>
-            <Button x:Name="OpenVideoButton" Grid.Column="1" Content="Open video" Click="OnOpenVideoClicked"/>
+            <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="8">
+                <Button x:Name="EditInClipchampButton" Content="Edit in Clipchamp" Click="OnEditInClipchampClicked"
+                        Visibility="Collapsed" ToolTipService.ToolTip="Send this saved video to Microsoft Clipchamp"/>
+                <Button x:Name="OpenVideoButton" Content="Open video" Click="OnOpenVideoClicked"/>
+            </StackPanel>
         </Grid>
         <ScrollViewer x:Name="RecordingBodyScroll" Grid.Row="1" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled">
             <StackPanel Spacing="12">
                 <InfoBar x:Name="VideoNotice" IsOpen="False" IsClosable="True" Severity="Error" Title="The action could not finish"/>
                 <StackPanel x:Name="RecordingSettingsPanel" Spacing="10">
-                    <TextBlock x:Name="RecordingInstructions" Text="Choose an area and audio sources. Start minimizes this window; reopen it from the taskbar to stop. MP4 is scaled to fit 1920 × 1080. Capture stays on this PC." TextWrapping="Wrap"/>
+                    <TextBlock Text="Choose an area and audio sources, then select Start. Use Stop to finish the recording." TextWrapping="Wrap"/>
                     <ContentControl x:Name="AudioChoicesHost" IsTabStop="False">
                         <StackPanel x:Name="AudioChecksRow" Orientation="Horizontal" Spacing="6">
                             <ToggleButton x:Name="MicrophoneCheck" IsChecked="True" Width="34" Height="34" MinWidth="0" Padding="0" Click="OnRecordingAudioClicked" AutomationProperties.Name="Microphone" ToolTipService.ToolTip="Microphone on — click to mute"><FontIcon Glyph="&#xE720;" FontSize="18"/></ToggleButton>
@@ -22,13 +29,33 @@
                         </StackPanel>
                     </ContentControl>
                 </StackPanel>
-                <Grid x:Name="PlaybackPanel" MinHeight="120" Height="280" Background="Black" Visibility="Collapsed">
-                    <MediaPlayerElement x:Name="VideoPlayer" AreTransportControlsEnabled="True" AutoPlay="False" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
-                    <TextBlock x:Name="NoVideoText" Text="Record a video or choose Open video to review it here." Foreground="White" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"/>
-                </Grid>
-                <TextBlock x:Name="VideoInfoText" TextWrapping="Wrap" Visibility="Collapsed"/>
-                <TextBlock x:Name="RecordingDestinationText" TextWrapping="Wrap" Visibility="Collapsed" IsTextSelectionEnabled="True"/>
                 <StackPanel x:Name="ReviewOptionsPanel" Spacing="8" Visibility="Collapsed">
+                    <Grid x:Name="PlaybackPanel" MinHeight="120" Height="280" Background="Black" CornerRadius="6">
+                        <MediaPlayerElement x:Name="VideoPlayer" AutoPlay="False" AreTransportControlsEnabled="False" Stretch="Uniform" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"/>
+                        <TextBlock x:Name="NoVideoText" Text="Record a video or choose Open video to review it here." Foreground="White" TextWrapping="Wrap" HorizontalAlignment="Center" VerticalAlignment="Center" Margin="20"/>
+                    </Grid>
+                    <Grid x:Name="ReviewPlaybackBar" ColumnSpacing="8" Visibility="Collapsed">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Button x:Name="ReviewPlayButton" Click="OnReviewPlayClicked" MinWidth="94" AutomationProperties.Name="Play video">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <SymbolIcon x:Name="ReviewPlayIcon" Symbol="Play"/>
+                                <TextBlock x:Name="ReviewPlayText" Text="Play" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ReviewSoundButton" Grid.Column="1" AutomationProperties.Name="Playback volume" ToolTipService.ToolTip="Playback volume">
+                            <Button.Content><SymbolIcon x:Name="ReviewSoundIcon" Symbol="Volume"/></Button.Content>
+                            <Button.Flyout>
+                                <Flyout x:Name="ReviewSoundFlyout" Opening="OnReviewSoundOpening" Placement="Bottom">
+                                    <StackPanel Spacing="8" MinWidth="176">
+                                        <Slider x:Name="ReviewVolumeSlider" Header="Playback volume" Maximum="100" Value="100" StepFrequency="1" ValueChanged="OnReviewVolumeChanged"/>
+                                        <ToggleButton x:Name="ReviewMuteButton" Content="Mute" Click="OnReviewMuteClicked"/>
+                                    </StackPanel>
+                                </Flyout>
+                            </Button.Flyout>
+                        </Button>
+                        <TextBlock x:Name="VideoInfoText" Grid.Column="2" FontSize="12" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </Grid>
                     <StackPanel x:Name="CandidatePanel" Visibility="Collapsed" Spacing="4">
                         <TextBlock x:Name="CandidateInfoText" TextWrapping="Wrap"/>
                         <Button x:Name="CopySelectedVideoButton" Content="Save selected file copy" Click="OnCopySelectedVideoClicked" IsEnabled="False" HorizontalAlignment="Left"/>
@@ -41,8 +68,8 @@
                         </Grid>
                         <UserControl x:Name="FilmstripInput" IsTabStop="True" UseSystemFocusVisuals="True" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch"
                                      AutomationProperties.Name="Video filmstrip"
-                                     AutomationProperties.HelpText="Use Left and Right to seek by a frame, Home and End to jump. Use the Start and End fields to trim with the keyboard."
-                                     ToolTipService.ToolTip="Click or drag to scrub. Drag a blue handle to trim. Left/Right steps a frame, and Escape cancels a drag."
+                                     AutomationProperties.HelpText="Use Left and Right to seek, Home and End to jump. Use the Start and End fields to trim when video details are available."
+                                     ToolTipService.ToolTip="Click or drag to seek. Drag a blue handle to trim when available. Escape cancels a drag."
                                      KeyDown="OnFilmstripKeyDown" PointerPressed="OnFilmstripPressed" PointerMoved="OnFilmstripMoved"
                                      PointerReleased="OnFilmstripReleased" PointerCanceled="OnFilmstripCanceled" PointerCaptureLost="OnFilmstripCaptureLost">
                             <Grid Background="Transparent" Padding="10,0">
@@ -66,74 +93,115 @@
                                 </Grid>
                             </Grid>
                         </UserControl>
-                        <Grid x:Name="TrimRow" ColumnSpacing="8" RowSpacing="6" Visibility="Collapsed">
-                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                        <Grid x:Name="TrimRow" ColumnSpacing="16" RowSpacing="6" Visibility="Collapsed">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                             <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
                             <StackPanel x:Name="TrimStartActions" Orientation="Horizontal" Spacing="6">
-                                <NumberBox x:Name="TrimStartBox" Header="Start (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="128"/>
+                                <NumberBox x:Name="TrimStartBox" Header="Start (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="112"/>
                                 <Button x:Name="SetStartButton" Content="Set start" ToolTipService.ToolTip="Use the filmstrip playhead as the trim start" Click="OnSetStartClicked" VerticalAlignment="Bottom"/>
                             </StackPanel>
                             <StackPanel x:Name="TrimEndActions" Grid.Column="1" Orientation="Horizontal" Spacing="6">
-                                <NumberBox x:Name="TrimEndBox" Header="End (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="128"/>
+                                <NumberBox x:Name="TrimEndBox" Header="End (seconds)" Value="0" Minimum="0" SmallChange="0.1" Width="112"/>
                                 <Button x:Name="SetEndButton" Content="Set end" ToolTipService.ToolTip="Use the filmstrip playhead as the trim end" Click="OnSetEndClicked" VerticalAlignment="Bottom"/>
                             </StackPanel>
-                            <Grid x:Name="TrimSaveActions" Grid.Row="1" Grid.ColumnSpan="2" ColumnSpacing="8">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
-                                <TextBlock x:Name="TrimRangeText" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                                <Button x:Name="TrimVideoButton" Grid.Column="1" Content="Save trimmed copy" Click="OnTrimVideoClicked" IsEnabled="False"/>
-                            </Grid>
+                            <TextBlock x:Name="TrimRangeText" Grid.Row="1" Grid.ColumnSpan="2" FontSize="12" TextWrapping="Wrap"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                         </Grid>
                     </StackPanel>
-                    <StackPanel x:Name="VideoFileActions" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
-                        <Button x:Name="CopyVideoFileButton" Content="Copy video file" Click="OnCopyVideoFileClicked" IsEnabled="False"/>
-                        <Button x:Name="CopyVideoButton" Content="Save current video copy" Click="OnCopyVideoClicked" IsEnabled="False" VerticalAlignment="Bottom"/>
-                    </StackPanel>
-                    <StackPanel x:Name="ExportRow" Orientation="Horizontal" Spacing="8" Visibility="Collapsed">
-                        <ComboBox x:Name="ExportPresetBox" Header="Smaller copy" SelectedIndex="0" Width="190">
-                            <ComboBoxItem Content="Balanced · 720p"/><ComboBoxItem Content="Small · 480p"/><ComboBoxItem Content="Attachment target"/>
-                        </ComboBox>
-                        <NumberBox x:Name="TargetSizeBox" Header="Target MB" Value="20" Minimum="1" Maximum="1000" Width="100" SpinButtonPlacementMode="Compact"/>
-                        <Button x:Name="ExportVideoButton" Content="Export MP4" Click="OnExportVideoClicked" IsEnabled="False" VerticalAlignment="Bottom"/>
-                    </StackPanel>
                 </StackPanel>
+                <TextBlock x:Name="RecordingDestinationText" TextTrimming="CharacterEllipsis" Visibility="Collapsed" IsTextSelectionEnabled="True"/>
             </StackPanel>
         </ScrollViewer>
         <StackPanel x:Name="RecordingFooter" Grid.Row="2" Spacing="4">
-            <StackPanel x:Name="RecordActionsRow" Orientation="Horizontal" Spacing="6">
-                <Button x:Name="StartRecordingButton" Content="Start recording" Click="OnStartRecordingClicked" Style="{StaticResource AccentButtonStyle}"/>
-                <Button x:Name="AdjustRecordingAreaButton" Content="Adjust area" Click="OnAdjustRecordingAreaClicked"
-                        ToolTipService.ToolTip="Move or resize the selected recording area before starting"/>
-                <Button x:Name="StopRecordingButton" Content="Stop and save" Click="OnStopRecordingClicked" IsEnabled="False"/>
-                <TextBlock x:Name="ElapsedText" Text="00:00" Width="46" VerticalAlignment="Center" AutomationProperties.Name="Recording duration"/>
-                <ContentControl x:Name="CaptureAudioHost" IsTabStop="False" VerticalAlignment="Center"/>
-                <Button x:Name="RecordingOptionsButton" Width="34" Height="34" MinWidth="0" Padding="0" AutomationProperties.Name="Recording options" ToolTipService.ToolTip="Recording options">
-                    <Button.Content><FontIcon Glyph="&#xE713;" FontSize="18"/></Button.Content>
+            <Grid x:Name="VideoFileActions" ColumnSpacing="6" RowSpacing="0" Padding="0,8,0,0" BorderThickness="0,1,0,0"
+                  BorderBrush="{ThemeResource ControlStrokeColorDefaultBrush}" Visibility="Collapsed">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <Button x:Name="CopyVideoFileButton" Content="Copy video file" Click="OnCopyVideoFileClicked" IsEnabled="False"/>
+                <Button x:Name="CopyVideoButton" Grid.Column="1" Content="Save copy…" Click="OnCopyVideoClicked" IsEnabled="False"
+                        ToolTipService.ToolTip="Save a separate copy of the current video"/>
+                <Button x:Name="ReviewExportButton" Grid.Column="2" Content="Export MP4…" IsEnabled="False" ToolTipService.ToolTip="Export a smaller MP4 copy">
                     <Button.Flyout>
-                        <Flyout x:Name="AdvancedRecordingFlyout" Placement="Top" ShouldConstrainToRootBounds="False">
-                            <ScrollViewer x:Name="RecordingOptionsScroll" MaxHeight="520" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled">
-                                <StackPanel x:Name="AdvancedRecordingOptionsPanel" Spacing="10" MinWidth="340" MaxWidth="460">
-                                    <TextBlock Text="Recording options" FontWeight="SemiBold"/>
-                                    <ComboBox x:Name="RegionBox" Header="Recording area" HorizontalAlignment="Stretch" DisplayMemberPath="Name" AutomationProperties.Name="Recording area" SelectionChanged="OnRecordingAreaChanged"/>
-                                    <StackPanel x:Name="AreaRow" Orientation="Horizontal" Spacing="8">
-                                        <Button x:Name="SelectAreaButton" Content="Select area" Click="OnSelectAreaClicked"/>
-                                        <Button x:Name="SelectWindowButton" Content="Select window" Click="OnSelectWindowClicked"/>
-                                    </StackPanel>
-                                    <Grid ColumnSpacing="16">
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                        <NumberBox x:Name="FpsBox" Header="Frames/sec" Value="15" Minimum="5" Maximum="30" SmallChange="1" SpinButtonPlacementMode="Compact" Width="120" HorizontalAlignment="Left"/>
-                                        <CheckBox x:Name="CursorCheck" Grid.Column="1" Content="Show pointer" IsChecked="True" VerticalAlignment="Bottom"/>
-                                    </Grid>
-                                    <StackPanel x:Name="DevicesRow" Spacing="10">
-                                        <ComboBox x:Name="MicrophoneBox" Header="Microphone device" HorizontalAlignment="Stretch" DisplayMemberPath="Name"/>
-                                        <ComboBox x:Name="SystemAudioBox" Header="Output device" HorizontalAlignment="Stretch" DisplayMemberPath="Name"/>
-                                        <Button x:Name="RefreshAudioButton" Content="Refresh devices" Click="OnRefreshAudioClicked" HorizontalAlignment="Left"/>
-                                    </StackPanel>
-                                </StackPanel>
-                            </ScrollViewer>
+                        <Flyout x:Name="ReviewExportFlyout" Placement="Top" Opening="OnVideoExportFlyoutOpening">
+                            <StackPanel Spacing="8" Width="280">
+                                <TextBlock Text="Export a smaller MP4" FontWeight="SemiBold"/>
+                                <ComboBox x:Name="ExportPresetBox" Header="Preset" SelectedIndex="0" HorizontalAlignment="Stretch"
+                                          SelectionChanged="OnExportPresetChanged">
+                                    <ComboBoxItem Content="Balanced · 720p"/><ComboBoxItem Content="Small · 480p"/>
+                                </ComboBox>
+                                <TextBlock x:Name="VideoExportEstimateText" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+                                <Button x:Name="ExportVideoButton" Content="Save MP4…" Style="{StaticResource AccentButtonStyle}"
+                                        Click="OnReviewExportClicked" IsEnabled="False" HorizontalAlignment="Right"/>
+                            </StackPanel>
                         </Flyout>
                     </Button.Flyout>
                 </Button>
-            </StackPanel>
+                <Button x:Name="CompressEmailButton" Grid.Column="3" Content="Compress for email…" IsEnabled="False">
+                    <Button.Flyout>
+                        <Flyout x:Name="CompressEmailFlyout" Placement="Top" Opening="OnVideoExportFlyoutOpening">
+                            <StackPanel Spacing="8" Width="280">
+                                <NumberBox x:Name="TargetSizeBox" Header="Maximum file size (MB)" Value="20" Minimum="1" Maximum="1000"
+                                           SpinButtonPlacementMode="Compact" HorizontalAlignment="Stretch" ValueChanged="OnEmailTargetChanged"/>
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <Button Content="10 MB" Tag="10" Click="OnEmailSizeShortcutClicked"/>
+                                    <Button Content="20 MB" Tag="20" Click="OnEmailSizeShortcutClicked"/>
+                                    <Button Content="25 MB" Tag="25" Click="OnEmailSizeShortcutClicked"/>
+                                </StackPanel>
+                                <TextBlock x:Name="EmailExportEstimateText" TextWrapping="Wrap" AutomationProperties.LiveSetting="Polite"/>
+                                <TextBlock Text="Allow room below your email provider’s attachment limit." TextWrapping="Wrap"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                <Button x:Name="SaveEmailCopyButton" Content="Save email copy…" Style="{StaticResource AccentButtonStyle}" IsEnabled="False"
+                                        Click="OnCompressEmailClicked" HorizontalAlignment="Right"/>
+                            </StackPanel>
+                        </Flyout>
+                    </Button.Flyout>
+                </Button>
+                <Button x:Name="TrimVideoButton" Grid.Column="5" Content="Save trimmed copy…" Click="OnTrimVideoClicked" IsEnabled="False"
+                        Style="{StaticResource AccentButtonStyle}"/>
+            </Grid>
+            <Grid x:Name="RecordActionsRow" ColumnSpacing="8">
+                <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                <StackPanel x:Name="RecordPrimaryActions" Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="StartRecordingButton" Content="Start recording" Click="OnStartRecordingClicked" Style="{StaticResource AccentButtonStyle}"/>
+                    <Button x:Name="AdjustRecordingAreaButton" Content="Adjust area" Click="OnAdjustRecordingAreaClicked" MinWidth="104"
+                            ToolTipService.ToolTip="Move or resize the selected recording area before starting"/>
+                    <Button x:Name="StopRecordingButton" Content="Stop and save" Click="OnStopRecordingClicked" IsEnabled="False"/>
+                </StackPanel>
+                <StackPanel x:Name="RecordUtilityActions" Grid.Column="1" Orientation="Horizontal" Spacing="6">
+                    <TextBlock x:Name="ElapsedText" Text="00:00" MinWidth="46" VerticalAlignment="Center" AutomationProperties.Name="Recording duration"/>
+                    <ContentControl x:Name="CaptureAudioHost" IsTabStop="False" VerticalAlignment="Center"/>
+                    <Button x:Name="RecordingOptionsButton" Width="34" Height="34" MinWidth="0" Padding="0" AutomationProperties.Name="Recording options" ToolTipService.ToolTip="Recording options">
+                        <Button.Content><FontIcon Glyph="&#xE713;" FontSize="18"/></Button.Content>
+                        <Button.Flyout>
+                            <Flyout x:Name="AdvancedRecordingFlyout" Placement="Top" ShouldConstrainToRootBounds="False">
+                                <ScrollViewer x:Name="RecordingOptionsScroll" MaxHeight="520" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled" HorizontalScrollMode="Disabled">
+                                    <StackPanel x:Name="AdvancedRecordingOptionsPanel" Spacing="10" MinWidth="340" MaxWidth="460">
+                                        <TextBlock Text="Recording options" FontWeight="SemiBold"/>
+                                        <ComboBox x:Name="RegionBox" Header="Recording area" HorizontalAlignment="Stretch" DisplayMemberPath="Name" AutomationProperties.Name="Recording area" SelectionChanged="OnRecordingAreaChanged"/>
+                                        <StackPanel x:Name="AreaRow" Orientation="Horizontal" Spacing="8">
+                                            <Button x:Name="SelectAreaButton" Content="Select area" Click="OnSelectAreaClicked"/>
+                                            <Button x:Name="SelectWindowButton" Content="Select window" Click="OnSelectWindowClicked"/>
+                                        </StackPanel>
+                                        <Grid ColumnSpacing="16">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                            <NumberBox x:Name="FpsBox" Header="Frames/sec" Value="15" Minimum="5" Maximum="30" SmallChange="1" SpinButtonPlacementMode="Compact" Width="120" HorizontalAlignment="Left"/>
+                                            <CheckBox x:Name="CursorCheck" Grid.Column="1" Content="Show pointer" IsChecked="True" VerticalAlignment="Bottom"/>
+                                        </Grid>
+                                        <StackPanel x:Name="DevicesRow" Spacing="10">
+                                            <ComboBox x:Name="MicrophoneBox" Header="Microphone device" HorizontalAlignment="Stretch" DisplayMemberPath="Name"/>
+                                            <ComboBox x:Name="SystemAudioBox" Header="Output device" HorizontalAlignment="Stretch" DisplayMemberPath="Name"/>
+                                            <Button x:Name="RefreshAudioButton" Content="Refresh devices" Click="OnRefreshAudioClicked" HorizontalAlignment="Left"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </ScrollViewer>
+                            </Flyout>
+                        </Button.Flyout>
+                    </Button>
+                </StackPanel>
+            </Grid>
             <TextBlock x:Name="SelectedAreaSummary" FontSize="12" TextTrimming="CharacterEllipsis" Visibility="Collapsed"/>
             <Button x:Name="CancelVideoButton" Content="Cancel" Click="OnCancelVideoClicked" IsEnabled="False" Visibility="Collapsed" HorizontalAlignment="Left"/>
             <ProgressBar x:Name="VideoProgress" IsIndeterminate="False" Minimum="0" Maximum="100" Value="0" Visibility="Collapsed"/>

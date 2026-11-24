@@ -69,6 +69,9 @@ namespace SnipStudio
                     {
                         taskbars.VerifyHidden();
                         warning = taskbars.Warning;
+                        string restoreWarning = taskbars.RestoreAfterCapture();
+                        if (!String.IsNullOrEmpty(restoreWarning))
+                            warning = String.IsNullOrEmpty(warning) ? restoreWarning : warning + " " + restoreWarning;
                     }
                 }
             }
@@ -77,8 +80,8 @@ namespace SnipStudio
                 if (desktop != null) desktop.Dispose();
                 throw;
             }
-            // The live taskbars are restored here. Selection uses the frozen
-            // image, so canceling or spending time selecting cannot leave them hidden.
+            // Taskbar restoration was attempted before selection, which uses
+            // the frozen image and needs no ongoing desktop visibility changes.
             if (mode == CaptureMode.AllMonitors)
                 return desktop;
 
@@ -388,7 +391,16 @@ namespace SnipStudio
                 selection = existingRecordingRegion.Value;
                 instructionTitle = "Adjust the recording area";
                 instructionDetail = "Drag inside to move, or drag the edges to resize. Enter to confirm · Esc to cancel.";
-                useRecordingArea = new Button { Text = "Use area", AutoSize = true, Padding = new Padding(8, 4, 8, 4) };
+                useRecordingArea = new Button
+                {
+                    Text = "Use area",
+                    AccessibleName = "Use recording area",
+                    Font = instructionFont,
+                    FlatStyle = FlatStyle.Flat,
+                    BackColor = SystemInformation.HighContrast ? SystemColors.Highlight : Color.FromArgb(0, 88, 167),
+                    ForeColor = SystemInformation.HighContrast ? SystemColors.HighlightText : Color.White,
+                    UseVisualStyleBackColor = false
+                };
                 useRecordingArea.Click += delegate { if (!dragging) CompleteSelection(); };
                 Controls.Add(useRecordingArea);
             }
@@ -473,20 +485,13 @@ namespace SnipStudio
             // system's dirty clip and copy only its bounded desktop rectangle.
             Rectangle dirty = Rectangle.Intersect(e.ClipRectangle, new Rectangle(Point.Empty, desktop.Size));
             if (dirty.Width <= 0 || dirty.Height <= 0) return;
-            GraphicsState desktopState = graphics.Save();
-            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
-            graphics.PixelOffsetMode = PixelOffsetMode.Half;
-            graphics.DrawImage(desktop, dirty, dirty.X, dirty.Y, dirty.Width, dirty.Height, GraphicsUnit.Pixel);
-            graphics.Restore(desktopState);
-            using (Region dimmed = new Region(ClientRectangle))
-            using (Brush dimBrush = new SolidBrush(Color.FromArgb(112, 0, 0, 0)))
+            GraphicsState adjustmentState = null;
+            if (useRecordingArea != null)
             {
-                if (mode == CaptureMode.Freeform && freeformPath != null)
-                    dimmed.Exclude(freeformPath);
-                else if (!selection.IsEmpty)
-                    dimmed.Exclude(selection);
-                graphics.FillRegion(dimBrush, dimmed);
+                adjustmentState = graphics.Save();
+                graphics.SetClip(dirty, CombineMode.Intersect);
             }
+            PaintFrozenDesktop(graphics, desktop, dirty, selection, freeformPath);
 
             graphics.SmoothingMode = SmoothingMode.AntiAlias;
             using (Pen border = new Pen(accent, 2f))
@@ -504,7 +509,28 @@ namespace SnipStudio
             DrawInstructions(graphics);
             if (!selection.IsEmpty)
                 DrawDimensions(graphics);
+            if (adjustmentState != null) graphics.Restore(adjustmentState);
             base.OnPaint(e);
+        }
+
+        internal static void PaintFrozenDesktop(Graphics graphics, Bitmap desktop, Rectangle dirty,
+            Rectangle selection, GraphicsPath freeformPath)
+        {
+            GraphicsState desktopState = graphics.Save();
+            graphics.InterpolationMode = InterpolationMode.NearestNeighbor;
+            graphics.PixelOffsetMode = PixelOffsetMode.Half;
+            graphics.CompositingMode = CompositingMode.SourceCopy;
+            graphics.DrawImage(desktop, dirty, dirty.X, dirty.Y, dirty.Width, dirty.Height, GraphicsUnit.Pixel);
+            graphics.Restore(desktopState);
+            using (Region dimmed = new Region(dirty))
+            using (Brush dimBrush = new SolidBrush(Color.FromArgb(112, 0, 0, 0)))
+            {
+                if (freeformPath != null)
+                    dimmed.Exclude(freeformPath);
+                else if (!selection.IsEmpty)
+                    dimmed.Exclude(selection);
+                graphics.FillRegion(dimBrush, dimmed);
+            }
         }
 
         protected override void OnPaintBackground(PaintEventArgs e)
@@ -526,13 +552,17 @@ namespace SnipStudio
             Rectangle box = instructionBox;
             if (!graphics.IsVisible(box)) return;
             DrawBox(graphics, box);
+            TextFormatFlags flags = TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine |
+                TextFormatFlags.EndEllipsis | HudClipping;
             TextRenderer.DrawText(graphics, instructionTitle, instructionFont,
                 new Rectangle(box.X + 16, box.Y + 10, box.Width - 32, instructionTitleSize.Height), Color.White,
-                TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                flags | TextFormatFlags.NoPrefix);
             TextRenderer.DrawText(graphics, instructionDetail, detailFont,
                 new Rectangle(box.X + 12, box.Y + instructionTitleSize.Height + 13, box.Width - 24, instructionDetailSize.Height),
-                Color.FromArgb(198, 209, 224), TextFormatFlags.HorizontalCenter | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis);
+                Color.FromArgb(198, 209, 224), flags);
         }
+
+        private TextFormatFlags HudClipping { get { return useRecordingArea == null ? 0 : TextFormatFlags.PreserveGraphicsClipping; } }
 
         private void UpdateInstructionLocation()
         {
@@ -548,8 +578,19 @@ namespace SnipStudio
             int width = Math.Min(Math.Max(instructionTitleSize.Width, instructionDetailSize.Width) + 40, Math.Max(180, instructionMonitor.Width - 32));
             int height = instructionTitleSize.Height + instructionDetailSize.Height + 28;
             instructionBox = new Rectangle(instructionMonitor.Left + (instructionMonitor.Width - width) / 2, instructionMonitor.Top + 22, width, height);
-            if (useRecordingArea != null)
-                useRecordingArea.Location = new Point(instructionBox.Left + (width - useRecordingArea.Width) / 2, instructionBox.Bottom + 6);
+            if (useRecordingArea == null) return;
+            double scale = Math.Max(96, DeviceDpi) / 96d;
+            Size preferred = useRecordingArea.GetPreferredSize(Size.Empty);
+            int buttonWidth = Math.Max(preferred.Width + 12, (int)Math.Ceiling(112 * scale));
+            int buttonHeight = Math.Max(preferred.Height, (int)Math.Ceiling(34 * scale));
+            Rectangle next = new Rectangle(instructionBox.Left + (width - buttonWidth) / 2,
+                instructionBox.Bottom + 6, buttonWidth, buttonHeight);
+            Rectangle previous = useRecordingArea.Bounds;
+            if (previous == next) return;
+            useRecordingArea.Bounds = next;
+            InvalidateHud(previous);
+            InvalidateHud(next);
+            useRecordingArea.Invalidate();
         }
 
         private void DrawDimensions(Graphics graphics)
@@ -558,7 +599,7 @@ namespace SnipStudio
             if (!graphics.IsVisible(box)) return;
             DrawBox(graphics, box);
             TextRenderer.DrawText(graphics, dimensionText, detailFont, new Rectangle(box.X + 8, box.Y + 5, box.Width - 16, box.Height - 10),
-                Color.White, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
+                Color.White, TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix | HudClipping);
         }
 
         private static IEnumerable<Rectangle> AdjustmentHandles(Rectangle area)

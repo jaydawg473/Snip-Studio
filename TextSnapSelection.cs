@@ -6,7 +6,6 @@ using System.Runtime.CompilerServices;
 namespace SnipStudio
 {
     // Pure geometry: the recognizer supplies reading order and image-pixel boxes.
-    // No pointer-to-text guess is returned unless both ends are near actual words.
     public static class TextSnapSelection
     {
         private static readonly object SnapshotGate = new object();
@@ -22,9 +21,44 @@ namespace SnipStudio
 
         public static List<RectangleF> BuildBands(IList<TextLineRegion> lines, PointF start, PointF end, float tolerance)
         {
-            List<RectangleF> bands = new List<RectangleF>();
-            if (!Finite(start) || !Finite(end)) return bands;
+            if (!Finite(start) || !Finite(end)) return new List<RectangleF>();
+            return BuildEndpointBands(Flatten(lines), start, end, tolerance, splitWideGaps: false);
+        }
+
+        public static List<RectangleF> BuildStrokeBands(IList<TextLineRegion> lines, PointF start, PointF end, float tolerance)
+        {
+            if (!Finite(start) || !Finite(end)) return new List<RectangleF>();
             List<WordPosition> words = Flatten(lines);
+            List<RectangleF> bands = BuildEndpointBands(words, start, end, tolerance, splitWideGaps: true);
+            if (bands.Count != 0 || start == end) return bands;
+
+            WordPosition previous = null;
+            RectangleF union = RectangleF.Empty;
+            foreach (WordPosition word in words)
+            {
+                if (!IntersectsStroke(Pad(word.Bounds), start, end))
+                {
+                    if (previous != null) bands.Add(Pad(union));
+                    previous = null;
+                    continue;
+                }
+
+                if (previous != null && IsSameLineRun(previous, word)) union = RectangleF.Union(union, word.Bounds);
+                else
+                {
+                    if (previous != null) bands.Add(Pad(union));
+                    union = word.Bounds;
+                }
+                previous = word;
+            }
+            if (previous != null) bands.Add(Pad(union));
+            return bands;
+        }
+
+        private static List<RectangleF> BuildEndpointBands(List<WordPosition> words, PointF start, PointF end,
+            float tolerance, bool splitWideGaps)
+        {
+            List<RectangleF> bands = new List<RectangleF>();
             if (words.Count == 0) return bands;
             tolerance = CleanTolerance(tolerance);
             int first = FindStart(words, start, tolerance);
@@ -47,7 +81,7 @@ namespace SnipStudio
             for (int index = lower; index <= upper; index++)
             {
                 WordPosition word = words[index];
-                if (word.Line != currentLine)
+                if (word.Line != currentLine || (splitWideGaps && !IsSameLineRun(words[index - 1], word)))
                 {
                     if (currentLine >= 0) bands.Add(Pad(union));
                     union = word.Bounds;
@@ -57,6 +91,31 @@ namespace SnipStudio
             }
             if (currentLine >= 0) bands.Add(Pad(union));
             return bands;
+        }
+
+        private static bool IsSameLineRun(WordPosition previous, WordPosition next)
+        {
+            if (previous.Line != next.Line) return false;
+            RectangleF first = previous.Bounds, second = next.Bounds;
+            float gap = Math.Max(first.Left, second.Left) - Math.Min(first.Right, second.Right);
+            return gap <= Math.Max(6, Math.Min(first.Height, second.Height));
+        }
+
+        private static bool IntersectsStroke(RectangleF bounds, PointF start, PointF end)
+        {
+            double first = 0, last = 1;
+            return ClipAxis(bounds.Left, bounds.Right, start.X, end.X, ref first, ref last) &&
+                ClipAxis(bounds.Top, bounds.Bottom, start.Y, end.Y, ref first, ref last);
+        }
+
+        private static bool ClipAxis(double minimum, double maximum, double start, double end, ref double first, ref double last)
+        {
+            double length = end - start;
+            if (length == 0) return start >= minimum && start <= maximum;
+            double enter = (minimum - start) / length, leave = (maximum - start) / length;
+            first = Math.Max(first, Math.Min(enter, leave));
+            last = Math.Min(last, Math.Max(enter, leave));
+            return first <= last;
         }
 
         private static List<WordPosition> Flatten(IList<TextLineRegion> lines)

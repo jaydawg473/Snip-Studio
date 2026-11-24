@@ -290,6 +290,24 @@ namespace SnipStudio
             return (format.Mask & mask) == mask ? (bool?)((format.Effects & mask) == mask) : null;
         }
 
+        internal static bool TryReplaceUniformText(RichTextBox box, string text)
+        {
+            if (box.TextLength == 0) return false;
+            box.Select(0, 1);
+            CharacterFormat first = GetCharacters(box);
+            box.SelectAll();
+            CharacterFormat selection = GetCharacters(box);
+            // RichEdit clears mask bits for attributes that differ within a
+            // selection. A translation cannot map those runs to new words.
+            if (first.Mask == 0 || (selection.Mask & first.Mask) != first.Mask || box.SelectionFont == null)
+                return false;
+
+            box.SelectedText = text;
+            box.SelectAll();
+            SetCharacters(box, ref first);
+            return String.Equals(box.Text, text, StringComparison.Ordinal);
+        }
+
         internal static int? GetScript(RichTextBox box)
         {
             CharacterFormat format = GetCharacters(box);

@@ -1,22 +1,25 @@
+using System.Globalization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.UI;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.Windows.Storage.Pickers;
 using SnipStudio.WinUI.Backend;
 
 namespace SnipStudio.WinUI;
 
-internal sealed class DesktopSettingsView
+internal sealed class DesktopSettingsView : Window
 {
     private static readonly string[] Categories = ["Screenshots", "Recording", "Workspace", "Shortcuts", "Updates"];
-    private readonly WindowId owner;
-    private readonly XamlRoot root;
-    private readonly CancellationToken cancellationToken;
+    private readonly CancellationTokenSource lifetime = new();
     private readonly Action<DesktopPreferences> save;
     private readonly string originalEditorPath;
+    private readonly JsonNode? initialSettings;
     private DesktopPreferences draft;
-    private readonly ContentDialog dialog;
     private readonly Grid layout = new() { RowSpacing = 12 };
     private readonly Grid body = new();
     private readonly ColumnDefinition navigationColumn = new();
@@ -29,21 +32,32 @@ internal sealed class DesktopSettingsView
         VerticalScrollBarVisibility = ScrollBarVisibility.Auto
     };
     private readonly InfoBar notice = new() { IsClosable = true };
+    private readonly Button saveButton = new() { Content = "Save", MinWidth = 88 };
+    private readonly Button cancelButton = new() { Content = "Cancel", MinWidth = 88 };
+    private readonly Button importButton = new() { Content = "Import previous settings" };
     private StackPanel[] pages = [];
     private NumberBox captureDelay = null!;
     private NumberBox borderWidth = null!;
     private bool busy;
     private bool closed;
 
-    internal DesktopSettingsView(XamlRoot root, WindowId owner, DesktopPreferences preferences,
-        Action<DesktopPreferences> save, CancellationToken cancellationToken)
+    internal nint WindowHandle => WinRT.Interop.WindowNative.GetWindowHandle(this);
+    internal bool CanCloseWithoutPrompt => !busy &&
+        !HasUncommittedNumber(captureDelay) && !HasUncommittedNumber(borderWidth) &&
+        JsonNode.DeepEquals(initialSettings, JsonSerializer.SerializeToNode(draft));
+    private CancellationToken CancellationToken => lifetime.Token;
+
+    internal DesktopSettingsView(WindowId placementOwner, DesktopPreferences preferences, Action<DesktopPreferences> save)
     {
-        this.root = root;
-        this.owner = owner;
         this.save = save;
-        this.cancellationToken = cancellationToken;
         originalEditorPath = preferences.EditorApplicationPath;
         draft = preferences.Clone();
+        initialSettings = JsonSerializer.SerializeToNode(draft);
+        Title = "Snip Studio — Settings";
+        layout.Padding = new Thickness(24, 16, 24, 16);
+        layout.RequestedTheme = preferences.Theme switch { "Light" => ElementTheme.Light, "Dark" => ElementTheme.Dark, _ => ElementTheme.Default };
+        string icon = Path.Combine(AppContext.BaseDirectory, "Assets", "SnipStudio.ico");
+        if (File.Exists(icon)) AppWindow.SetIcon(icon);
 
         body.ColumnDefinitions.Add(navigationColumn);
         body.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
@@ -59,62 +73,74 @@ internal sealed class DesktopSettingsView
         body.Children.Add(scroller);
         AutomationProperties.SetName(navigation, "Settings category");
         AutomationProperties.SetName(compactNavigation, "Settings category");
-        var import = new Button { Content = "Import previous settings" };
-        import.Click += async (_, _) => await RunPickerActionAsync(ImportAsync);
+        importButton.Click += async (_, _) => await RunPickerActionAsync(ImportAsync);
+        saveButton.Click += async (_, _) => await SaveDraftAsync();
+        cancelButton.Click += (_, _) => Close();
+        var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, HorizontalAlignment = HorizontalAlignment.Right };
+        actions.Children.Add(saveButton);
+        actions.Children.Add(cancelButton);
+        var footer = new Grid { ColumnSpacing = 12 };
+        footer.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        footer.Children.Add(importButton);
+        Grid.SetColumn(actions, 1);
+        footer.Children.Add(actions);
         layout.RowDefinitions.Add(new() { Height = new GridLength(1, GridUnitType.Star) });
         layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         layout.RowDefinitions.Add(new() { Height = GridLength.Auto });
         Grid.SetRow(notice, 1);
-        Grid.SetRow(import, 2);
+        Grid.SetRow(footer, 2);
         layout.Children.Add(body);
         layout.Children.Add(notice);
-        layout.Children.Add(import);
-        dialog = new ContentDialog
+        layout.Children.Add(footer);
+        var escape = new KeyboardAccelerator { Key = Windows.System.VirtualKey.Escape };
+        escape.Invoked += (_, args) =>
         {
-            XamlRoot = root,
-            Title = "Snip Studio settings",
-            PrimaryButtonText = "Save",
-            CloseButtonText = "Cancel",
-            Content = layout
+            if (busy) return;
+            args.Handled = true;
+            Close();
         };
-        dialog.Resources["ContentDialogMaxWidth"] = 900d;
-        dialog.Resources["ContentDialogPadding"] = new Thickness(24, 14, 24, 14);
-        dialog.PrimaryButtonClick += SaveDraft;
-        dialog.Closing += (_, args) => { if (busy) args.Cancel = true; };
+        layout.KeyboardAccelerators.Add(escape);
+        Content = layout;
+        layout.SizeChanged += (_, _) => UpdateBounds();
+        AppWindow.Closing += (_, args) => { if (busy) args.Cancel = true; };
+        Closed += (_, _) =>
+        {
+            closed = true;
+            lifetime.Cancel();
+            lifetime.Dispose();
+        };
         navigation.SelectionChanged += (_, _) => SelectPage(navigation.SelectedIndex);
         compactNavigation.SelectionChanged += (_, _) => SelectPage(compactNavigation.SelectedIndex);
         CreatePages(0);
+        _ = new DesktopWindowSizing(this, placementOwner, 820, 650, 660, 500);
+        InstallerExitHook.Attach(this);
     }
 
-    internal async Task<DesktopPreferences?> ShowAsync()
+    internal void Show()
     {
-        root.Changed += RootChanged;
-        try
-        {
-            UpdateBounds();
-            return await dialog.ShowAsync() == ContentDialogResult.Primary ? draft : null;
-        }
-        finally
-        {
-            closed = true;
-            root.Changed -= RootChanged;
-        }
+        AppWindow.Show();
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter) presenter.Restore();
+        AppWindow.MoveInZOrderAtTop();
+        Activate();
     }
 
-    private void RootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => UpdateBounds();
+    internal void ShowPendingExit()
+    {
+        Show();
+        ShowNotice(InfoBarSeverity.Warning, busy
+            ? "Finish the current Settings action before exiting Snip Studio."
+            : "Save or cancel Settings before exiting Snip Studio.");
+    }
 
     private void UpdateBounds()
     {
-        double width = Math.Max(1, Math.Min(800, root.Size.Width - 76));
-        bool compact = width < 555;
+        bool compact = layout.ActualWidth < 610;
         navigation.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
         compactNavigation.Visibility = compact ? Visibility.Visible : Visibility.Collapsed;
         compactNavigation.Margin = new Thickness(0, 0, 0, 10);
         navigationColumn.Width = new GridLength(compact ? 0 : 156);
         body.ColumnSpacing = compact ? 0 : 20;
-        layout.Width = width;
-        layout.Height = Math.Max(1, Math.Min(550, root.Size.Height - 158));
-        dialog.MaxHeight = Math.Max(1, root.Size.Height - 24);
     }
 
     private void SelectPage(int index)
@@ -129,7 +155,6 @@ internal sealed class DesktopSettingsView
 
     private void CreatePages(int selected)
     {
-        scroller.Content = null;
         pages = [CreateCapturePage(), CreateRecordingPage(), CreateWorkspacePage(), CreateShortcutsPage(), CreateUpdatesPage()];
         SelectPage(selected);
     }
@@ -142,7 +167,7 @@ internal sealed class DesktopSettingsView
         AddToggle(page, "Ask to save edits when leaving a screenshot", draft.AskSaveEditedScreenshots, value => draft.AskSaveEditedScreenshots = value);
         AddPath(page, "Screenshot folder", draft.ScreenshotFolder, value => draft.ScreenshotFolder = value, folder: true);
         AddHeading(page, "Capture behavior");
-        AddToggle(page, "Open new screenshots in separate windows", draft.CaptureInNewWindow, value => draft.CaptureInNewWindow = value);
+        AddToggle(page, "Use separate windows for captures outside New and Ctrl+N", draft.CaptureInNewWindow, value => draft.CaptureInNewWindow = value);
         captureDelay = AddNumber(page, "Delay (seconds)", draft.CaptureDelaySeconds, 0, 10, value => draft.CaptureDelaySeconds = value);
         AddToggle(page, "Remember capture delay between sessions", draft.RememberCaptureDelay, value => draft.RememberCaptureDelay = value);
         AddToggle(page, "Correct colors on HDR displays", draft.UseHdrColorCorrection, value => draft.UseHdrColorCorrection = value);
@@ -194,14 +219,15 @@ internal sealed class DesktopSettingsView
         async Task RefreshAsync()
         {
             refresh.IsEnabled = false;
+            CancellationToken token = CancellationToken;
             try
             {
-                var devices = await Task.Run(() => (RecordingController.GetMicrophones(), RecordingController.GetSystemAudioDevices()), cancellationToken);
+                var devices = await Task.Run(() => (RecordingController.GetMicrophones(), RecordingController.GetSystemAudioDevices()), token);
                 if (closed || !ReferenceEquals(pages[1], page)) return;
                 SetAudioOptions(microphone, devices.Item1, draft.DefaultMicrophoneDeviceId);
                 SetAudioOptions(output, devices.Item2, draft.DefaultSystemAudioDeviceId);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
             catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
             {
                 if (!closed && ReferenceEquals(scroller.Content, page))
@@ -245,8 +271,63 @@ internal sealed class DesktopSettingsView
         AddToggle(page, "Resize the window to fit new snips", draft.ResizeToSnip, value => draft.ResizeToSnip = value);
         AddToggle(page, "Require Ctrl when using the wheel to zoom", draft.RequireCtrlForWheelZoom, value => draft.RequireCtrlForWheelZoom = value);
         AddHeading(page, "External image editor");
-        AddPath(page, "Editor executable (optional)", draft.EditorApplicationPath, value => draft.EditorApplicationPath = value, folder: false);
-        page.Children.Add(Label("Leave this empty to choose an editor when opening an image externally."));
+        var editorList = new ComboBox { Header = "Installed editor", HorizontalAlignment = HorizontalAlignment.Stretch };
+        var refresh = new Button { Content = "Refresh installed editors", VerticalAlignment = VerticalAlignment.Bottom };
+        var editorChoices = new Grid { ColumnSpacing = 8 };
+        editorChoices.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        editorChoices.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        editorChoices.Children.Add(editorList);
+        Grid.SetColumn(refresh, 1);
+        editorChoices.Children.Add(refresh);
+        page.Children.Add(editorChoices);
+        var path = AddPath(page, "Editor executable (optional)", draft.EditorApplicationPath,
+            value => draft.EditorApplicationPath = value, folder: false);
+        page.Children.Add(Label("Choose an installed editor or browse to an executable. Clear the path to choose an editor each time."));
+        bool updatingChoices = false;
+        void SelectMatchingEditor()
+        {
+            updatingChoices = true;
+            try
+            {
+                editorList.SelectedItem = editorList.Items.OfType<ComboBoxItem>().FirstOrDefault(item =>
+                    item.Tag is string executable && string.Equals(executable, path.Text, StringComparison.OrdinalIgnoreCase));
+            }
+            finally { updatingChoices = false; }
+        }
+        editorList.SelectionChanged += (_, _) =>
+        {
+            if (!updatingChoices && editorList.SelectedItem is ComboBoxItem { Tag: string executable })
+                path.Text = executable;
+        };
+        path.TextChanged += (_, _) => SelectMatchingEditor();
+        async Task RefreshEditorsAsync()
+        {
+            refresh.IsEnabled = false;
+            try
+            {
+                var found = await global::SnipStudio.InstalledEditorFinder.DiscoverAsync().WaitAsync(CancellationToken);
+                if (closed || !ReferenceEquals(pages[2], page)) return;
+                editorList.Items.Clear();
+                editorList.Items.Add(new ComboBoxItem { Content = "Choose when opening an image", Tag = "" });
+                foreach (var editor in found)
+                    editorList.Items.Add(new ComboBoxItem { Content = editor.Name, Tag = editor.ExecutablePath });
+                SelectMatchingEditor();
+            }
+            catch (OperationCanceledException) when (closed) { }
+            catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+            {
+                if (!closed) ShowNotice(InfoBarSeverity.Warning, "Installed editors could not be listed. You can still browse to an editor.");
+            }
+            finally { if (!closed) refresh.IsEnabled = true; }
+        }
+        refresh.Click += async (_, _) => await RefreshEditorsAsync();
+        bool requested = false;
+        page.Loaded += async (_, _) =>
+        {
+            if (requested) return;
+            requested = true;
+            await RefreshEditorsAsync();
+        };
         return page;
     }
 
@@ -340,7 +421,7 @@ internal sealed class DesktopSettingsView
         return box;
     }
 
-    private void AddPath(StackPanel page, string title, string current, Action<string> assign, bool folder)
+    private TextBox AddPath(StackPanel page, string title, string current, Action<string> assign, bool folder)
     {
         var row = new Grid { ColumnSpacing = 8 };
         row.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
@@ -352,7 +433,7 @@ internal sealed class DesktopSettingsView
         browse.Click += async (_, _) => await RunPickerActionAsync(async () =>
         {
             string? selection = folder
-                ? (await new FolderPicker(owner).PickSingleFolderAsync())?.Path
+                ? (await new FolderPicker(AppWindow.Id).PickSingleFolderAsync())?.Path
                 : await PickFileAsync(".exe", "Use editor");
             if (selection is not null) path.Text = selection;
         });
@@ -360,11 +441,12 @@ internal sealed class DesktopSettingsView
         Grid.SetColumn(browse, 1);
         row.Children.Add(browse);
         page.Children.Add(row);
+        return path;
     }
 
     private async Task<string?> PickFileAsync(string extension, string action)
     {
-        var picker = new FileOpenPicker(owner) { CommitButtonText = action };
+        var picker = new FileOpenPicker(AppWindow.Id) { CommitButtonText = action };
         picker.FileTypeFilter.Add(extension);
         return (await picker.PickSingleFileAsync())?.Path;
     }
@@ -376,7 +458,7 @@ internal sealed class DesktopSettingsView
             : await PickFileAsync(".xml", "Review previous settings");
         if (path is null) return;
         DesktopPreferences before = draft;
-        draft = await Task.Run(() => LegacySettingsImport.Import(path, before), cancellationToken);
+        draft = await Task.Run(() => LegacySettingsImport.Import(path, before), CancellationToken);
         CreatePages(navigation.SelectedIndex);
         ShowNotice(InfoBarSeverity.Success, "Previous settings loaded. Review the categories, then select Save to apply them.");
     }
@@ -403,25 +485,27 @@ internal sealed class DesktopSettingsView
     private void SetBusy(bool value)
     {
         busy = value;
-        dialog.IsPrimaryButtonEnabled = !value;
-        body.IsHitTestVisible = !value;
+        saveButton.IsEnabled = cancelButton.IsEnabled = importButton.IsEnabled = !value;
+        navigation.IsEnabled = compactNavigation.IsEnabled = scroller.IsEnabled = !value;
     }
 
-    private async void SaveDraft(ContentDialog sender, ContentDialogButtonClickEventArgs args)
+    private async Task SaveDraftAsync()
     {
-        var deferral = args.GetDeferral();
-        SetBusy(true);
+        if (busy) return;
+        bool saved = false;
         try
         {
+            // Validation may bring another category and its invalid field into focus.
             SelectPageForInvalidNumber(captureDelay, "Capture delay", 0, 10);
             if (draft.AddScreenshotBorder) SelectPageForInvalidNumber(borderWidth, "Border thickness", 1, 20);
             draft.ScreenshotFolder = ValidateFolder(draft.ScreenshotFolder, "Screenshots", 0);
             draft.RecordingFolder = ValidateFolder(draft.RecordingFolder, "Recording", 1);
+            SetBusy(true);
             if (!string.Equals(draft.EditorApplicationPath, originalEditorPath, StringComparison.Ordinal))
             {
                 try
                 {
-                    draft.EditorApplicationPath = await DesktopExternalEditorService.ValidateConfiguredEditorPathAsync(draft.EditorApplicationPath, cancellationToken);
+                    draft.EditorApplicationPath = await DesktopExternalEditorService.ValidateConfiguredEditorPathAsync(draft.EditorApplicationPath, CancellationToken);
                 }
                 catch
                 {
@@ -431,17 +515,17 @@ internal sealed class DesktopSettingsView
             }
             draft.Normalize();
             save(draft.Clone());
+            saved = true;
         }
         catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
         {
-            args.Cancel = true;
             ShowNotice(InfoBarSeverity.Error, failure.Message);
         }
         finally
         {
-            SetBusy(false);
-            deferral.Complete();
+            if (busy) SetBusy(false);
         }
+        if (saved) Close();
     }
 
     private void SelectPageForInvalidNumber(NumberBox box, string label, int min, int max)
@@ -449,9 +533,15 @@ internal sealed class DesktopSettingsView
         if (double.IsFinite(box.Value) && box.Value == Math.Truncate(box.Value) && box.Value >= min && box.Value <= max)
             return;
         SelectPage(0);
+        layout.UpdateLayout();
         box.Focus(FocusState.Programmatic);
         throw new ArgumentException($"{label} must be a whole number from {min} to {max}.");
     }
+
+    private static bool HasUncommittedNumber(NumberBox box) =>
+        box.IsLoaded && box.IsEnabled &&
+        (!double.TryParse(box.Text, NumberStyles.Number, CultureInfo.CurrentCulture, out double typed) ||
+            box.Value != typed);
 
     private string ValidateFolder(string path, string category, int page)
     {

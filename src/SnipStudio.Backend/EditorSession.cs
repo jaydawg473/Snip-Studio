@@ -20,6 +20,9 @@ public sealed partial class EditorSession : IDisposable
     private const int MaximumStrokePoints = 100000;
     private readonly int ownerThreadId;
     private readonly global::SnipStudio.EditorDocument document = new();
+    private sealed record PreparedImage(Bitmap Pixels, ImageSaveTarget? Target);
+
+    private Task<PreparedImage>? openWorker;
     private Task? saveWorker;
     private bool isSaving;
     private bool disposed;
@@ -68,6 +71,7 @@ public sealed partial class EditorSession : IDisposable
         ValidateImage(decoded);
         // SetImage validates and copies before releasing any current history.
         document.SetImage(decoded);
+        editableProjectDestination = null;
         // Opening an existing file starts clean, matching the released editor.
         // Clipboard/image bytes remain an unsaved new document.
         document.MarkSaved();
@@ -82,9 +86,103 @@ public sealed partial class EditorSession : IDisposable
         using Bitmap decoded = new(input);
         ValidateImage(decoded);
         document.SetImage(decoded);
+        editableProjectDestination = null;
     }
 
-    public void AddStroke(IReadOnlyList<ImagePoint> points, uint argb, float width, bool highlighter)
+    public Task OpenAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Choose an image to open.", nameof(path));
+        return OpenPreparedImageAsync(() => new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read),
+            markSaved: true, savePath: null, cancellationToken);
+    }
+
+    /// <summary>Opens a file and approves in-place saves against the exact bytes opened.</summary>
+    public Task<ImageSaveTarget?> OpenWithSaveTargetAsync(string path, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Choose an image to open.", nameof(path));
+        string fullPath = Path.GetFullPath(path);
+        string? savePath = Path.GetExtension(fullPath).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".bmp" ? fullPath : null;
+        return OpenPreparedImageAsync(() => new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.Read),
+            markSaved: true, savePath, cancellationToken);
+    }
+
+    /// <summary>Opens owned image bytes without blocking the editor while decoding.</summary>
+    public Task OpenImageBytesAsync(byte[] bytes, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (bytes.Length == 0) throw new ArgumentException("The image contains no data.", nameof(bytes));
+        return OpenPreparedImageAsync(() => new MemoryStream(bytes, writable: false), markSaved: false, savePath: null, cancellationToken);
+    }
+
+    private async Task<ImageSaveTarget?> OpenPreparedImageAsync(Func<Stream> openInput, bool markSaved, string? savePath,
+        CancellationToken cancellationToken)
+    {
+        VerifyCanMutate();
+        cancellationToken.ThrowIfCancellationRequested();
+        if (SynchronizationContext.Current == null)
+            throw new InvalidOperationException("Open the image from the application's UI context.");
+        if (isProjectOpenPending || Volatile.Read(ref openWorker) is not null)
+            throw new InvalidOperationException("The previous image read is still finishing. Your current image is kept; try again.");
+
+        long revision = document.Revision;
+        object? identity = document.BaseIdentity;
+        Task<PreparedImage> worker = Task.Run(() =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            using Stream input = openInput();
+            ImageSaveTarget? target = savePath is null ? null : AtomicImageWriter.CaptureOpenedImageTarget(savePath,
+                (FileStream)input, cancellationToken);
+            using Bitmap decoded = new(input);
+            ValidateImage(decoded);
+            cancellationToken.ThrowIfCancellationRequested();
+            return new PreparedImage(global::SnipStudio.EditorDocument.CopyImage(decoded), target);
+        });
+        openWorker = worker;
+
+        PreparedImage? prepared = null;
+        bool abandoned = false;
+        try
+        {
+            // Let the editor display its opening state before adopting a
+            // prepared image, even if the decode worker finished immediately.
+            await Task.Yield();
+            prepared = await worker.WaitAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            VerifyCanMutate();
+            if (document.Revision != revision || !ReferenceEquals(document.BaseIdentity, identity))
+                throw new InvalidOperationException("The document changed while the image was opening. Your current image is kept.");
+            ImageSaveTarget? target = prepared.Target;
+            document.SetOwnedImage(prepared.Pixels);
+            editableProjectDestination = null;
+            prepared = null;
+            if (markSaved) document.MarkSaved();
+            return target;
+        }
+        catch (OperationCanceledException) when (prepared is null && cancellationToken.IsCancellationRequested)
+        {
+            abandoned = true;
+            _ = ReleaseAbandonedOpenAsync(worker);
+            throw;
+        }
+        finally
+        {
+            prepared?.Pixels.Dispose();
+            if (!abandoned) _ = Interlocked.CompareExchange(ref openWorker, null, worker);
+        }
+    }
+
+    private async Task ReleaseAbandonedOpenAsync(Task<PreparedImage> worker)
+    {
+        try { (await worker.ConfigureAwait(false)).Pixels.Dispose(); }
+        catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
+        {
+            // Observe a late decoder failure after the UI has canceled its read.
+        }
+        finally { _ = Interlocked.CompareExchange(ref openWorker, null, worker); }
+    }
+
+    public void AddStroke(IReadOnlyList<ImagePoint> points, uint argb, float width, bool highlighter,
+        byte? highlighterAlpha = null)
     {
         VerifyCanMutate();
         RequireImage();
@@ -94,7 +192,7 @@ public sealed partial class EditorSession : IDisposable
             throw new ArgumentException("A single stroke contains too many points. Finish it and start another stroke.", nameof(points));
         PointF[] copy = new PointF[points.Count];
         for (int index = 0; index < copy.Length; index++) copy[index] = ConvertPoint(points[index], nameof(points));
-        document.AddStroke(copy, Color.FromArgb(unchecked((int)argb)), width, highlighter);
+        document.AddStroke(copy, Color.FromArgb(unchecked((int)argb)), width, highlighter, highlighterAlpha);
     }
 
     public void AddRectangle(ImagePoint start, ImagePoint end, uint argb, float width)
@@ -138,18 +236,37 @@ public sealed partial class EditorSession : IDisposable
         }
     }
 
+    public static ImageSaveTarget PrepareSaveTarget(string path) => AtomicImageWriter.Prepare(path);
+
+    public static Task<ImageSaveTarget> PrepareSaveTargetAsync(string path, CancellationToken cancellationToken = default) =>
+        Task.Run(() => AtomicImageWriter.Prepare(path, cancellationToken), cancellationToken);
+
     public async Task<SaveSnapshotResult> SaveAsync(string path, CancellationToken cancellationToken = default)
     {
         VerifyCanMutate();
         RequireImage();
         cancellationToken.ThrowIfCancellationRequested();
+        return await SavePreparedAsync(PrepareSaveTarget(path), cancellationToken);
+    }
+
+    public Task<SaveSnapshotResult> SavePreparedAsync(ImageSaveTarget target, CancellationToken cancellationToken = default) =>
+        PersistImageAsync(target, markSaved: true, cancellationToken);
+
+    public Task<SaveSnapshotResult> ExportPreparedAsync(ImageSaveTarget target, CancellationToken cancellationToken = default) =>
+        PersistImageAsync(target, markSaved: false, cancellationToken);
+
+    private async Task<SaveSnapshotResult> PersistImageAsync(ImageSaveTarget target, bool markSaved, CancellationToken cancellationToken)
+    {
+        VerifyCanMutate();
+        RequireImage();
+        ArgumentNullException.ThrowIfNull(target);
+        cancellationToken.ThrowIfCancellationRequested();
         if (SynchronizationContext.Current == null)
             throw new InvalidOperationException("Save from the application's UI context so document state can complete safely.");
-        string destination = AtomicImageWriter.ValidatePath(path);
         long revision = document.Revision;
         object identity = document.BaseIdentity;
         Bitmap snapshot = document.RenderImage();
-        Task worker;
+        Task<ImageSaveTarget> worker;
         isSaving = true;
         try
         {
@@ -157,7 +274,7 @@ public sealed partial class EditorSession : IDisposable
             // dispose its snapshot even when the token is already canceled.
             worker = Task.Run(() =>
             {
-                using (snapshot) AtomicImageWriter.Save(snapshot, destination, cancellationToken);
+                using (snapshot) return AtomicImageWriter.Save(snapshot, target, cancellationToken);
             });
             saveWorker = worker;
         }
@@ -170,12 +287,12 @@ public sealed partial class EditorSession : IDisposable
 
         try
         {
-            await worker;
+            ImageSaveTarget published = await worker;
             VerifyOwner();
             bool current = !disposed && document.HasImage && document.Revision == revision &&
                 ReferenceEquals(document.BaseIdentity, identity);
-            if (current) document.MarkSaved();
-            return new SaveSnapshotResult(revision, current, destination);
+            if (current && markSaved) document.MarkSaved();
+            return new SaveSnapshotResult(revision, current, target.Path) { SavedTarget = published };
         }
         finally
         {
@@ -244,10 +361,12 @@ public sealed partial class EditorSession : IDisposable
             throw new ArgumentOutOfRangeException(nameof(width), "Choose a stroke width from 1 to 100 pixels.");
     }
 
-    private static void ValidateImage(Bitmap image)
+    private static void ValidateImage(Bitmap image) => ValidateImageDimensions(image.Width, image.Height);
+
+    internal static void ValidateImageDimensions(int width, int height)
     {
-        if (image.Width < 1 || image.Height < 1 || image.Width > MaximumImageDimension || image.Height > MaximumImageDimension ||
-            (long)image.Width * image.Height > MaximumImagePixels)
-            throw new ArgumentException("This migration preview supports images up to 32,768 pixels per side and 64 million pixels in total.");
+        if (width < 1 || height < 1 || width > MaximumImageDimension || height > MaximumImageDimension ||
+            (long)width * height > MaximumImagePixels)
+            throw new ArgumentException("Snip Studio supports images up to 32,768 pixels per side and 64 million pixels in total.");
     }
 }

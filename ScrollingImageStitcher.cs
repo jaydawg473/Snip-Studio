@@ -173,6 +173,19 @@ namespace SnipStudio
             catch { result.Dispose(); throw; }
         }
 
+        internal int[] GetJoinRows()
+        {
+            ThrowIfDisposed();
+            int[] joins = new int[strips.Count - 1];
+            int row = 0;
+            for (int index = 0; index < joins.Length; index++)
+            {
+                row += strips[index].Height;
+                joins[index] = row;
+            }
+            return joins;
+        }
+
         public void Dispose()
         {
             if (disposed) return;

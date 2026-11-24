@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,7 +19,11 @@ public readonly record struct RecordingRegion(int X, int Y, int Width, int Heigh
 public sealed record RecordingDisplay(string Name, RecordingRegion Region, bool IsPrimary);
 public sealed record RecordingAudioDevice(string Id, string Name);
 public sealed record RecordingSettings(bool Microphone = true, bool SystemAudio = true,
-    bool IncludeCursor = true, int FramesPerSecond = 15, string MicrophoneDeviceId = "", string SystemAudioDeviceId = "");
+    bool IncludeCursor = true, int FramesPerSecond = 15, string MicrophoneDeviceId = "", string SystemAudioDeviceId = "")
+{
+    public bool HideTaskbars { get; init; }
+    public bool KeepPrimaryTaskbarVisible { get; init; } = true;
+}
 public sealed record RecordingProgress(bool IsActive, TimeSpan Duration, string Message, Exception? Error,
     string? DestinationPath, string? RecoveryPath);
 
@@ -31,6 +36,8 @@ public sealed class RecordingController : IDisposable
     private static readonly SemaphoreSlim startupSlots = new(2, 2);
     private readonly object gate = new();
     private global::SnipStudio.ScreenRecorder? recorder;
+    private string? lastAudioWarning;
+    private string? lastTaskbarWarning;
     private bool disposed;
     private bool starting;
     public event EventHandler<RecordingProgress>? StatusChanged;
@@ -38,6 +45,8 @@ public sealed class RecordingController : IDisposable
     public bool IsActive { get { lock (gate) return starting || recorder != null; } }
     public TimeSpan Duration { get { lock (gate) return recorder?.Duration ?? TimeSpan.Zero; } }
     public string? DestinationPath { get { lock (gate) return recorder?.DestinationPath; } }
+    public string? LastAudioWarning { get { lock (gate) return lastAudioWarning; } }
+    public string? LastTaskbarWarning { get { lock (gate) return lastTaskbarWarning; } }
     public static RecordingRegion DesktopRegion
     {
         get { Rectangle area = SystemInformation.VirtualScreen; return new(area.X, area.Y, area.Width, area.Height); }
@@ -49,8 +58,46 @@ public sealed class RecordingController : IDisposable
     public static IReadOnlyList<RecordingAudioDevice> GetSystemAudioDevices() => global::SnipStudio.AudioCaptureMixer.GetSystemAudioDevices()
         .Select(device => new RecordingAudioDevice(device.Id ?? "", device.Name ?? "Output device")).ToArray();
 
-    public async Task StartAsync(RecordingRegion region, string destination, RecordingSettings options,
+    public static async Task<ImageSaveTarget> PrepareSaveTargetAsync(string destination, bool replacementApproved,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(destination);
+        cancellationToken.ThrowIfCancellationRequested();
+        string path = Path.GetFullPath(destination);
+        if (!string.Equals(Path.GetExtension(path), ".mp4", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Choose an .mp4 recording filename.", nameof(destination));
+        if (!replacementApproved) return new ImageSaveTarget(path, null);
+
+        using var preparationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        Task<ImageSaveTarget> pending = PrepareExistingTargetAsync(path, preparationCancellation.Token);
+        _ = ObservePendingStartupAsync(pending);
+        try { return await pending.WaitAsync(TimeSpan.FromSeconds(8), cancellationToken).ConfigureAwait(false); }
+        catch (TimeoutException)
+        {
+            preparationCancellation.Cancel();
+            throw new TimeoutException("The recording destination did not respond. Check the folder or choose a new filename.");
+        }
+    }
+
+    private static async Task<ImageSaveTarget> PrepareExistingTargetAsync(string path, CancellationToken token)
+    {
+        await startupSlots.WaitAsync(token).ConfigureAwait(false);
+        try { return await Task.Run(() => AtomicImageWriter.PrepareDestination(path, token), token).ConfigureAwait(false); }
+        finally { startupSlots.Release(); }
+    }
+
+    public Task StartAsync(RecordingRegion region, string destination, RecordingSettings options, CancellationToken cancellationToken = default) =>
+        StartAsync(region, destination, options, target: null, cancellationToken);
+
+    public Task StartPreparedAsync(RecordingRegion region, ImageSaveTarget target, RecordingSettings options,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+        return StartAsync(region, target.Path, options, target, cancellationToken);
+    }
+
+    private async Task StartAsync(RecordingRegion region, string destination, RecordingSettings options, ImageSaveTarget? target,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(options);
         cancellationToken.ThrowIfCancellationRequested();
@@ -62,6 +109,8 @@ public sealed class RecordingController : IDisposable
             if (recorder != null || starting) throw new InvalidOperationException("The previous recording is still active or finishing.");
             current = new global::SnipStudio.ScreenRecorder();
             recorder = current;
+            lastAudioWarning = null;
+            lastTaskbarWarning = null;
             starting = true;
         }
         current.StatusChanged += (_, args) =>
@@ -77,9 +126,10 @@ public sealed class RecordingController : IDisposable
             {
                 RecordMicrophone = options.Microphone, RecordSystemAudio = options.SystemAudio,
                 IncludeCursor = options.IncludeCursor, FramesPerSecond = options.FramesPerSecond,
-                MicrophoneDeviceId = options.MicrophoneDeviceId ?? "", SystemAudioDeviceId = options.SystemAudioDeviceId ?? ""
+                MicrophoneDeviceId = options.MicrophoneDeviceId ?? "", SystemAudioDeviceId = options.SystemAudioDeviceId ?? "",
+                HideTaskbars = options.HideTaskbars, KeepPrimaryTaskbarVisible = options.KeepPrimaryTaskbarVisible
             };
-            Task ready = StartCoreAsync(current, region, destination, nativeOptions, startupCancellation.Token);
+            Task ready = StartCoreAsync(current, region, destination, nativeOptions, target, startupCancellation.Token);
             _ = ObservePendingStartupAsync(ready);
             await ready.WaitAsync(TimeSpan.FromSeconds(20), cancellationToken).ConfigureAwait(false);
         }
@@ -97,15 +147,21 @@ public sealed class RecordingController : IDisposable
     private static async Task ObservePendingStartupAsync(Task pending)
     { try { await pending.ConfigureAwait(false); } catch (Exception) { /* The waiting UI receives the original failure or timeout. */ } }
 
-    private static async Task StartCoreAsync(global::SnipStudio.ScreenRecorder current, RecordingRegion region, string destination,
-        global::SnipStudio.ScreenRecordingOptions options, CancellationToken token)
+    internal static async Task StartCoreAsync(global::SnipStudio.ScreenRecorder current, RecordingRegion region, string destination,
+        global::SnipStudio.ScreenRecordingOptions options, ImageSaveTarget? target, CancellationToken token)
     {
         await startupSlots.WaitAsync(token).ConfigureAwait(false);
         try
         {
             // Destination validation may touch an unavailable network share.
             // It shares the same bounded lease as device/encoder initialization.
-            await Task.Run(() => current.StartAsync(region.Rectangle, destination, options), token).ConfigureAwait(false);
+            await Task.Run(() =>
+            {
+                ImageSaveTarget approved = target ?? AtomicImageWriter.PrepareDestination(destination, token);
+                token.ThrowIfCancellationRequested();
+                return current.StartAsync(region.Rectangle, approved.Path, options,
+                    completed => AtomicImageWriter.PublishCopy(completed, approved, CancellationToken.None));
+            }, token).ConfigureAwait(false);
         }
         finally { startupSlots.Release(); }
     }
@@ -125,6 +181,12 @@ public sealed class RecordingController : IDisposable
         try
         {
             await current.StopAsync().ConfigureAwait(false);
+            lock (gate)
+                if (ReferenceEquals(recorder, current))
+                {
+                    lastAudioWarning = current.AudioWarning;
+                    lastTaskbarWarning = current.TaskbarWarning;
+                }
             return current.DestinationPath;
         }
         finally { Release(current); }

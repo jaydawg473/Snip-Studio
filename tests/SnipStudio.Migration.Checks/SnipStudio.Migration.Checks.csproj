@@ -14,5 +14,12 @@
     <ProjectReference Include="../../src/SnipStudio.Backend/SnipStudio.Backend.csproj" />
     <Compile Include="../../src/SnipStudio.WinUI/DesktopPreferences.cs" Link="Frontend/DesktopPreferences.cs" />
     <Compile Include="../../src/SnipStudio.WinUI/LegacySettingsImport.cs" Link="Frontend/LegacySettingsImport.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/DesktopUpdateService.cs" Link="Frontend/DesktopUpdateService.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/StartupDiagnostics.cs" Link="Frontend/StartupDiagnostics.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/ViewportState.cs" Link="Frontend/ViewportState.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/RecognizedTextSpotlightLayout.cs" Link="Frontend/RecognizedTextSpotlightLayout.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/TaskbarDiscardProtocol.cs" Link="Frontend/TaskbarDiscardProtocol.cs" />
+    <Compile Include="../../src/SnipStudio.WinUI/ObjectTransformGeometry.cs" Link="Frontend/ObjectTransformGeometry.cs" />
+    <Compile Include="../../CropFrame.cs" Link="Legacy/CropFrame.cs" />
   </ItemGroup>
 </Project>

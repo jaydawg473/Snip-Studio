@@ -8,19 +8,30 @@ using Windows.Foundation;
 using Windows.System;
 using Windows.UI;
 using Microsoft.UI.Text;
+using CropFrameHandle = global::SnipStudio.CropFrameHandle;
 
 namespace SnipStudio.WinUI;
 
 internal enum PreviewTool { Pan, Select, Pen, Highlighter, Line, Arrow, Rectangle, Ellipse, Text, Eraser, Crop, RemoveArea, Emoji, OcrSelect }
 
+internal static class PreviewTools
+{
+    internal static bool IsShapeTool(this PreviewTool tool) =>
+        tool is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Line or PreviewTool.Arrow;
+}
+
 internal sealed record TextEditDraft(int AnnotationIndex, string Text, string Rtf, string FontFamily,
-    TextFontStyle Style, ImagePoint Location, uint Argb, float FontSize, float LayoutWidth, float MinimumHeight);
+    TextFontStyle Style, ImagePoint Location, uint Argb, float FontSize, float LayoutWidth, float MinimumHeight)
+{
+    internal uint? ReplacementBackground { get; init; }
+}
 
 internal sealed record SelectionTransformEventArgs(AnnotationSnapshot Selection, ImageRectangle Frame,
-    IReadOnlyList<ImagePoint>? Endpoints, float? RotationDegrees);
+    IReadOnlyList<ImagePoint>? Endpoints, float? RotationDegrees, ImagePoint? MoveDelta = null);
 
 internal sealed class DrawGestureEventArgs(PreviewTool tool, IReadOnlyList<ImagePoint> points,
-    uint argb, float width, bool reachedPointLimit = false, bool freehand = false, bool isDrag = false) : EventArgs
+    uint argb, float width, bool reachedPointLimit = false, bool freehand = false, bool isDrag = false,
+    double snapTolerance = 0) : EventArgs
 {
     internal PreviewTool Tool { get; } = tool;
     internal IReadOnlyList<ImagePoint> Points { get; } = points;
@@ -29,11 +40,13 @@ internal sealed class DrawGestureEventArgs(PreviewTool tool, IReadOnlyList<Image
     internal bool ReachedPointLimit { get; } = reachedPointLimit;
     internal bool Freehand { get; } = freehand;
     internal bool IsDrag { get; } = isDrag;
+    internal double SnapTolerance { get; } = snapTolerance;
 }
 
 public sealed partial class EditorViewport : UserControl
 {
     private const int MaximumPreviewPoints = 16_384;
+    private const double EraserDiameterDip = 12;
     private readonly ViewportState view = new();
     private readonly List<ImagePoint> gesturePoints = [];
     private PreviewTool tool = PreviewTool.Pen;
@@ -44,6 +57,7 @@ public sealed partial class EditorViewport : UserControl
     private CanvasPoint previousPan;
     private uint gestureArgb;
     private float gestureWidth;
+    private double gestureSnapTolerance;
     private XamlRoot? observedRoot;
     private ImageRectangle? selectionBounds;
     private IReadOnlyList<OcrBounds> recognizedBands = [];
@@ -55,11 +69,6 @@ public sealed partial class EditorViewport : UserControl
     private string initialNativeRtf = "";
     private bool loadingText;
     private AnnotationSnapshot? selectedObject;
-    private int transformHandle;
-    private ImageRectangle proposedFrame;
-    private ImagePoint[]? proposedEndpoints;
-    private float proposedRotation;
-    private double initialRotationAngle;
 
     internal event EventHandler<DrawGestureEventArgs>? GestureCommitted;
     internal event EventHandler? ViewChanged;
@@ -70,11 +79,22 @@ public sealed partial class EditorViewport : UserControl
     internal event EventHandler<string>? GestureFeedback;
     internal event EventHandler? RecognizedSelectionDismissed;
     internal Func<ImagePoint, ImagePoint, IReadOnlyList<OcrBounds>>? RecognizedSelectionPreview { get; set; }
+    internal Func<ImagePoint, ImagePoint, double, IReadOnlyList<OcrBounds>>? SnappedHighlightPreview { get; set; }
     internal bool HasImage => view.HasImage;
+    internal ImagePoint VisibleImageCenter
+    {
+        get
+        {
+            CanvasPoint center = view.VisibleImageCenter();
+            return new(center.X, center.Y);
+        }
+    }
     internal bool IsFit => view.IsFit;
     internal double ZoomPercent => view.ZoomPercent;
     internal uint InkArgb { get; set; } = 0xFFE24046;
     internal float InkWidth { get; set; } = 3;
+    internal bool SnapHighlighterToText { get; set; }
+    internal global::SnipStudio.ShapeOutlinePattern ShapeLinePattern { get; set; }
     internal bool RequireCtrlForWheelZoom { get; set; } = true;
     internal bool IsTextEditing => textDraft is not null;
     internal bool TextDraftWithinLimit { get; private set; } = true;
@@ -86,13 +106,28 @@ public sealed partial class EditorViewport : UserControl
     internal PreviewTool Tool
     {
         get => tool;
-        set { CancelGesture(); tool = value; UpdateScene(); }
+        set
+        {
+            CancelGesture();
+            if (tool == PreviewTool.Crop && value != PreviewTool.Crop) ClearCropFrame();
+            bool leaveTextActions = tool == PreviewTool.OcrSelect && tool != value;
+            tool = value;
+            if (leaveTextActions)
+            {
+                EndTextActionsGlow();
+                SetRecognizedTextHighlights(null);
+            }
+            SetObjectCursor(null);
+            UpdateScene();
+        }
     }
 
     public EditorViewport() => InitializeComponent();
 
     internal void SetSelection(ImageRectangle? bounds)
     {
+        pendingObjectTransform = null;
+        ClearAnnotationDragPreview();
         selectedObject = null;
         selectionBounds = bounds;
         UpdateScene();
@@ -100,6 +135,8 @@ public sealed partial class EditorViewport : UserControl
 
     internal void SetSelectedAnnotation(AnnotationSnapshot? annotation)
     {
+        pendingObjectTransform = null;
+        ClearAnnotationDragPreview();
         selectedObject = annotation;
         selectionBounds = annotation?.Bounds;
         UpdateScene();
@@ -135,7 +172,11 @@ public sealed partial class EditorViewport : UserControl
         {
             InlineEditor.FontFamily = new FontFamily(draft.FontFamily);
             InlineEditor.FontSize = draft.FontSize;
-            if (!string.IsNullOrEmpty(draft.Rtf)) InlineEditor.Document.SetText(TextSetOptions.FormatRtf, draft.Rtf);
+            if (!string.IsNullOrEmpty(draft.Rtf))
+            {
+                // Opening a saved document must preserve its paragraph boundaries.
+                InlineEditor.Document.SetText(TextSetOptions.FormatRtf | TextSetOptions.ApplyRtfDocumentDefaults, draft.Rtf);
+            }
             else InlineEditor.Document.SetText(TextSetOptions.None, draft.Text);
             InlineEditor.Document.ClearUndoRedoHistory();
             initialNativeText = ReadInlineText();
@@ -159,7 +200,11 @@ public sealed partial class EditorViewport : UserControl
         if (textDraft is null || initialTextDraft is null) return null;
         string plain = ReadInlineText();
         InlineEditor.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
-        if (MatchesInitialText(plain, rtf)) return initialTextDraft;
+        if (MatchesInitialText(plain, rtf)) return initialTextDraft with
+        {
+            LayoutWidth = textDraft.LayoutWidth,
+            ReplacementBackground = textDraft.ReplacementBackground
+        };
         return textDraft with { Text = plain, Rtf = rtf };
     }
 
@@ -179,7 +224,21 @@ public sealed partial class EditorViewport : UserControl
     internal void FormatText(string? family, float? size, uint? argb, TextFontStyle? style)
     {
         if (textDraft is null) return;
-        var format = InlineEditor.Document.Selection.CharacterFormat;
+        var selection = InlineEditor.Document.Selection;
+        if (argb is uint color && selection.StartPosition == selection.EndPosition)
+        {
+            int textLength = ReadInlineText().Length;
+            if (textLength > 0)
+            {
+                // The picker colors the note when no characters are selected.
+                // Use a separate range to keep the active caret in place.
+                var note = InlineEditor.Document.GetRange(0, textLength);
+                var noteFormat = note.CharacterFormat;
+                noteFormat.ForegroundColor = ToColor(color);
+                note.CharacterFormat = noteFormat;
+            }
+        }
+        var format = selection.CharacterFormat;
         if (family is not null) format.Name = family;
         if (size.HasValue) format.Size = size.Value * 0.75f;
         if (argb.HasValue) format.ForegroundColor = ToColor(argb.Value);
@@ -190,7 +249,7 @@ public sealed partial class EditorViewport : UserControl
             format.Underline = style.Value.HasFlag(TextFontStyle.Underline) ? UnderlineType.Single : UnderlineType.None;
             format.Strikethrough = style.Value.HasFlag(TextFontStyle.Strikeout) ? FormatEffect.On : FormatEffect.Off;
         }
-        InlineEditor.Document.Selection.CharacterFormat = format;
+        selection.CharacterFormat = format;
         textDraft = textDraft with { FontFamily = family ?? textDraft.FontFamily, FontSize = size ?? textDraft.FontSize,
             Argb = argb ?? textDraft.Argb, Style = style ?? textDraft.Style };
         UpdateTextDraftState();
@@ -242,7 +301,8 @@ public sealed partial class EditorViewport : UserControl
         if (recognizedDraftMask is not null)
         {
             InlineEditor.Document.GetText(TextGetOptions.FormatRtf, out string rtf);
-            ShowOriginalSourceText(MatchesInitialText(text, rtf));
+            ShowOriginalSourceText(MatchesInitialText(text, rtf) && textDraft.LayoutWidth == initialTextDraft?.LayoutWidth &&
+                textDraft.ReplacementBackground == initialTextDraft?.ReplacementBackground);
         }
         DraftChanged?.Invoke(this, EventArgs.Empty);
     }
@@ -254,11 +314,17 @@ public sealed partial class EditorViewport : UserControl
         { args.Handled = true; TextApplyRequested?.Invoke(this, EventArgs.Empty); }
     }
 
-    internal void SetImage(BitmapImage bitmap, int width, int height, bool resetView)
+    internal void SetImage(BitmapImage bitmap, int width, int height, bool resetView, long? revision = null)
     {
+        pendingObjectTransform = null;
         CancelGesture();
         Picture.Source = bitmap;
-        if (resetView || view.ImageWidth != width || view.ImageHeight != height) view.SetImage(width, height);
+        bool resetGeometry = resetView || view.ImageWidth != width || view.ImageHeight != height;
+        bool changedRevision = revision.HasValue && revision != cropImageRevision;
+        cropImageRevision = revision;
+        if (resetGeometry || changedRevision) SetRecognizedTextHighlights(null);
+        if (resetGeometry) view.SetImage(width, height);
+        if (tool == PreviewTool.Crop && (resetGeometry || changedRevision)) ResetCropFrameForImage();
         EmptyState.Visibility = Visibility.Collapsed;
         ImageFrame.Visibility = Visibility.Visible;
         UpdateViewport();
@@ -267,9 +333,13 @@ public sealed partial class EditorViewport : UserControl
 
     internal void ShowUnavailable()
     {
+        pendingObjectTransform = null;
         CancelGesture();
         Picture.Source = null;
+        SetRecognizedTextHighlights(null);
         ImageFrame.Visibility = Visibility.Collapsed;
+        UpdateTextActionsGlow();
+        DrawCropFrame();
         EmptyTitle.Text = "Preview unavailable";
         EmptyHint.Text = "Your document is kept. Use Retry preview, Undo, or Save as.";
         EmptyState.Visibility = Visibility.Visible;
@@ -299,21 +369,31 @@ public sealed partial class EditorViewport : UserControl
 
     internal void CancelGesture()
     {
-        bool transformed = transformHandle != 0;
+        bool transformed = objectDrag is not null;
+        bool cropReverted = RevertCropDrag();
         bool hadRecognizedPreview = dragRecognizedBands is not null;
-        transformHandle = 0;
-        proposedEndpoints = null;
+        objectDrag = null;
+        if (pendingObjectTransform?.Grip is not (ObjectGrip.Move or ObjectGrip.Rotate)) ClearAnnotationDragPreview();
         gestureActive = false;
         panning = false;
         gestureDragged = false;
+        gestureSnapTolerance = 0;
         sourceSelectionPointer = null;
         dragRecognizedBands = null;
         gesturePoints.Clear();
         StrokePreview.Points.Clear();
         StrokePreview.Visibility = Visibility.Collapsed;
+        SnappedHighlighterGeometry.Children.Clear();
+        ArrowHeadPreview.Visibility = Visibility.Collapsed;
         RectanglePreview.Visibility = Visibility.Collapsed;
         EllipsePreview.Visibility = Visibility.Collapsed;
+        EraserPreview.Visibility = Visibility.Collapsed;
         Host.ReleasePointerCaptures();
+        if (cropReverted)
+        {
+            DrawCropFrame();
+            CropFrameChanged?.Invoke(this, EventArgs.Empty);
+        }
         if (hadRecognizedPreview) UpdateRecognizedBands();
         if (transformed)
         {
@@ -335,7 +415,10 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnViewportUnloaded(object sender, RoutedEventArgs args)
     {
+        pendingObjectTransform = null;
         CancelGesture();
+        EndTextActionsGlow();
+        SetObjectCursor(null);
         if (observedRoot is not null) observedRoot.Changed -= OnXamlRootChanged;
         observedRoot = null;
     }
@@ -382,17 +465,15 @@ public sealed partial class EditorViewport : UserControl
             ImageFrame.BorderThickness = new Thickness(frame);
             ImageFrame.Width = view.DisplayWidth + 2 * frame;
             ImageFrame.Height = view.DisplayHeight + 2 * frame;
+            UpdateTextActionsGlow();
             Picture.Width = view.DisplayWidth;
             Picture.Height = view.DisplayHeight;
-            if (selectionBounds is ImageRectangle bounds)
-            {
-                PositionRectangle(SelectionFrame, bounds.X, bounds.Y, bounds.Width, bounds.Height);
-                SelectionFrame.Visibility = Visibility.Visible;
-            }
-            else SelectionFrame.Visibility = Visibility.Collapsed;
+            PositionAnnotationDragPreview();
+            DrawObjectSelection();
+            DrawCropFrame();
+            PositionRecognizedTextHighlights();
             UpdateRecognizedBands();
             UpdateSourceTextVisual();
-            DrawObjectHandles();
             if (textDraft is not null)
             {
                 CanvasPoint location = view.ViewportAt(new CanvasPoint(textDraft.Location.X, textDraft.Location.Y));
@@ -406,14 +487,33 @@ public sealed partial class EditorViewport : UserControl
 
     private void UpdateRecognizedBands()
     {
-        RecognizedBands.Children.Clear();
+        GeometryCollection tint = RecognizedBandTint.Children;
+        GeometryCollection underline = RecognizedBandUnderline.Children;
+        tint.Clear();
+        underline.Clear();
         if (!view.HasImage) return;
-        var brush = new SolidColorBrush(Color.FromArgb(75, 0, 120, 215));
+
+        CanvasPoint image = view.DisplayOrigin;
+        double visibleLeft = Math.Max(0, image.X), visibleTop = Math.Max(0, image.Y);
+        double visibleRight = Math.Min(view.Width, image.X + view.DisplayWidth);
+        double visibleBottom = Math.Min(view.Height, image.Y + view.DisplayHeight);
+        double dpi = view.RasterizationScale;
+        double thickness = Math.Max(1, Math.Round(dpi, MidpointRounding.AwayFromZero)) / dpi;
         foreach (OcrBounds band in dragRecognizedBands ?? recognizedBands)
         {
-            var rectangle = new Microsoft.UI.Xaml.Shapes.Rectangle { Fill = brush };
-            PositionRectangle(rectangle, band.X, band.Y, band.Width, band.Height);
-            RecognizedBands.Children.Add(rectangle);
+            CanvasPoint origin = view.ViewportAt(new CanvasPoint(band.X, band.Y));
+            double inkBottom = origin.Y + band.Height * view.Scale;
+            double left = Math.Max(visibleLeft, origin.X - 1);
+            double top = Math.Max(visibleTop, origin.Y - 1);
+            double right = Math.Min(visibleRight, origin.X + band.Width * view.Scale + 1);
+            double bottom = Math.Min(visibleBottom, inkBottom + 1);
+            if (!(right > left && bottom > top)) continue;
+
+            tint.Add(new RectangleGeometry { Rect = new Rect(left, top, right - left, bottom - top) });
+            // Keep the solid indicator below the glyphs and inside the image.
+            double ruleTop = Math.Ceiling((inkBottom + .5) * dpi) / dpi;
+            if (ruleTop + thickness <= visibleBottom)
+                underline.Add(new RectangleGeometry { Rect = new Rect(left, ruleTop, right - left, thickness) });
         }
     }
 
@@ -435,8 +535,16 @@ public sealed partial class EditorViewport : UserControl
             }
         }
         bool pan = middle || tool == PreviewTool.Pan;
-        int handle = !middle && tool == PreviewTool.Select ? HitHandle(position) : 0;
-        if (!pan && handle == 0 && !view.Contains(position)) return;
+        bool selecting = !pan && tool == PreviewTool.Select;
+        bool cropping = !pan && tool == PreviewTool.Crop;
+        ObjectGrip handle = pan ? ObjectGrip.None : HitObjectGrip(position);
+        AnnotationSnapshot? drawingOutline = !pan && !selecting && !cropping &&
+            handle == ObjectGrip.None &&
+            args.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse
+            ? PickDrawingOutline(position) : null;
+        CropFrameHandle cropGrip = cropping ? CropGripAt(position) : CropFrameHandle.None;
+        if (cropping && cropGrip == CropFrameHandle.None) return;
+        if (!pan && !cropping && handle == ObjectGrip.None && !view.Contains(position) && (!selecting || SelectedFrameAt(position) is null)) return;
         if (!Host.CapturePointer(args.Pointer)) return;
         Focus(FocusState.Pointer);
         pointerId = args.Pointer.PointerId;
@@ -445,19 +553,28 @@ public sealed partial class EditorViewport : UserControl
         panning = pan;
         previousPan = position;
         gestureArgb = InkArgb;
-        gestureWidth = Math.Clamp(InkWidth, 1, 100);
+        gestureWidth = tool == PreviewTool.Eraser && !pan
+            ? (float)Math.Min(EraserDiameterDip / view.Scale, 2048)
+            : Math.Clamp(InkWidth, 1, 100);
         gestureFreehand = (args.KeyModifiers & VirtualKeyModifiers.Shift) != 0;
-        if (handle != 0 && selectedObject is not null)
+        // Capture the choice and tolerance once so the preview and the
+        // committed stroke use the same image-space hit test.
+        gestureSnapTolerance = !pan && tool == PreviewTool.Highlighter && SnapHighlighterToText && !gestureFreehand
+            ? Math.Min(20, 8 / view.Scale)
+            : 0;
+        if (cropping)
         {
-            transformHandle = handle;
-            proposedFrame = ObjectFrame(selectedObject);
-            proposedEndpoints = selectedObject.Shape?.Endpoints.ToArray();
-            proposedRotation = selectedObject.Emoji?.RotationDegrees ?? 0;
-            CanvasPoint image = view.ImageAt(position);
-            initialRotationAngle = Math.Atan2(image.Y - (proposedFrame.Y + proposedFrame.Height / 2), image.X - (proposedFrame.X + proposedFrame.Width / 2));
+            BeginCropDrag(position, cropGrip);
             args.Handled = true;
             return;
         }
+        if (selecting || handle != ObjectGrip.None || drawingOutline is not null)
+        {
+            BeginObjectDrag(position, handle, drawingOutline);
+            args.Handled = true;
+            return;
+        }
+        SetObjectCursor(null);
         if (!pan)
         {
             CanvasPoint image = view.ClampedImageAt(position);
@@ -465,15 +582,32 @@ public sealed partial class EditorViewport : UserControl
             var color = Color.FromArgb((byte)(gestureArgb >> 24), (byte)(gestureArgb >> 16),
                 (byte)(gestureArgb >> 8), (byte)gestureArgb);
             double width = gestureWidth * view.Scale;
-            if (tool == PreviewTool.OcrSelect)
+            if (tool == PreviewTool.Eraser)
+            {
+                ShowEraserPreview(view.ViewportAt(image));
+            }
+            else if (gestureSnapTolerance > 0)
+            {
+                SnappedHighlighterPreview.Fill = new SolidColorBrush(color);
+                UpdateSnappedHighlight(gesturePoints[0]);
+            }
+            else if (tool == PreviewTool.OcrSelect)
             {
                 dragRecognizedBands = [];
                 UpdateRecognizedBands();
             }
             else if (IsBoxTool(tool))
             {
-                RectanglePreview.Stroke = new SolidColorBrush(color);
-                RectanglePreview.StrokeThickness = width;
+                bool drawsShape = tool is PreviewTool.Rectangle or PreviewTool.Ellipse;
+                RectanglePreview.Stroke = new SolidColorBrush(drawsShape ? color : Color.FromArgb(255, 0, 120, 212));
+                RectanglePreview.StrokeThickness = drawsShape ? width : 1.5;
+                RectanglePreview.StrokeDashArray = drawsShape ? PreviewDashPattern(ShapeLinePattern) : [4, 2];
+                RectanglePreview.StrokeDashCap = PenLineCap.Round;
+                if (tool == PreviewTool.Ellipse)
+                {
+                    EllipsePreview.StrokeDashArray = PreviewDashPattern(ShapeLinePattern);
+                    EllipsePreview.StrokeDashCap = PenLineCap.Round;
+                }
                 RectanglePreview.Visibility = Visibility.Visible;
                 UpdateRectanglePreview(image);
             }
@@ -482,6 +616,10 @@ public sealed partial class EditorViewport : UserControl
                 StrokePreview.Stroke = new SolidColorBrush(color);
                 StrokePreview.StrokeThickness = width;
                 StrokePreview.Opacity = 1;
+                StrokePreview.StrokeDashArray = PreviewDashPattern(ShapeLinePattern);
+                StrokePreview.StrokeDashCap = PenLineCap.Round;
+                StrokePreview.StrokeEndLineCap = tool == PreviewTool.Arrow ? PenLineCap.Flat : PenLineCap.Round;
+                ArrowHeadPreview.Fill = StrokePreview.Stroke;
                 StrokePreview.Points.Add(current.Position);
                 StrokePreview.Points.Add(current.Position);
                 StrokePreview.Visibility = Visibility.Visible;
@@ -490,7 +628,9 @@ public sealed partial class EditorViewport : UserControl
             {
                 StrokePreview.Stroke = new SolidColorBrush(color);
                 StrokePreview.StrokeThickness = width;
-                StrokePreview.Opacity = tool == PreviewTool.Highlighter ? 80 / 255.0 : 1;
+                StrokePreview.Opacity = 1;
+                StrokePreview.StrokeDashArray = [];
+                StrokePreview.StrokeEndLineCap = PenLineCap.Round;
                 StrokePreview.Points.Add(current.Position);
                 StrokePreview.Points.Add(current.Position);
                 StrokePreview.Visibility = Visibility.Visible;
@@ -502,17 +642,24 @@ public sealed partial class EditorViewport : UserControl
     private void OnPointerMoved(object sender, PointerRoutedEventArgs args)
     {
         if (TryContinueSourceSelection(args)) return;
-        if (!gestureActive || args.Pointer.PointerId != pointerId) return;
         var current = args.GetCurrentPoint(Host);
         CanvasPoint position = new(current.Position.X, current.Position.Y);
-        if (transformHandle != 0)
-            UpdateObjectTransform(position);
-        else if (panning)
+        if (!gestureActive)
+        {
+            if (args.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse) UpdateObjectCursor(position);
+            return;
+        }
+        if (args.Pointer.PointerId != pointerId) return;
+        if (panning)
         {
             view.Pan(position.X - previousPan.X, position.Y - previousPan.Y);
             previousPan = position;
             UpdateScene();
         }
+        else if (objectDrag is not null || tool == PreviewTool.Select)
+            AdvanceObjectDrag(position, (args.KeyModifiers & VirtualKeyModifiers.Shift) != 0);
+        else if (tool == PreviewTool.Crop)
+            AdvanceCropDrag(position);
         else AddGesturePoint(position);
         args.Handled = true;
     }
@@ -521,6 +668,13 @@ public sealed partial class EditorViewport : UserControl
     {
         CanvasPoint image = view.ClampedImageAt(position);
         ImagePoint next = new(image.X, image.Y);
+        if (gestureSnapTolerance > 0)
+        {
+            if (gesturePoints.Count == 1) gesturePoints.Add(next);
+            else gesturePoints[1] = next;
+            UpdateSnappedHighlight(next);
+            return;
+        }
         if (IsTwoPointTool(tool))
         {
             if (gesturePoints.Count == 1) gesturePoints.Add(next);
@@ -528,7 +682,8 @@ public sealed partial class EditorViewport : UserControl
             if (tool == PreviewTool.Line || tool == PreviewTool.Arrow)
             {
                 CanvasPoint lineDisplay = view.ViewportAt(image);
-                StrokePreview.Points[1] = new Point(lineDisplay.X, lineDisplay.Y);
+                if (tool == PreviewTool.Arrow) UpdateArrowDrawingPreview(lineDisplay);
+                else StrokePreview.Points[1] = new Point(lineDisplay.X, lineDisplay.Y);
             }
             else if (tool == PreviewTool.OcrSelect)
             {
@@ -546,12 +701,13 @@ public sealed partial class EditorViewport : UserControl
         }
         ImagePoint last = gesturePoints[^1];
         double dx = next.X - last.X, dy = next.Y - last.Y;
-        if (dx * dx + dy * dy < 0.0625) return;
         CanvasPoint display = view.ViewportAt(image);
+        if (tool == PreviewTool.Eraser) ShowEraserPreview(display);
+        if (dx * dx + dy * dy < 0.0625) return;
         if (gesturePoints.Count < MaximumPreviewPoints)
         {
             gesturePoints.Add(next);
-            StrokePreview.Points.Add(new Point(display.X, display.Y));
+            if (tool != PreviewTool.Eraser) StrokePreview.Points.Add(new Point(display.X, display.Y));
         }
         else
         {
@@ -560,6 +716,37 @@ public sealed partial class EditorViewport : UserControl
             // continue after the user lifts the pointer.
             CommitCurrentGesture(reachedPointLimit: true);
         }
+    }
+
+    private void UpdateSnappedHighlight(ImagePoint end)
+    {
+        GeometryCollection geometry = SnappedHighlighterGeometry.Children;
+        geometry.Clear();
+        if (SnappedHighlightPreview is not { } preview) return;
+
+        CanvasPoint image = view.DisplayOrigin;
+        double visibleLeft = Math.Max(0, image.X), visibleTop = Math.Max(0, image.Y);
+        double visibleRight = Math.Min(view.Width, image.X + view.DisplayWidth);
+        double visibleBottom = Math.Min(view.Height, image.Y + view.DisplayHeight);
+        foreach (OcrBounds band in preview(gesturePoints[0], end, gestureSnapTolerance))
+        {
+            CanvasPoint origin = view.ViewportAt(new CanvasPoint(band.X, band.Y));
+            double left = Math.Max(visibleLeft, origin.X), top = Math.Max(visibleTop, origin.Y);
+            double right = Math.Min(visibleRight, origin.X + band.Width * view.Scale);
+            double bottom = Math.Min(visibleBottom, origin.Y + band.Height * view.Scale);
+            if (right > left && bottom > top)
+                geometry.Add(new RectangleGeometry { Rect = new Rect(left, top, right - left, bottom - top) });
+        }
+    }
+
+    private void ShowEraserPreview(CanvasPoint center)
+    {
+        double diameter = gestureWidth * view.Scale;
+        EraserPreview.Width = diameter;
+        EraserPreview.Height = diameter;
+        Canvas.SetLeft(EraserPreview, center.X - diameter / 2);
+        Canvas.SetTop(EraserPreview, center.Y - diameter / 2);
+        EraserPreview.Visibility = Visibility.Visible;
     }
 
     private void UpdateRectanglePreview(CanvasPoint end)
@@ -584,6 +771,20 @@ public sealed partial class EditorViewport : UserControl
         }
     }
 
+    private void UpdateArrowDrawingPreview(CanvasPoint tip)
+    {
+        Point start = StrokePreview.Points[0];
+        if (ObjectTransformGeometry.ArrowHead(new(start.X, start.Y), tip, StrokePreview.StrokeThickness) is not { } head)
+        {
+            ArrowHeadPreview.Visibility = Visibility.Collapsed;
+            StrokePreview.Points[1] = start;
+            return;
+        }
+        StrokePreview.Points[1] = new Point(head.Base.X, head.Base.Y);
+        ArrowHeadPreview.Points = ArrowPoints(tip, head.Left, head.Right);
+        ArrowHeadPreview.Visibility = Visibility.Visible;
+    }
+
     private void OnPointerReleased(object sender, PointerRoutedEventArgs args)
     {
         if (TryContinueSourceSelection(args))
@@ -593,14 +794,17 @@ public sealed partial class EditorViewport : UserControl
             return;
         }
         if (!gestureActive || args.Pointer.PointerId != pointerId) return;
-        if (transformHandle != 0 && selectedObject is not null)
+        if (!panning && tool == PreviewTool.Crop)
         {
             var point = args.GetCurrentPoint(Host);
-            UpdateObjectTransform(new CanvasPoint(point.Position.X, point.Position.Y));
-            var result = new SelectionTransformEventArgs(selectedObject, proposedFrame,
-                transformHandle is 9 or 10 ? proposedEndpoints : null, transformHandle == 11 ? proposedRotation : null);
-            CancelGesture();
-            SelectionTransformCommitted?.Invoke(this, result);
+            FinishCropDrag(new CanvasPoint(point.Position.X, point.Position.Y));
+            args.Handled = true;
+            return;
+        }
+        if (!panning && (objectDrag is not null || tool == PreviewTool.Select))
+        {
+            var point = args.GetCurrentPoint(Host);
+            FinishObjectDrag(new CanvasPoint(point.Position.X, point.Position.Y), (args.KeyModifiers & VirtualKeyModifiers.Shift) != 0);
             args.Handled = true;
             return;
         }
@@ -620,16 +824,18 @@ public sealed partial class EditorViewport : UserControl
         PreviewTool completedTool = tool;
         uint argb = gestureArgb;
         float width = gestureWidth;
+        bool freehand = gestureFreehand;
         bool dragged = gestureDragged;
+        double snapTolerance = gestureSnapTolerance;
         CancelGesture();
         if (commit && points.Length > 0 && (!IsAreaTool(completedTool) ||
             (points.Length > 1 && Math.Abs(points[0].X - points[1].X) >= 0.5 && Math.Abs(points[0].Y - points[1].Y) >= 0.5)))
-            GestureCommitted?.Invoke(this, new DrawGestureEventArgs(completedTool, points, argb, width, reachedPointLimit, gestureFreehand, dragged));
+            GestureCommitted?.Invoke(this, new DrawGestureEventArgs(completedTool, points, argb, width, reachedPointLimit, freehand, dragged, snapTolerance));
     }
 
-    private static bool IsBoxTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Crop or PreviewTool.RemoveArea or PreviewTool.Emoji or PreviewTool.OcrSelect or PreviewTool.Select or PreviewTool.Text;
+    private static bool IsBoxTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.RemoveArea or PreviewTool.Emoji or PreviewTool.OcrSelect or PreviewTool.Text;
     private static bool IsTwoPointTool(PreviewTool value) => IsBoxTool(value) || value is PreviewTool.Line or PreviewTool.Arrow;
-    private static bool IsAreaTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.Crop or PreviewTool.RemoveArea;
+    private static bool IsAreaTool(PreviewTool value) => value is PreviewTool.Rectangle or PreviewTool.Ellipse or PreviewTool.RemoveArea;
 
     private void PositionRectangle(FrameworkElement element, double x, double y, double width, double height)
     {
@@ -638,95 +844,6 @@ public sealed partial class EditorViewport : UserControl
         Canvas.SetTop(element, origin.Y);
         element.Width = Math.Max(0, width * view.Scale);
         element.Height = Math.Max(0, height * view.Scale);
-    }
-
-    private static ImageRectangle ObjectFrame(AnnotationSnapshot item)
-    {
-        if (item.Emoji is not null) return item.Emoji.Frame;
-        if (item.Shape is not null) return item.Shape.GeometryBounds;
-        if (item.Text is not null) return new ImageRectangle(item.Text.Location.X, item.Text.Location.Y,
-            item.Text.LayoutWidth > 0 ? item.Text.LayoutWidth : item.Bounds.Width,
-            item.Text.MinimumHeight > 0 ? item.Text.MinimumHeight : item.Bounds.Height);
-        return item.Bounds;
-    }
-
-    private IEnumerable<(int Code, CanvasPoint Position)> HandleLocations()
-    {
-        if (selectedObject is null || tool != PreviewTool.Select || selectedObject.Kind == AnnotationKind.Ink) yield break;
-        if (selectedObject.Shape?.Endpoints.Count == 2)
-        {
-            IReadOnlyList<ImagePoint> ends = transformHandle is 9 or 10 && proposedEndpoints is not null ? proposedEndpoints : selectedObject.Shape.Endpoints;
-            for (int index = 0; index < 2; index++) yield return (9 + index, view.ViewportAt(new CanvasPoint(ends[index].X, ends[index].Y)));
-            yield break;
-        }
-        ImageRectangle bounds = transformHandle is >= 1 and <= 8 ? proposedFrame : ObjectFrame(selectedObject);
-        double middleX = bounds.X + bounds.Width / 2, middleY = bounds.Y + bounds.Height / 2;
-        (double X, double Y)[] points = [(bounds.Left, bounds.Top), (middleX, bounds.Top), (bounds.Right, bounds.Top),
-            (bounds.Right, middleY), (bounds.Right, bounds.Bottom), (middleX, bounds.Bottom), (bounds.Left, bounds.Bottom), (bounds.Left, middleY)];
-        for (int index = 0; index < points.Length; index++)
-            yield return (index + 1, view.ViewportAt(new CanvasPoint(points[index].X, points[index].Y)));
-        if (selectedObject.Emoji is not null)
-        {
-            CanvasPoint top = view.ViewportAt(new CanvasPoint(middleX, bounds.Top));
-            yield return (11, new CanvasPoint(top.X, top.Y - 24));
-        }
-    }
-
-    private int HitHandle(CanvasPoint position)
-    {
-        int nearest = 0;
-        double nearestDistance = 64;
-        foreach (var handle in HandleLocations())
-        {
-            double dx = handle.Position.X - position.X, dy = handle.Position.Y - position.Y;
-            double distance = dx * dx + dy * dy;
-            if (distance <= nearestDistance) { nearest = handle.Code; nearestDistance = distance; }
-        }
-        return nearest;
-    }
-
-    private void DrawObjectHandles()
-    {
-        ObjectHandles.Children.Clear();
-        foreach (var handle in HandleLocations())
-        {
-            var dot = new Microsoft.UI.Xaml.Shapes.Ellipse { Width = handle.Code == 11 ? 12 : 9, Height = handle.Code == 11 ? 12 : 9,
-                Fill = new SolidColorBrush(Color.FromArgb(255, 255, 255, 255)), Stroke = new SolidColorBrush(Color.FromArgb(255, 0, 120, 215)), StrokeThickness = 1.5 };
-            Canvas.SetLeft(dot, handle.Position.X - dot.Width / 2); Canvas.SetTop(dot, handle.Position.Y - dot.Height / 2);
-            ObjectHandles.Children.Add(dot);
-        }
-    }
-
-    private void UpdateObjectTransform(CanvasPoint position)
-    {
-        if (selectedObject is null || transformHandle == 0) return;
-        CanvasPoint image = view.ClampedImageAt(position);
-        ImageRectangle original = ObjectFrame(selectedObject);
-        if (transformHandle is 9 or 10 && proposedEndpoints is not null)
-        {
-            proposedEndpoints[transformHandle - 9] = new ImagePoint(image.X, image.Y);
-            ImagePoint a = proposedEndpoints[0], b = proposedEndpoints[1];
-            proposedFrame = new ImageRectangle(Math.Min(a.X, b.X), Math.Min(a.Y, b.Y), Math.Abs(a.X - b.X), Math.Abs(a.Y - b.Y));
-        }
-        else if (transformHandle == 11)
-        {
-            CanvasPoint unbounded = view.ImageAt(position);
-            double angle = Math.Atan2(unbounded.Y - (original.Y + original.Height / 2), unbounded.X - (original.X + original.Width / 2));
-            proposedRotation = (float)((selectedObject.Emoji?.RotationDegrees ?? 0) + (angle - initialRotationAngle) * 180 / Math.PI);
-        }
-        else
-        {
-            double left = original.Left, top = original.Top, right = original.Right, bottom = original.Bottom;
-            if (transformHandle is 1 or 7 or 8) left = Math.Min(image.X, right - 1);
-            if (transformHandle is 3 or 4 or 5) right = Math.Max(image.X, left + 1);
-            if (transformHandle is 1 or 2 or 3) top = Math.Min(image.Y, bottom - 1);
-            if (transformHandle is 5 or 6 or 7) bottom = Math.Max(image.Y, top + 1);
-            proposedFrame = new ImageRectangle(left, top, right - left, bottom - top);
-        }
-        selectionBounds = proposedFrame;
-        GestureFeedback?.Invoke(this, transformHandle == 11 ? $"Emoji rotation: {proposedRotation:0.#}°. Release to apply; Escape cancels."
-            : $"Object size: {proposedFrame.Width:0.#} × {proposedFrame.Height:0.#} px. Release to apply; Escape cancels.");
-        UpdateScene();
     }
 
     private void OnPointerCanceled(object sender, PointerRoutedEventArgs args)
@@ -764,6 +881,8 @@ public sealed partial class EditorViewport : UserControl
 
     private void OnCanvasKeyDown(object sender, KeyRoutedEventArgs args)
     {
+        if (TryHandleCropKey(args.Key)) { args.Handled = true; return; }
+        if (TryNudgeObject(args)) { args.Handled = true; return; }
         if (args.Key != VirtualKey.Escape) return;
         bool dismissTextActions = tool == PreviewTool.OcrSelect && !gestureActive;
         CancelGesture();

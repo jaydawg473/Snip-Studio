@@ -133,16 +133,23 @@
             </ContentControl>
             <CommandBar x:Name="FileBar" Grid.Column="1" MaxWidth="228" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Right" Background="Transparent" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
-                <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" LabelPosition="Collapsed" Click="OnOpenClicked" ToolTipService.ToolTip="Open an image (Ctrl+O)" />
+                <AppBarButton x:Name="OpenButton" Icon="OpenFile" Label="Open" LabelPosition="Collapsed" Click="OnOpenClicked" ToolTipService.ToolTip="Open an image or editable snip (Ctrl+O)" />
                 <AppBarButton x:Name="PasteButton" Icon="Paste" Label="Paste" LabelPosition="Collapsed" Click="OnPasteClicked" ToolTipService.ToolTip="Paste an image (Ctrl+V)" />
-                <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save as" LabelPosition="Collapsed" Click="OnSaveClicked" ToolTipService.ToolTip="Save image (Ctrl+S)" IsEnabled="False" />
+                <AppBarButton x:Name="SaveButton" Icon="Save" Label="Save" LabelPosition="Collapsed" Click="OnSaveClicked" ToolTipService.ToolTip="Save (Ctrl+S)" IsEnabled="False" />
                 <AppBarButton x:Name="CopyButton" Icon="Copy" Label="Copy image" LabelPosition="Collapsed" Click="OnCopyClicked" ToolTipService.ToolTip="Copy the current image" />
                 <AppBarButton x:Name="ShareButton" Icon="Share" Label="Share image" LabelPosition="Collapsed" Click="OnShareClicked" ToolTipService.ToolTip="Share image" />
                 <AppBarButton x:Name="RetryPreviewButton" Icon="Refresh" Label="Retry preview" LabelPosition="Collapsed" Click="OnRetryPreviewClicked" Visibility="Collapsed" />
                 <CommandBar.SecondaryCommands>
                     <AppBarButton Icon="NewWindow" Label="New editor window" Click="OnNewWindowClicked" />
+                    <AppBarButton x:Name="SaveAsButton" Icon="Save" Label="Save image as…" Click="OnSaveAsClicked" />
+                    <AppBarButton x:Name="SaveEditableProjectButton" Icon="Save" Label="Save editable snip…" Click="OnSaveEditableProjectClicked" />
+                    <AppBarButton x:Name="RedactForSharingButton" Label="Redact for sharing…" Click="OnRedactForSharingClicked" />
                     <AppBarButton x:Name="PrintButton" Icon="Print" Label="Print image" Click="OnPrintClicked" />
                     <AppBarButton Icon="Folder" Label="Recent files" Click="OnRecentClicked" />
+                    <AppBarButton Icon="Camera" Label="Capture open snips…" Click="OnCaptureOpenSnipsClicked" />
+                    <AppBarButton Icon="Folder" Label="Open screenshots folder" Click="OnOpenScreenshotFolderClicked" />
+                    <AppBarButton Icon="Folder" Label="Open recordings folder" Click="OnOpenRecordingFolderClicked" />
+                    <AppBarButton Label="Refresh taskbar shortcuts" Click="OnRefreshTaskbarClicked" />
                     <AppBarButton Icon="Video" Label="Open video review" Click="OnVideoReviewClicked" />
                     <AppBarButton x:Name="ReloadExternalButton" Label="Import external editor copy" Click="OnReloadExternalClicked" IsEnabled="False" />
                     <AppBarButton Icon="Setting" Label="Settings" Click="OnSettingsClicked" />
@@ -156,21 +163,25 @@
         <Border x:Name="AnnotationToolbarHost" Grid.Row="1" Grid.ColumnSpan="3" Background="{ThemeResource StudioToolbarBrush}">
             <CommandBar x:Name="ToolBar" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" HorizontalContentAlignment="Left" Background="Transparent" Margin="12,6,12,6" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
-                <AppBarToggleButton x:Name="SelectButton" Label="Move" LabelPosition="Collapsed" Click="OnSelectClicked" ToolTipService.ToolTip="Select and move annotations"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
+                <AppBarToggleButton x:Name="SelectButton" Label="Move" LabelPosition="Collapsed" Click="OnSelectClicked" ToolTipService.ToolTip="Move objects. Grab an object when the four-way arrow appears."><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="PenButton" Icon="Edit" Label="Pen" LabelPosition="Collapsed" IsChecked="True" Click="OnPenClicked" ToolTipService.ToolTip="Pen" />
                 <AppBarToggleButton x:Name="HighlighterButton" Icon="Highlight" Label="Highlight" LabelPosition="Collapsed" Click="OnHighlighterClicked" ToolTipService.ToolTip="Highlight text; hold Shift for freehand" />
                 <AppBarToggleButton x:Name="ShapesButton" Label="Shapes" LabelPosition="Collapsed" Click="OnShapesClicked" ToolTipService.ToolTip="Shapes: rectangle, ellipse, line and arrow">
-                    <AppBarToggleButton.Icon><PathIcon Data="F0 M 1,1 H 12 V 6 H 10.5 V 2.5 H 2.5 V 10.5 H 6 V 12 H 1 Z M 17,12 A 5,5 0 1 1 7,12 A 5,5 0 1 1 17,12 Z M 15.5,12 A 3.5,3.5 0 1 0 8.5,12 A 3.5,3.5 0 1 0 15.5,12 Z" /></AppBarToggleButton.Icon>
-                    <FlyoutBase.AttachedFlyout><MenuFlyout>
-                        <ToggleMenuFlyoutItem x:Name="RectangleButton" Text="Rectangle" Click="OnRectangleClicked" />
-                        <ToggleMenuFlyoutItem x:Name="EllipseButton" Text="Ellipse" Click="OnEllipseClicked" />
-                        <ToggleMenuFlyoutItem x:Name="LineButton" Text="Line" Click="OnLineClicked" />
-                        <ToggleMenuFlyoutItem x:Name="ArrowButton" Text="Arrow" Click="OnArrowClicked" />
+                    <AppBarToggleButton.Icon>
+                        <FontIcon x:Name="ShapesModeIcon" FontFamily="Segoe UI Symbol" Glyph="&#x2750;" RenderTransformOrigin="0.5,0.5">
+                            <FontIcon.RenderTransform><ScaleTransform ScaleX="1.35" ScaleY="1.35" /></FontIcon.RenderTransform>
+                        </FontIcon>
+                    </AppBarToggleButton.Icon>
+                    <FlyoutBase.AttachedFlyout><MenuFlyout Closed="OnShapeFlyoutClosed">
+                        <ToggleMenuFlyoutItem x:Name="RectangleButton" Text="Rectangle" Click="OnShapeChoiceClicked" />
+                        <ToggleMenuFlyoutItem x:Name="EllipseButton" Text="Ellipse" Click="OnShapeChoiceClicked" />
+                        <ToggleMenuFlyoutItem x:Name="LineButton" Text="Line" Click="OnShapeChoiceClicked" />
+                        <ToggleMenuFlyoutItem x:Name="ArrowButton" Text="Arrow" Click="OnShapeChoiceClicked" />
                     </MenuFlyout></FlyoutBase.AttachedFlyout>
                 </AppBarToggleButton>
-                <AppBarToggleButton x:Name="EmojiButton" Label="Emoji" LabelPosition="Collapsed" Click="OnEmojiClicked" ToolTipService.ToolTip="Choose an emoji sticker, then click the image to place it">
-                    <AppBarToggleButton.Icon><FontIcon Glyph="&#xE76E;" /></AppBarToggleButton.Icon>
-                </AppBarToggleButton>
+                <AppBarButton x:Name="EmojiButton" Label="Emoji" LabelPosition="Collapsed" Click="OnEmojiClicked" ToolTipService.ToolTip="Choose an emoji sticker to add to the snip">
+                    <AppBarButton.Icon><FontIcon Glyph="&#xE76E;" /></AppBarButton.Icon>
+                </AppBarButton>
                 <AppBarToggleButton x:Name="TextButton" Label="Add text" LabelPosition="Collapsed" Click="OnTextClicked" ToolTipService.ToolTip="Add or edit text"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="EraserButton" Label="Eraser" LabelPosition="Collapsed" Click="OnEraserClicked" ToolTipService.ToolTip="Erase annotations"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
                 <AppBarToggleButton x:Name="CropButton" Label="Crop" LabelPosition="Collapsed" Click="OnCropClicked" ToolTipService.ToolTip="Crop"><AppBarToggleButton.Icon><FontIcon Glyph="" /></AppBarToggleButton.Icon></AppBarToggleButton>
@@ -199,21 +210,80 @@
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
                     <AppBarButton x:Name="ColorButton" Label="Color" LabelPosition="Collapsed" AutomationProperties.Name="Ink color" ToolTipService.ToolTip="Ink color">
                         <AppBarButton.Icon><FontIcon Glyph="" /></AppBarButton.Icon>
-                        <AppBarButton.Flyout><Flyout><ColorPicker x:Name="InkColorPicker" Color="#FFE24046" ColorChanged="OnInkColorChanged" IsAlphaEnabled="False" IsAlphaSliderVisible="False" IsAlphaTextInputVisible="False" IsColorChannelTextInputVisible="True" AutomationProperties.Name="Ink color" /></Flyout></AppBarButton.Flyout>
+                        <AppBarButton.Flyout>
+                            <Flyout Opening="OnInkFlyoutOpening" Closed="OnInkFlyoutClosed">
+                                <StackPanel Spacing="8">
+                                    <ColorPicker x:Name="InkColorPicker" Color="#FFE24046" ColorChanged="OnInkColorChanged" IsAlphaEnabled="False" IsAlphaSliderVisible="False" IsAlphaTextInputVisible="False" IsColorChannelTextInputVisible="True" AutomationProperties.Name="Ink color" />
+                                    <StackPanel x:Name="InkStrokeControls" Visibility="Collapsed" Spacing="6">
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <NumberBox x:Name="PickerStrokeWidth" Header="Width (px)" Minimum="1" Maximum="100" Value="3" SmallChange="1" MinWidth="152" SpinButtonPlacementMode="Inline" ValueChanged="OnPickerStrokeWidthChanged" />
+                                            <NumberBox x:Name="PickerStrokeOpacity" Grid.Column="1" Header="Opacity (%)" Minimum="1" Maximum="100" Value="100" SmallChange="1" LargeChange="10" MinWidth="152" SpinButtonPlacementMode="Inline" ValueChanged="OnPickerOpacityChanged" />
+                                        </Grid>
+                                        <Grid x:Name="InkSampleBackground" Height="32" CornerRadius="4" AutomationProperties.Name="Live stroke preview">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
+                                            <Border Background="#FFFFFFFF" />
+                                            <Border Grid.Column="1" Background="#FFD8DDE6" />
+                                            <Line x:Name="InkSampleLine" Grid.ColumnSpan="2" X1="0" X2="150" Y1="0" Y2="0" HorizontalAlignment="Center" VerticalAlignment="Center" StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <StackPanel x:Name="RecentInkPanel" Spacing="4" Visibility="Collapsed">
+                                        <TextBlock Text="Recent colors" />
+                                        <StackPanel x:Name="RecentInkSwatches" Orientation="Horizontal" Spacing="4" />
+                                    </StackPanel>
+                                    <Button Content="Eyedropper" Click="OnInkEyedropperClicked" ToolTipService.ToolTip="Pick a color anywhere on the desktop" />
+                                </StackPanel>
+                            </Flyout>
+                        </AppBarButton.Flyout>
                     </AppBarButton>
                     <AppBarElementContainer x:Name="StrokeWidthContainer">
-                        <StackPanel Orientation="Horizontal" Spacing="4" VerticalAlignment="Center" Margin="4,0,6,0"><NumberBox x:Name="StrokeWidthBox" Minimum="1" Maximum="100" Value="3" SmallChange="1" LargeChange="5" SpinButtonPlacementMode="Compact" Width="76" Height="30" MinHeight="30" ValueChanged="OnStrokeWidthChanged" AutomationProperties.Name="Stroke width in image pixels" ToolTipService.ToolTip="Stroke width in image pixels" /><TextBlock Text="px" FontSize="12" VerticalAlignment="Center" /></StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="3" VerticalAlignment="Center" Margin="4,0,6,0">
+                            <NumberBox x:Name="StrokeWidthBox" Minimum="1" Maximum="100" Value="3" SmallChange="1" LargeChange="5" SpinButtonPlacementMode="Hidden" Width="88" Height="30" MinHeight="30" ValueChanged="OnStrokeWidthChanged" AutomationProperties.Name="Stroke width in image pixels" ToolTipService.ToolTip="Stroke width in image pixels" />
+                            <StackPanel>
+                                <RepeatButton Content="▴" Tag="Up" Click="OnStrokeSizeStepClicked" Width="26" Height="15" MinWidth="0" MinHeight="0" Padding="0" AutomationProperties.Name="Increase stroke width" />
+                                <RepeatButton Content="▾" Tag="Down" Click="OnStrokeSizeStepClicked" Width="26" Height="15" MinWidth="0" MinHeight="0" Padding="0" AutomationProperties.Name="Decrease stroke width" />
+                            </StackPanel>
+                            <TextBlock Text="px" FontSize="12" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </AppBarElementContainer>
+                    <AppBarElementContainer x:Name="DrawLinePatternContainer" Visibility="Collapsed">
+                        <DropDownButton x:Name="DrawLinePatternButton" Content="Solid line" AutomationProperties.Name="New shape line style" ToolTipService.ToolTip="Line style for new shapes">
+                            <DropDownButton.Flyout><MenuFlyout>
+                                <ToggleMenuFlyoutItem Text="Solid" Tag="Solid" Click="OnDrawLinePatternClicked" />
+                                <ToggleMenuFlyoutItem Text="Dashed" Tag="Dashed" Click="OnDrawLinePatternClicked" />
+                                <ToggleMenuFlyoutItem Text="Dotted" Tag="Dotted" Click="OnDrawLinePatternClicked" />
+                            </MenuFlyout></DropDownButton.Flyout>
+                        </DropDownButton>
                     </AppBarElementContainer>
                     <AppBarElementContainer x:Name="SnapHighlighterContainer" Visibility="Collapsed"><CheckBox x:Name="SnapHighlighterButton" Content="Snap to text" IsChecked="True" MinHeight="30" FontSize="12" Margin="8,0" ToolTipService.ToolTip="Recognize touched words. Hold Shift while dragging for freehand."/></AppBarElementContainer>
+                    <AppBarElementContainer x:Name="InlineStrokePreviewContainer" Visibility="Collapsed" IsHitTestVisible="False">
+                        <Canvas Width="108" Height="30" Margin="8,0,4,0" VerticalAlignment="Center"
+                                AutomationProperties.Name="Freehand stroke preview">
+                            <Canvas.Clip><RectangleGeometry Rect="0,0,108,30" /></Canvas.Clip>
+                            <Path x:Name="InlineStrokePreviewLine" Stretch="None"
+                                  Data="M 9,15 C 16,7 23,7 31,15 C 38,23 46,23 54,15 C 62,7 70,7 77,15 C 85,23 92,23 99,15"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" />
+                        </Canvas>
+                    </AppBarElementContainer>
                     <AppBarElementContainer x:Name="EraseAllContainer" Visibility="Collapsed"><Button x:Name="EraseAllButton" Content="Erase all annotations" Style="{StaticResource StudioCaptureActionStyle}" Click="OnEraseAllClicked"/></AppBarElementContainer>
                 </CommandBar>
                 <CommandBar x:Name="ContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" Background="Transparent" Padding="0">
                 <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
                     <AppBarElementContainer><ComboBox x:Name="FontFamilyBox" Width="148" MinHeight="30" Height="30" IsEditable="True" SelectedIndex="0" SelectionChanged="OnTextFormatChanged" TextSubmitted="OnFontFamilySubmitted" AutomationProperties.Name="Text font" ToolTipService.ToolTip="Text font"><ComboBoxItem Content="Segoe UI" /><ComboBoxItem Content="Arial" /><ComboBoxItem Content="Calibri" /><ComboBoxItem Content="Consolas" /><ComboBoxItem Content="Times New Roman" /></ComboBox></AppBarElementContainer>
-                    <AppBarElementContainer><StackPanel Orientation="Horizontal" Spacing="4" Margin="5,0,4,0"><NumberBox x:Name="TextSizeBox" Width="86" Height="30" MinHeight="30" Minimum="1" Maximum="1024" Value="18" SmallChange="1" SpinButtonPlacementMode="Compact" ValueChanged="OnTextSizeChanged" AutomationProperties.Name="Text size in image pixels" ToolTipService.ToolTip="Text size in image pixels" /><TextBlock Text="px" FontSize="12" VerticalAlignment="Center" /></StackPanel></AppBarElementContainer>
+                    <AppBarElementContainer>
+                        <StackPanel Orientation="Horizontal" Spacing="3" Margin="5,0,4,0">
+                            <NumberBox x:Name="TextSizeBox" Width="98" Height="30" MinHeight="30" Minimum="1" Maximum="1024" Value="18" SmallChange="1" SpinButtonPlacementMode="Hidden" ValueChanged="OnTextSizeChanged" AutomationProperties.Name="Text size in image pixels" ToolTipService.ToolTip="Text size in image pixels" />
+                            <StackPanel>
+                                <RepeatButton Content="▴" Tag="Up" Click="OnTextSizeStepClicked" Width="26" Height="15" MinWidth="0" MinHeight="0" Padding="0" AutomationProperties.Name="Increase text size" />
+                                <RepeatButton Content="▾" Tag="Down" Click="OnTextSizeStepClicked" Width="26" Height="15" MinWidth="0" MinHeight="0" Padding="0" AutomationProperties.Name="Decrease text size" />
+                            </StackPanel>
+                            <TextBlock Text="px" FontSize="12" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </AppBarElementContainer>
                     <AppBarToggleButton x:Name="BoldButton" Icon="Bold" Label="Bold" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Bold" />
                     <AppBarToggleButton x:Name="ItalicButton" Icon="Italic" Label="Italic" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Italic" />
                     <AppBarToggleButton x:Name="UnderlineButton" Icon="Underline" Label="Underline" LabelPosition="Collapsed" Click="OnTextFormatClicked" ToolTipService.ToolTip="Underline" />
+                    <AppBarButton Icon="Edit" Label="Advanced text…" LabelPosition="Collapsed" Click="OnAdvancedTextClicked" ToolTipService.ToolTip="Advanced text formatting" />
                     <AppBarElementContainer><Button x:Name="ApplyTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnApplyTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE73E;" FontSize="16"/><TextBlock Text="Done" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                     <AppBarElementContainer><Button x:Name="CancelTextButton" Style="{StaticResource StudioCaptureActionStyle}" Click="OnCancelTextClicked"><StackPanel Orientation="Horizontal" Spacing="6"><FontIcon Glyph="&#xE711;" FontSize="16"/><TextBlock Text="Cancel" VerticalAlignment="Center"/></StackPanel></Button></AppBarElementContainer>
                 </CommandBar>
@@ -221,14 +291,65 @@
                     <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
                     <AppBarButton Label="Copy all text" Icon="Copy" Click="OnCopyAllOcrClicked" />
                     <AppBarButton x:Name="CopySelectedOcrButton" Label="Copy selection" Icon="Copy" Click="OnCopySelectedOcrClicked" />
+                    <AppBarButton Label="Copy as table" Click="OnCopyOcrTableClicked" ToolTipService.ToolTip="Copy rows and columns from recognized text">
+                        <AppBarButton.Icon><PathIcon Data="M 2,3 L 18,3 L 18,17 L 2,17 Z M 3.5,4.5 L 3.5,8 L 8,8 L 8,4.5 Z M 9.5,4.5 L 9.5,8 L 16.5,8 L 16.5,4.5 Z M 3.5,9.5 L 3.5,15.5 L 8,15.5 L 8,9.5 Z M 9.5,9.5 L 9.5,15.5 L 16.5,15.5 L 16.5,9.5 Z" /></AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton Label="Quick redact…" Click="OnQuickRedactClicked" ToolTipService.ToolTip="Review proposed email and phone redactions">
+                        <AppBarButton.Icon><PathIcon Data="M 2,3 L 18,3 L 18,5 L 2,5 Z M 2,8 L 15,8 L 15,12 L 2,12 Z M 2,15 L 18,15 L 18,17 L 2,17 Z" /></AppBarButton.Icon>
+                    </AppBarButton>
                     <AppBarButton x:Name="EditOcrButton" Label="Edit line" Icon="Edit" Click="OnEditOcrClicked" ToolTipService.ToolTip="Edit the selected line (F2)" />
                     <AppBarButton Label="Translate" Click="OnTranslateOcrClicked" />
                     <AppBarButton x:Name="DeleteSelectedOcrButton" Label="Delete selection" Icon="Delete" Click="OnDeleteObjectClicked" />
                     <CommandBar.SecondaryCommands>
                         <AppBarButton Label="Convert to text…" Click="OnConvertOcrClicked" />
                         <AppBarButton Label="Review recognized text…" Click="OnReviewOcrClicked" />
+                        <AppBarButton x:Name="EditOcrSelectionButton" Label="Edit text together" Icon="Edit" Click="OnEditOcrSelectionClicked" />
                         <AppBarButton Label="Done" Icon="Accept" Click="OnCloseOcrClicked" />
                     </CommandBar.SecondaryCommands>
+                </CommandBar>
+                <CommandBar x:Name="ObjectContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" HorizontalContentAlignment="Left" Background="Transparent" Padding="0">
+                    <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
+                    <AppBarButton x:Name="RotateLeftButton" Width="Auto" Label="Rotate left" Click="OnRotateLeftClicked" IsEnabled="False" ToolTipService.ToolTip="Turn the selected object 90° left">
+                        <AppBarButton.Icon>
+                            <PathIcon RenderTransformOrigin="0.5,0.5" Data="M 15,4 L 15,1 L 19,5 L 15,9 L 15,6 L 14.3,5.3 C 11.3,2.7 6.7,3.1 4.5,6.6 C 2.4,10 3.9,14.5 7.5,16 C 11,17.5 14.8,15.3 15.5,12 L 17.4,12 C 16.5,17.1 11.7,19.7 6.8,17.8 C 1.9,15.8 0.2,10.1 2.9,5.6 C 5.6,1.3 11.5,0.5 15,4 Z">
+                                <PathIcon.RenderTransform><ScaleTransform ScaleX="-1" /></PathIcon.RenderTransform>
+                            </PathIcon>
+                        </AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton x:Name="RotateRightButton" Width="Auto" Label="Rotate right" Click="OnRotateRightClicked" IsEnabled="False" ToolTipService.ToolTip="Turn the selected object 90° right">
+                        <AppBarButton.Icon><PathIcon Data="M 15,4 L 15,1 L 19,5 L 15,9 L 15,6 L 14.3,5.3 C 11.3,2.7 6.7,3.1 4.5,6.6 C 2.4,10 3.9,14.5 7.5,16 C 11,17.5 14.8,15.3 15.5,12 L 17.4,12 C 16.5,17.1 11.7,19.7 6.8,17.8 C 1.9,15.8 0.2,10.1 2.9,5.6 C 5.6,1.3 11.5,0.5 15,4 Z" /></AppBarButton.Icon>
+                    </AppBarButton>
+                    <AppBarButton x:Name="SelectionWidthButton" Width="Auto" Label="Width" Visibility="Collapsed" IsEnabled="False"
+                                  ToolTipService.ToolTip="Change the selected shape's outline width">
+                        <AppBarButton.Icon>
+                            <PathIcon Data="M 2,5 L 18,5 L 18,7 L 2,7 Z M 2,10 L 18,10 L 18,13 L 2,13 Z M 2,16 L 18,16 L 18,20 L 2,20 Z" />
+                        </AppBarButton.Icon>
+                        <AppBarButton.Flyout>
+                            <Flyout x:Name="SelectionWidthFlyout" Opening="OnSelectionWidthOpening" Closed="OnSelectionWidthClosed">
+                                <StackPanel Spacing="8">
+                                    <NumberBox x:Name="SelectionWidthBox" Header="Outline width (px)" Value="3"
+                                               Minimum="1" Maximum="100" SmallChange="1" MinWidth="148"
+                                               SpinButtonPlacementMode="Inline" />
+                                    <Button Content="Apply width" Click="OnApplySelectionWidthClicked" />
+                                </StackPanel>
+                            </Flyout>
+                        </AppBarButton.Flyout>
+                    </AppBarButton>
+                    <AppBarElementContainer x:Name="SelectionLinePatternContainer">
+                        <DropDownButton x:Name="SelectionLinePatternButton" Content="Line style" IsEnabled="False" AutomationProperties.Name="Selected shape line style" ToolTipService.ToolTip="Change the selected shape's line style">
+                            <DropDownButton.Flyout><MenuFlyout>
+                                <ToggleMenuFlyoutItem Text="Solid" Tag="Solid" Click="OnSelectionLinePatternClicked" />
+                                <ToggleMenuFlyoutItem Text="Dashed" Tag="Dashed" Click="OnSelectionLinePatternClicked" />
+                                <ToggleMenuFlyoutItem Text="Dotted" Tag="Dotted" Click="OnSelectionLinePatternClicked" />
+                            </MenuFlyout></DropDownButton.Flyout>
+                        </DropDownButton>
+                    </AppBarElementContainer>
+                    <AppBarButton x:Name="MovePropertiesButton" Width="Auto" Icon="Setting" Label="Properties" Click="OnObjectPropertiesClicked" IsEnabled="False" ToolTipService.ToolTip="Edit the selected object's position, size, or style" />
+                </CommandBar>
+                <CommandBar x:Name="CropContextBar" Grid.Column="1" Visibility="Collapsed" DefaultLabelPosition="Right" ClosedDisplayMode="Compact" IsOpen="False" IsDynamicOverflowEnabled="True" OverflowButtonVisibility="Auto" HorizontalAlignment="Left" HorizontalContentAlignment="Left" Background="Transparent" Padding="0">
+                    <CommandBar.Resources><ResourceDictionary><x:Double x:Key="AppBarThemeCompactHeight">34</x:Double><x:Double x:Key="AppBarThemeMinHeight">34</x:Double></ResourceDictionary></CommandBar.Resources>
+                    <AppBarButton x:Name="ApplyCropButton" Width="Auto" Icon="Accept" Label="Apply crop" Click="OnApplyCropClicked" IsEnabled="False" ToolTipService.ToolTip="Apply crop (Enter)" />
+                    <AppBarButton x:Name="CancelCropButton" Width="Auto" Icon="Cancel" Label="Cancel" Click="OnCancelCropClicked" ToolTipService.ToolTip="Cancel crop (Esc)" />
                 </CommandBar>
                 <Button x:Name="ContextCloseButton" Grid.Column="2" Width="28" MinWidth="0" Height="28" Padding="0" Background="Transparent" BorderThickness="0" Content="×" FontSize="16" Click="OnContextCloseClicked" AutomationProperties.Name="Close tool options" ToolTipService.ToolTip="Close tool options" VerticalAlignment="Center" />
         </Grid>
@@ -272,6 +393,7 @@
                         <ToggleMenuFlyoutItem Text="200%" Tag="200" Click="OnZoomPresetClicked" />
                         <ToggleMenuFlyoutItem Text="300%" Tag="300" Click="OnZoomPresetClicked" />
                         <ToggleMenuFlyoutItem Text="400%" Tag="400" Click="OnZoomPresetClicked" />
+                        <MenuFlyoutItem Text="Custom zoom…" Click="OnCustomZoomClicked" />
                     </MenuFlyout></DropDownButton.Flyout>
                 </DropDownButton>
                 <TextBlock x:Name="ZoomText" Visibility="Collapsed" Text="100%" FontSize="12" MinWidth="48" TextAlignment="Center" VerticalAlignment="Center" AutomationProperties.Name="Current zoom" />

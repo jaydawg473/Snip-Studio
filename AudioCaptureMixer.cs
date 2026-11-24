@@ -13,9 +13,19 @@ namespace SnipStudio
         public override string ToString() { return Name ?? Id ?? "Audio device"; }
     }
 
+    internal interface IRecordingAudio : IDisposable
+    {
+        Exception Error { get; }
+        string Status { get; }
+        TimeSpan Duration { get; }
+        void Start();
+        void Stop();
+        byte[] ReadFrames(int frameCount);
+    }
+
     // Two bounded, timestamp-indexed WASAPI streams feed one PCM16 stereo timeline.
     // No microphone settings are changed and no audio is sent off this computer.
-    public sealed class AudioCaptureMixer : IDisposable
+    public sealed class AudioCaptureMixer : IRecordingAudio
     {
         public const int SampleRate = 48000;
         public const int Channels = 2;
@@ -146,10 +156,22 @@ namespace SnipStudio
         // capture headroom. Reading a future timestamp deliberately yields silence.
         public byte[] ReadFrames(int frameCount)
         {
+            return ReadFrames(frameCount, false);
+        }
+
+        byte[] IRecordingAudio.ReadFrames(int frameCount)
+        {
+            // During an active recording keep the buffered samples from both
+            // sources even if an endpoint has stopped producing new packets.
+            return ReadFrames(frameCount, true);
+        }
+
+        private byte[] ReadFrames(int frameCount, bool allowInterruptedSource)
+        {
             if (disposed) throw new ObjectDisposedException("AudioCaptureMixer");
             if (!started) throw new InvalidOperationException("Audio capture has not started.");
             if (frameCount < 0 || frameCount > SampleRate) throw new ArgumentOutOfRangeException("frameCount");
-            ThrowIfFailed();
+            if (!allowInterruptedSource) ThrowIfFailed();
             lock (readLock)
             {
                 byte[] first = microphone == null ? null : microphone.Read(readPosition, frameCount);

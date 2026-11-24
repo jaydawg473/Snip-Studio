@@ -6,12 +6,15 @@ using System.Text.Json;
 
 namespace SnipStudio.WinUI;
 
-public sealed record DesktopUpdateInfo(string CurrentVersion, string? PublishedTag, DateTimeOffset? PublishedUtc, Uri ReleaseUri, string Message, bool NewerPublishedVersion = false);
+public sealed record DesktopUpdateInfo(string CurrentVersion, string? PublishedTag, DateTimeOffset? PublishedUtc,
+    Uri ReleaseUri, string Message, bool NewerPublishedVersion = false, Uri? SetupDownloadUri = null);
 
-/// <summary>Separate WinUI repository metadata; no installer fetching or execution.</summary>
+/// <summary>Checks the published Snip Studio release and offers its official browser links.</summary>
 public static class DesktopUpdateService
 {
-    private const string ReleasePage = "https://github.com/jaydawg473/Snip-Studio-WinUI3/releases";
+    internal const string LatestReleaseEndpoint = "https://api.github.com/repos/jaydawg473/Snip-Studio/releases/latest";
+    private const string ReleasePage = "https://github.com/jaydawg473/Snip-Studio/releases";
+    private const int MaximumResponseBytes = 256 * 1024;
     private static readonly HttpClient client = CreateClient();
     private static readonly SemaphoreSlim gate = new(1, 1);
     private static readonly SemaphoreSlim automaticGate = new(1, 1);
@@ -56,49 +59,25 @@ public static class DesktopUpdateService
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(TimeSpan.FromSeconds(12));
-            using var request = new HttpRequestMessage(HttpMethod.Get, "https://api.github.com/repos/jaydawg473/Snip-Studio-WinUI3/releases?per_page=10");
+            using var request = new HttpRequestMessage(HttpMethod.Get, LatestReleaseEndpoint);
             request.Headers.TryAddWithoutValidation("Accept", "application/vnd.github+json");
             request.Headers.TryAddWithoutValidation("X-GitHub-Api-Version", "2022-11-28");
             using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, timeout.Token);
             if (response.StatusCode == HttpStatusCode.NotFound)
-                return new(current, null, null, new Uri(ReleasePage), "Current build: " + current + ". GitHub does not report a published WinUI release at this endpoint. This is separate from stable Snip Studio releases.");
+                return new(current, null, null, new Uri(ReleasePage), $"Current version: {current}. GitHub does not report a published Snip Studio release.");
             response.EnsureSuccessStatusCode();
-            if (response.Content.Headers.ContentLength > 1024 * 1024) throw new InvalidDataException("The release response exceeded the 1 MB limit.");
+            if (response.Content.Headers.ContentLength > MaximumResponseBytes) throw new InvalidDataException("The release response exceeded the 256 KB limit.");
             await using Stream stream = await response.Content.ReadAsStreamAsync(timeout.Token);
             using var buffer = new MemoryStream();
             byte[] bytes = new byte[8192];
             int read;
             while ((read = await stream.ReadAsync(bytes, timeout.Token)) > 0)
             {
-                if (buffer.Length + read > 1024 * 1024) throw new InvalidDataException("The release response exceeded the 1 MB limit.");
+                if (buffer.Length + read > MaximumResponseBytes) throw new InvalidDataException("The release response exceeded the 256 KB limit.");
                 buffer.Write(bytes, 0, read);
             }
             using JsonDocument json = JsonDocument.Parse(buffer.ToArray(), new JsonDocumentOptions { MaxDepth = 32 });
-            ReleaseVersion? currentVersion = ParseReleaseVersion(current);
-            bool includePreviews = currentVersion?.PreviewNumber is not null;
-            JsonElement item = default;
-            ReleaseVersion? publishedVersion = null;
-            foreach (JsonElement release in json.RootElement.EnumerateArray())
-            {
-                if (release.GetProperty("draft").GetBoolean() || (!includePreviews && release.GetProperty("prerelease").GetBoolean())) continue;
-                string? candidate = release.GetProperty("tag_name").GetString();
-                if (candidate is null || ParseReleaseVersion(candidate) is not { } version || (!includePreviews && version.PreviewNumber is not null)) continue;
-                if (publishedVersion is null || version.CompareTo(publishedVersion) > 0)
-                {
-                    item = release;
-                    publishedVersion = version;
-                }
-            }
-            if (publishedVersion is null)
-                return new(current, null, null, new Uri(ReleasePage), "Current build: " + current + ". No comparable published WinUI version appeared in the recent GitHub releases.");
-            string tag = item.GetProperty("tag_name").GetString()!;
-            string address = item.GetProperty("html_url").GetString() ?? ReleasePage;
-            if (!Uri.TryCreate(address, UriKind.Absolute, out Uri? uri) || uri.Scheme != "https" || uri.Port != 443 || uri.UserInfo.Length != 0 || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase) || !uri.AbsolutePath.StartsWith("/jaydawg473/Snip-Studio-WinUI3/releases/tag/", StringComparison.OrdinalIgnoreCase))
-                throw new InvalidDataException("The release address did not match the WinUI repository.");
-            DateTimeOffset? published = item.TryGetProperty("published_at", out JsonElement date) && date.TryGetDateTimeOffset(out DateTimeOffset parsed) ? parsed : null;
-            string message = "Current build: " + current + ". Latest published WinUI release reported by GitHub: " + tag + (published is null ? "." : ", published " + published.Value.UtcDateTime.ToString("yyyy-MM-dd HH:mm 'UTC'."));
-            bool newerPublishedVersion = currentVersion is not null && publishedVersion.CompareTo(currentVersion) > 0;
-            return new(current, tag, published, uri, message, newerPublishedVersion);
+            return ParseLatestRelease(current, json.RootElement);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         { return new(current, null, null, new Uri(ReleasePage), "The update service did not respond within 12 seconds. Current build: " + current + ". No update was downloaded."); }
@@ -107,33 +86,61 @@ public static class DesktopUpdateService
         finally { gate.Release(); }
     }
 
-    private static ReleaseVersion? ParseReleaseVersion(string tag)
+    internal static DesktopUpdateInfo ParseLatestRelease(string current, JsonElement release)
     {
-        if (tag.Length > 128 || tag.Any(char.IsControl)) return null;
-        string[] parts = tag.TrimStart('v').Split('-', 2);
-        if (!Version.TryParse(parts[0], out Version? version) || version.Build < 0 || version.Revision >= 0) return null;
-        if (parts.Length == 1) return new(version, null);
-        const string previewPrefix = "preview.";
-        if (!parts[1].StartsWith(previewPrefix, StringComparison.Ordinal) ||
-            !int.TryParse(parts[1].AsSpan(previewPrefix.Length), NumberStyles.None, CultureInfo.InvariantCulture, out int preview)) return null;
-        return new(version, preview);
+        if (release.ValueKind != JsonValueKind.Object ||
+            !release.TryGetProperty("draft", out JsonElement draft) || draft.ValueKind != JsonValueKind.False ||
+            !release.TryGetProperty("prerelease", out JsonElement prerelease) || prerelease.ValueKind != JsonValueKind.False ||
+            !release.TryGetProperty("tag_name", out JsonElement tagValue) || tagValue.ValueKind != JsonValueKind.String ||
+            tagValue.GetString() is not string tag || ParseStableTag(tag) is not Version latest)
+            return new(current, null, null, new Uri(ReleasePage), $"Current version: {current}. The published Snip Studio release could not be verified.");
+
+        string releaseLink = $"{ReleasePage}/tag/{tag}";
+        if (!HasString(release, "html_url", releaseLink) || FindSetupDownload(release, tag) is not Uri setup)
+            return new(current, null, null, new Uri(ReleasePage), $"Current version: {current}. The published Snip Studio release or its installer link could not be verified.");
+
+        DateTimeOffset? published = release.TryGetProperty("published_at", out JsonElement date) &&
+            date.ValueKind == JsonValueKind.String && date.TryGetDateTimeOffset(out DateTimeOffset parsed) ? parsed.ToUniversalTime() : null;
+        string message = $"Current version: {current}. Latest published Snip Studio release: {tag}" +
+            (published is DateTimeOffset dateTime ? $", published {dateTime.ToString("yyyy-MM-dd HH:mm 'UTC'", CultureInfo.InvariantCulture)}." : ".");
+        bool newer = ParseStableTag("v" + current) is Version installed && latest > installed;
+        return new(current, tag, published, new Uri(releaseLink), message, newer, newer ? setup : null);
     }
 
-    private sealed record ReleaseVersion(Version Number, int? PreviewNumber)
+    private static Uri? FindSetupDownload(JsonElement release, string tag)
     {
-        public int CompareTo(ReleaseVersion other)
+        if (!release.TryGetProperty("assets", out JsonElement assets) ||
+            assets.ValueKind != JsonValueKind.Array || assets.GetArrayLength() is 0 or > 64) return null;
+        string setupName = $"SnipStudio-{tag[1..]}-Setup.exe";
+        string expected = $"{ReleasePage}/download/{tag}/{setupName}";
+        bool found = false;
+        foreach (JsonElement asset in assets.EnumerateArray())
         {
-            int order = Number.CompareTo(other.Number);
-            if (order != 0) return order;
-            if (PreviewNumber is null) return other.PreviewNumber is null ? 0 : 1;
-            return other.PreviewNumber is null ? -1 : PreviewNumber.Value.CompareTo(other.PreviewNumber.Value);
+            if (asset.ValueKind != JsonValueKind.Object) return null;
+            if (!HasString(asset, "name", setupName)) continue;
+            if (found || !HasString(asset, "state", "uploaded") || !HasString(asset, "browser_download_url", expected)) return null;
+            found = true;
         }
+        return found ? new Uri(expected) : null;
+    }
+
+    private static bool HasString(JsonElement item, string key, string expected) =>
+        item.TryGetProperty(key, out JsonElement value) && value.ValueKind == JsonValueKind.String &&
+        string.Equals(value.GetString(), expected, StringComparison.Ordinal);
+
+    private static Version? ParseStableTag(string tag)
+    {
+        if (tag.Length is < 6 or > 30 || tag[0] != 'v') return null;
+        string number = tag[1..];
+        string[] components = number.Split('.');
+        if (components.Length != 3 || components.Any(part => part.Length is < 1 or > 9 || !part.All(char.IsAsciiDigit))) return null;
+        return Version.TryParse(number, out Version? version) && tag == "v" + version.ToString(3) ? version : null;
     }
 
     private static HttpClient CreateClient()
     {
         var result = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { Timeout = Timeout.InfiniteTimeSpan };
-        result.DefaultRequestHeaders.UserAgent.ParseAdd("SnipStudio-WinUI3/0.7 (Automation-Forge; release-check)");
+        result.DefaultRequestHeaders.UserAgent.ParseAdd("SnipStudio/0.7 (Automation-Forge; release-check)");
         return result;
     }
 }

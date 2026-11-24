@@ -3,10 +3,11 @@ using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
 using System.Security.Cryptography;
 using System.Text;
+using SnipStudio.WinUI.Backend;
 
 namespace SnipStudio.WinUI;
 
-/// <summary>WinUI settings are deliberately separate from stable Snip Studio.</summary>
+/// <summary>Snip Studio preferences stored in the current JSON profile.</summary>
 public sealed class DesktopPreferences
 {
     public string Theme { get; set; } = "System";
@@ -43,13 +44,34 @@ public sealed class DesktopPreferences
     public bool AutoCheckForUpdates { get; set; } = true;
     public string LastUpdateCheckUtc { get; set; } = "";
     public string EditorApplicationPath { get; set; } = "";
+    public CaptureKind LastScreenshotCaptureKind { get; set; } = CaptureKind.Rectangle;
+    public uint[] RecentInkColors { get; set; } = [];
+    public string LastSaveFolder { get; set; } = "";
+    public bool UseConfiguredTranslationServer { get; set; }
+    public string TranslationServerAddress { get; set; } = "";
+    public string TranslationSourceLanguage { get; set; } = "";
+    public string TranslationTargetLanguage { get; set; } = "";
     public bool AutoCopyCaptures { get; set; } = true;
     public bool AutoSaveOriginalCaptures { get; set; }
-    public string ScreenshotFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Snip Studio WinUI3");
-    public string RecordingFolder { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Snip Studio WinUI3");
+    public string ScreenshotFolder { get; set; } = DefaultScreenshotFolder();
+    public string RecordingFolder { get; set; } = DefaultRecordingFolder();
     [JsonExtensionData] public Dictionary<string, JsonElement>? AdditionalSettings { get; set; }
 
     public DesktopPreferences Clone() => JsonSerializer.Deserialize<DesktopPreferences>(JsonSerializer.Serialize(this))!;
+
+    private static string DefaultScreenshotFolder() => Path.Combine(
+        DefaultMediaRoot(Environment.SpecialFolder.MyPictures, "Pictures"), "Screenshots");
+
+    private static string DefaultRecordingFolder() => Path.Combine(
+        DefaultMediaRoot(Environment.SpecialFolder.MyVideos, "Videos"), "Screen Recordings");
+
+    private static string DefaultMediaRoot(Environment.SpecialFolder folder, string fallback)
+    {
+        string path = Environment.GetFolderPath(folder);
+        return string.IsNullOrEmpty(path)
+            ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), fallback)
+            : path;
+    }
 
     internal void Normalize()
     {
@@ -65,8 +87,14 @@ public sealed class DesktopPreferences
         DefaultSystemAudioDeviceId ??= "";
         LastUpdateCheckUtc ??= "";
         EditorApplicationPath ??= "";
-        if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "Snip Studio WinUI3");
-        if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), "Snip Studio WinUI3");
+        if (!Enum.IsDefined(LastScreenshotCaptureKind)) LastScreenshotCaptureKind = CaptureKind.Rectangle;
+        RecentInkColors = (RecentInkColors ?? []).Distinct().Take(8).ToArray();
+        LastSaveFolder ??= "";
+        TranslationServerAddress ??= "";
+        TranslationSourceLanguage ??= "";
+        TranslationTargetLanguage ??= "";
+        if (string.IsNullOrWhiteSpace(ScreenshotFolder)) ScreenshotFolder = DefaultScreenshotFolder();
+        if (string.IsNullOrWhiteSpace(RecordingFolder)) RecordingFolder = DefaultRecordingFolder();
     }
 }
 
@@ -77,6 +105,7 @@ public sealed class DesktopPreferencesStore
     private static readonly int[] ReplaceConflictDelaysMilliseconds = { 10, 20, 40, 80, 160 };
     private readonly object gate = new();
     private readonly string path;
+    private readonly string? legacyPath;
     private readonly string mutexName;
     private Envelope current = new();
     private DesktopPreferences baselinePreferences = new();
@@ -84,14 +113,21 @@ public sealed class DesktopPreferencesStore
     private bool primaryReadable;
     public string? LoadWarning { get; private set; }
 
-    public DesktopPreferencesStore() : this(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnipStudio.WinUI3", "preferences.json")) { }
+    public DesktopPreferencesStore() : this(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SnipStudio", "preferences.json"),
+        LegacySettingsImport.DefaultPath) { }
 
-    public DesktopPreferencesStore(string settingsPath)
+    public DesktopPreferencesStore(string settingsPath) : this(settingsPath, null) { }
+
+    internal DesktopPreferencesStore(string settingsPath, string? legacySettingsPath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(settingsPath);
         if (!Path.IsPathFullyQualified(settingsPath)) throw new ArgumentException("The settings path must be absolute.", nameof(settingsPath));
+        if (legacySettingsPath is not null && !Path.IsPathFullyQualified(legacySettingsPath))
+            throw new ArgumentException("The legacy settings path must be absolute.", nameof(legacySettingsPath));
         path = Path.GetFullPath(settingsPath);
-        mutexName = "Local\\SnipStudio.WinUI3.Settings." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path.ToUpperInvariant())));
+        legacyPath = legacySettingsPath;
+        mutexName = "Local\\SnipStudio.Settings." + Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(path.ToUpperInvariant())));
     }
 
     public DesktopPreferences Load()
@@ -114,13 +150,42 @@ public sealed class DesktopPreferencesStore
         {
             bool hasPrimary = File.Exists(path);
             bool backupRecovered = TryLoad(path + ".bak", out current);
-            if (hasPrimary || backupRecovered)
+            if (hasPrimary || backupRecovered || File.Exists(path + ".bak"))
                 LoadWarning = backupRecovered ? "Settings were recovered from the last saved backup. Review them before saving." : "Saved settings could not be read. Defaults are active; the existing file has been kept.";
+            else if (legacyPath is not null)
+                ImportPreviousSettings(legacyPath);
         }
-        current.Preferences ??= new();
         current.Preferences.Normalize();
         current.RecentPaths = NormalizeRecent(current.RecentPaths);
         baselinePreferences = current.Preferences.Clone();
+    }
+
+    private void ImportPreviousSettings(string sourcePath)
+    {
+        try
+        {
+            // File.Exists suppresses access errors. Migrate only when both
+            // stable JSON paths are known to be absent under the writer lease.
+            if (!IsAbsent(path) || !IsAbsent(path + ".bak") || IsAbsent(sourcePath)) return;
+            var imported = new Envelope
+            {
+                Preferences = LegacySettingsImport.Import(sourcePath, new DesktopPreferences(), firstLaunch: true)
+            };
+            imported.Preferences.Normalize();
+            Write(imported, createOnly: true);
+            current = imported;
+            LoadWarning = "Previous Snip Studio settings were carried forward. Review keyboard shortcuts in Settings.";
+        }
+        catch (Exception failure) when (failure is IOException or InvalidDataException or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            LoadWarning = "Previous settings could not be carried forward. The original settings file was kept. Use Import previous settings in Settings to try again.";
+        }
+    }
+
+    private static bool IsAbsent(string candidate)
+    {
+        try { _ = File.GetAttributes(candidate); return false; }
+        catch (Exception failure) when (failure is FileNotFoundException or DirectoryNotFoundException) { return true; }
     }
 
     public IReadOnlyList<string> RecentPaths
@@ -139,7 +204,9 @@ public sealed class DesktopPreferencesStore
         }
     }
 
-    public void Save(DesktopPreferences preferences)
+    public void Save(DesktopPreferences preferences) => SaveAndRead(preferences);
+
+    internal DesktopPreferences SaveAndRead(DesktopPreferences preferences)
     {
         ArgumentNullException.ThrowIfNull(preferences);
         lock (gate)
@@ -166,6 +233,7 @@ public sealed class DesktopPreferencesStore
             current = next;
             baselinePreferences = copy.Clone();
             LoadWarning = null;
+            return copy.Clone();
         }
     }
 
@@ -182,6 +250,64 @@ public sealed class DesktopPreferencesStore
             Envelope next = new() { Preferences = latest.Preferences, RecentPaths = recent.Take(32).ToList(), AdditionalData = latest.AdditionalData };
             Write(next);
             current = next;
+        }
+    }
+
+    public DesktopPreferences RememberInk(uint argb, bool updatePen, bool updateHighlighter)
+    {
+        lock (gate)
+        {
+            using IDisposable fileLock = LockFile();
+            EnsureLoaded();
+            Envelope latest = ReadLatest();
+            DesktopPreferences next = latest.Preferences.Clone();
+            next.RecentInkColors = latest.Preferences.RecentInkColors.Where(color => color != argb).Prepend(argb).Take(8).ToArray();
+            if (updatePen) next.InkArgb = argb;
+            if (updateHighlighter) next.HighlighterArgb = argb;
+            if (!next.RecentInkColors.SequenceEqual(latest.Preferences.RecentInkColors) ||
+                next.InkArgb != latest.Preferences.InkArgb || next.HighlighterArgb != latest.Preferences.HighlighterArgb)
+            {
+                var updated = new Envelope
+                {
+                    Preferences = next,
+                    RecentPaths = latest.RecentPaths,
+                    AdditionalData = latest.AdditionalData
+                };
+                Write(updated);
+                current = updated;
+                return next.Clone();
+            }
+            current = latest;
+            return next;
+        }
+    }
+
+    public void RememberLastSaveFolder(string folder)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(folder);
+        if (!Path.IsPathFullyQualified(folder) || folder.Any(char.IsControl))
+            throw new ArgumentException("The saved image folder must be absolute.", nameof(folder));
+        string fullPath = Path.GetFullPath(folder);
+        lock (gate)
+        {
+            using IDisposable fileLock = LockFile();
+            EnsureLoaded();
+            Envelope latest = ReadLatest();
+            if (string.Equals(latest.Preferences.LastSaveFolder, fullPath, StringComparison.OrdinalIgnoreCase))
+            {
+                current = latest;
+                return;
+            }
+            DesktopPreferences next = latest.Preferences.Clone();
+            next.LastSaveFolder = fullPath;
+            var updated = new Envelope
+            {
+                Preferences = next,
+                RecentPaths = latest.RecentPaths,
+                AdditionalData = latest.AdditionalData
+            };
+            Write(updated);
+            current = updated;
         }
     }
 
@@ -208,7 +334,6 @@ public sealed class DesktopPreferencesStore
         // Re-read the recoverable backup under the writer mutex as well. A
         // missing primary is not evidence that a newer backup can be ignored,
         // and an unreadable backup must not be replaced by stale defaults.
-        latest.Preferences ??= new();
         latest.Preferences.Normalize();
         latest.RecentPaths = NormalizeRecent(latest.RecentPaths);
         return latest;
@@ -231,7 +356,7 @@ public sealed class DesktopPreferencesStore
         catch { mutex.Dispose(); throw; }
     }
 
-    private void Write(Envelope next)
+    private void Write(Envelope next, bool createOnly = false)
     {
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(next, new JsonSerializerOptions { WriteIndented = true });
         if (bytes.Length > MaximumBytes) throw new IOException("Settings exceed the 1 MB limit; the saved file has been kept.");
@@ -245,7 +370,15 @@ public sealed class DesktopPreferencesStore
                 stream.Write(bytes);
                 stream.Flush(flushToDisk: true);
             }
-            if (File.Exists(path))
+            if (createOnly)
+            {
+                // File.Move without overwrite also protects a primary published
+                // by another writer between the check and this atomic move.
+                if (!IsAbsent(path + ".bak"))
+                    throw new IOException("A settings backup appeared while carrying forward previous settings.");
+                File.Move(temporary, path);
+            }
+            else if (File.Exists(path))
             {
                 // Keep an unreadable primary for diagnosis and retain any good
                 // recovery backup rather than replacing it with corrupt bytes.
@@ -301,7 +434,9 @@ public sealed class DesktopPreferencesStore
             // snapshot during parsing; new atomic saves remain allowed.
             using var stream = new FileStream(candidate, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
             if (stream.Length is <= 0 or > MaximumBytes) return false;
-            value = JsonSerializer.Deserialize<Envelope>(stream, new JsonSerializerOptions { MaxDepth = 32 }) ?? new();
+            Envelope? decoded = JsonSerializer.Deserialize<Envelope>(stream, new JsonSerializerOptions { MaxDepth = 32 });
+            if (decoded?.Preferences is null) return false;
+            value = decoded;
             return true;
         }
         catch (IOException error) when (!failIfUnavailable || error is FileNotFoundException or DirectoryNotFoundException) { return false; }
@@ -332,7 +467,8 @@ public sealed class DesktopPreferencesStore
         {
             string fullPath = Path.GetFullPath(candidate);
             string extension = Path.GetExtension(fullPath).ToLowerInvariant();
-            return extension is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".pdf" or ".mp4" or ".wmv" ? fullPath : null;
+            return extension is ".png" or ".jpg" or ".jpeg" or ".bmp" or ".gif" or ".tif" or ".tiff" or ".pdf"
+                or ".mp4" or ".wmv" or ".mov" or ".avi" or ".m4v" or ".webm" or ".mkv" or ".snipstudio" ? fullPath : null;
         }
         catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException) { return null; }
     }
@@ -340,6 +476,7 @@ public sealed class DesktopPreferencesStore
     private sealed class Envelope
     {
         public Envelope() { }
+        [JsonRequired]
         public DesktopPreferences Preferences { get; set; } = new();
         public List<string> RecentPaths { get; set; } = new();
         [JsonExtensionData] public Dictionary<string, JsonElement>? AdditionalData { get; set; }

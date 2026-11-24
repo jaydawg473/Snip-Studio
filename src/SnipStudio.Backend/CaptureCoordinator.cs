@@ -19,7 +19,7 @@ namespace SnipStudio.WinUI.Backend;
 /// STA with a real WinForms message pump, never on the WinUI dispatcher.
 /// No executable, global input hook or security setting is created/changed.
 /// </summary>
-public static class CaptureCoordinator
+public static partial class CaptureCoordinator
 {
     private static readonly SemaphoreSlim captureGate = new(1, 1);
     private static readonly object flushGate = new();
@@ -30,7 +30,7 @@ public static class CaptureCoordinator
         Validate(request, recording: false);
         return RunOnCaptureThreadAsync(async token =>
         {
-            using var owner = await HiddenCaptureOwner.HideAsync(request.OwnerWindow, token);
+            using var windows = await HiddenCaptureWindows.HideAsync(request, token);
             if (!await WaitForDelayAsync(request.DelaySeconds, token)) return null;
             await SettleCompositorAsync(token);
             using var options = new CaptureOptionScope(request, token);
@@ -59,7 +59,7 @@ public static class CaptureCoordinator
         Validate(request, recording: true);
         return RunOnCaptureThreadAsync<CaptureRectangle?>(async token =>
         {
-            using var owner = await HiddenCaptureOwner.HideAsync(request.OwnerWindow, token);
+            using var windows = await HiddenCaptureWindows.HideAsync(request, token);
             if (!await WaitForDelayAsync(request.DelaySeconds, token)) return null;
             await SettleCompositorAsync(token);
             using var options = new CaptureOptionScope(request, token);
@@ -75,12 +75,12 @@ public static class CaptureCoordinator
 
     public static Task<CapturedImage?> CaptureScrollingAsync(CaptureRequest request,
         IProgress<CaptureProgress>? progress = null, Func<bool>? finishRequested = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, ScrollingReviewAppearance? previewAppearance = null)
     {
         Validate(request, recording: false);
         return RunOnCaptureThreadAsync(async token =>
         {
-            using var owner = await HiddenCaptureOwner.HideAsync(request.OwnerWindow, token);
+            using var windows = await HiddenCaptureWindows.HideAsync(request, token);
             if (!await WaitForDelayAsync(request.DelaySeconds, token)) return null;
             await SettleCompositorAsync(token);
             using var options = new CaptureOptionScope(request, token);
@@ -116,8 +116,22 @@ public static class CaptureCoordinator
             if (result.EndReason == global::SnipStudio.ScrollingCaptureEndReason.EscapePressed)
                 throw new OperationCanceledException("Scrolling capture canceled with Escape.", token);
             controller.FinishAndClose();
-            token.ThrowIfCancellationRequested();
-            return await EncodeAsync(result.Image, request, result.FrameCount, result.Detail, result.StoppedEarly, token);
+            linked.Token.ThrowIfCancellationRequested();
+            string? restoreWarning = taskbars?.RestoreAfterCapture();
+            string warning = string.IsNullOrEmpty(restoreWarning) ? result.Detail : result.Detail + " " + restoreWarning;
+            if (previewAppearance is { } appearance)
+            {
+                windows.Dispose();
+                linked.Token.ThrowIfCancellationRequested();
+                using var preview = new ScrollingCaptureReview(result.Image, result.JoinRows, result.FrameCount,
+                    warning, result.StoppedEarly, appearance);
+                DialogResult answer = request.OwnerWindow == 0
+                    ? preview.ShowDialog()
+                    : preview.ShowDialog(new CaptureWindowOwner(request.OwnerWindow));
+                linked.Token.ThrowIfCancellationRequested();
+                if (answer != DialogResult.OK) return null;
+            }
+            return await EncodeAsync(result.Image, request, result.FrameCount, warning, result.StoppedEarly, linked.Token);
         }, cancellationToken);
     }
 
@@ -202,7 +216,8 @@ public static class CaptureCoordinator
         foreach (Form form in Application.OpenForms) forms.Add(form);
         foreach (Form? form in forms)
             if (form is not null && !form.IsDisposed && !form.InvokeRequired &&
-                (form is global::SnipStudio.CaptureOverlay || form is CaptureDelayHud || form is CaptureSessionHud))
+                (form is global::SnipStudio.CaptureOverlay || form is CaptureDelayHud || form is CaptureSessionHud ||
+                    form is ScrollingCaptureReview))
                 form.Close();
     }
 
@@ -213,16 +228,31 @@ public static class CaptureCoordinator
         using var hud = new CaptureDelayHud(seconds);
         hud.Show();
         var clock = Stopwatch.StartNew();
-        while (clock.Elapsed.TotalSeconds < seconds)
-        {
-            token.ThrowIfCancellationRequested();
-            if (hud.IsDisposed || hud.CancelRequested) return false;
-            hud.SetSeconds(Math.Max(1, (int)Math.Ceiling(seconds - clock.Elapsed.TotalSeconds)));
-            await Task.Delay(70, token);
-        }
+        bool finished = await RunCaptureCountdownAsync(seconds, () => clock.Elapsed.TotalSeconds,
+            () => hud.IsDisposed || hud.CancelRequested, (remaining, cancellationToken) =>
+            {
+                hud.SetSeconds(remaining);
+                return Task.Delay(70, cancellationToken);
+            }, token);
+        token.ThrowIfCancellationRequested();
+        if (!finished || hud.IsDisposed || hud.CancelRequested) return false;
         hud.FinishAndClose();
-        await SettleCompositorAsync(token);
+        // The capture path settles the compositor after this method returns.
         return true;
+    }
+
+    internal static async Task<bool> RunCaptureCountdownAsync(int seconds, Func<double> elapsedSeconds,
+        Func<bool> canceledByUser, Func<int, CancellationToken, Task> updateAndWait, CancellationToken token)
+    {
+        while (true)
+        {
+            // A cancel handled during the final wait takes priority over the elapsed deadline.
+            token.ThrowIfCancellationRequested();
+            if (canceledByUser()) return false;
+            double remaining = seconds - elapsedSeconds();
+            if (remaining <= 0) return true;
+            await updateAndWait((int)Math.Ceiling(remaining), token);
+        }
     }
 
     private static void Validate(CaptureRequest request, bool recording)
@@ -235,6 +265,8 @@ public static class CaptureCoordinator
         if (recording && request.Kind is not CaptureKind.Rectangle and not CaptureKind.Window)
             throw new ArgumentException("Choose Rectangle or Window for a recording region.", nameof(request));
         HiddenCaptureOwner.ValidateWindow(request.OwnerWindow);
+        ArgumentNullException.ThrowIfNull(request.AdditionalWindowsToHide);
+        foreach (nint window in request.AdditionalWindowsToHide) HiddenCaptureOwner.ValidateWindow(window);
     }
 
     private static void ValidateDesktopSize()
@@ -287,8 +319,11 @@ public static class CaptureCoordinator
             pending = compositorFlush;
         }
         if (!pending.Wait(TimeSpan.FromSeconds(2)))
-            throw new TimeoutException("The Windows compositor did not settle before reading the selected region. The accepted portion is preserved for review.");
-        Marshal.ThrowExceptionForHR(pending.GetAwaiter().GetResult());
+            throw new TimeoutException("The Windows compositor did not settle before reading the selected region.");
+        int result = pending.GetAwaiter().GetResult();
+        if (result < 0)
+            throw new InvalidOperationException("The Windows compositor could not finish preparing the next scrolling view.",
+                Marshal.GetExceptionForHR(result));
     }
 
     [DllImport("dwmapi.dll")] private static extern int DwmFlush();
@@ -312,6 +347,34 @@ public static class CaptureCoordinator
             global::SnipStudio.CaptureService.UseHdrColorCorrection = hdr;
             global::SnipStudio.CaptureService.HideTaskbarsDuringCapture = hide;
             global::SnipStudio.CaptureService.KeepPrimaryTaskbarVisible = primary;
+        }
+    }
+
+    private sealed record CaptureWindowOwner(nint Handle) : IWin32Window;
+
+    private sealed class HiddenCaptureWindows : IDisposable
+    {
+        private readonly List<HiddenCaptureOwner> windows = new();
+
+        internal static async Task<HiddenCaptureWindows> HideAsync(CaptureRequest request, CancellationToken token)
+        {
+            var scope = new HiddenCaptureWindows();
+            try
+            {
+                if (!request.KeepOwnerVisible && request.OwnerWindow != 0)
+                    scope.windows.Add(await HiddenCaptureOwner.HideAsync(request.OwnerWindow, token));
+                var seen = new HashSet<nint> { 0, request.OwnerWindow };
+                foreach (nint window in request.AdditionalWindowsToHide)
+                    if (seen.Add(window)) scope.windows.Add(await HiddenCaptureOwner.HideAsync(window, token));
+                return scope;
+            }
+            catch { scope.Dispose(); throw; }
+        }
+
+        public void Dispose()
+        {
+            for (int index = windows.Count - 1; index >= 0; index--) windows[index].Dispose();
+            windows.Clear();
         }
     }
 

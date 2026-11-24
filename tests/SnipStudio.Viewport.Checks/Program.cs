@@ -36,6 +36,7 @@ internal static class Program
             Run("manual resize and DPI change preserve center source anchor", ManualResizeAndDpi);
             Run("panning stays bounded and centers an axis that fits", PanLimits);
             Run("image hit testing and clipping follow displayed edges", EdgesAndClipping);
+            Run("Text actions glow stays visible around a cropped snip", TextActionsGlowClipping);
             Run("empty and tiny viewports remain finite and recover", EmptyAndDegenerate);
             Run("invalid inputs reject without changing view intent", InvalidInputs);
             passed = true;
@@ -80,6 +81,52 @@ internal static class Program
         view.SetViewport(855, 439, 1);
         Point(new(48, 69), view.Origin, "Closing a visible row returns its full space");
         CheckCentered(view, "Returned viewport");
+    }
+
+    private static void TextActionsGlowClipping()
+    {
+        const double spread = 12;
+        var empty = new ViewportState();
+        empty.SetViewport(548, 348, 1);
+        Check(empty.TextActionsGlowBounds(spread) is null, "No halo before opening a snip");
+
+        ViewportState view = Create(1000, 500, 548, 348, 1);
+        CheckBounds(view, 11, 36, 526, 276, "Fit keeps all halo bands outside the image frame");
+
+        view.ZoomTo(100, view.Center);
+        CheckBounds(view, 0, 0, 548, 348, "A large snip at 100% retains the halo around the visible viewport");
+
+        view.Pan(10000, 10000);
+        CheckBounds(view, 11, 11, 537, 337, "Panning reveals the real top and left edges");
+        view.Pan(-10000, -10000);
+        CheckBounds(view, 0, 0, 537, 337, "Panning back reveals the real bottom and right edges");
+        view.Fit();
+        CheckBounds(view, 11, 36, 526, 276, "Fit restores the real image outline after panning");
+
+        ViewportState highDpi = Create(300, 200, 400, 300, 2);
+        highDpi.SetRasterRootOffset(new(.3, .1));
+        CheckBounds(highDpi, 112.7, 87.4, 175, 125, "Physical-pixel alignment and the half-DIP frame are honored");
+
+        view.SetViewport(24, 348, 1);
+        Check(view.TextActionsGlowBounds(spread) is null, "Halo leaves a clear center in narrow layouts");
+        view.SetViewport(548, 24, 1);
+        Check(view.TextActionsGlowBounds(spread) is null, "Halo leaves a clear center in short layouts");
+        view.SetViewport(0, 0, 1);
+        Check(view.TextActionsGlowBounds(spread) is null, "Collapsed viewport keeps the halo hidden");
+
+        ViewportState offscreen = Create(10, 10, 100, 100, 1);
+        offscreen.ZoomTo(800, new(0, 0));
+        Check(offscreen.TextActionsGlowBounds(spread) is null, "No phantom halo when no image pixels are visible");
+
+        void CheckBounds(ViewportState state, double x, double y, double width, double height, string label)
+        {
+            var bounds = state.TextActionsGlowBounds(spread);
+            Check(bounds.HasValue, label + " has bounds");
+            var actual = bounds.GetValueOrDefault();
+            Point(new(x, y), new(actual.X, actual.Y), label + " origin");
+            Near(width, actual.Width, label + " width");
+            Near(height, actual.Height, label + " height");
+        }
     }
 
     private static void KnownMappings()

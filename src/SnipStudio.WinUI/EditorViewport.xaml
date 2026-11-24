@@ -5,6 +5,25 @@
     IsTabStop="True"
     AutomationProperties.Name="Image editor canvas"
     KeyDown="OnCanvasKeyDown">
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Default">
+                    <LinearGradientBrush x:Key="TextActionsGlowBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Offset="0" Color="#FF087BEA" />
+                        <GradientStop Offset="0.25" Color="#FF00C1FA" />
+                        <GradientStop Offset="0.4" Color="#FF93F3FF" />
+                        <GradientStop Offset="0.55" Color="#FF6752FF" />
+                        <GradientStop Offset="0.8" Color="#FF9A43EE" />
+                        <GradientStop Offset="1" Color="#FFE45BCF" />
+                    </LinearGradientBrush>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="HighContrast">
+                    <SolidColorBrush x:Key="TextActionsGlowBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
     <Grid x:Name="Host"
           Background="{ThemeResource StudioCanvasBrush}"
           SizeChanged="OnViewportSizeChanged"
@@ -12,6 +31,8 @@
           Loaded="OnViewportLoaded"
           Unloaded="OnViewportUnloaded"
           PointerPressed="OnPointerPressed"
+          PointerEntered="OnPointerEnteredCanvas"
+          PointerExited="OnPointerExitedCanvas"
           PointerMoved="OnPointerMoved"
           PointerReleased="OnPointerReleased"
           PointerCanceled="OnPointerCanceled"
@@ -21,18 +42,44 @@
             <Border x:Name="ImageFrame" BorderBrush="{ThemeResource StudioFrameBrush}" BorderThickness="1" Visibility="Collapsed">
                 <Image x:Name="Picture" Stretch="Fill" />
             </Border>
+            <Grid x:Name="TextActionsGlow" Visibility="Collapsed" IsHitTestVisible="False" Opacity="0.95">
+                <Border BorderBrush="{ThemeResource TextActionsGlowBrush}" BorderThickness="12" CornerRadius="13" Opacity="0.1" />
+                <Border BorderBrush="{ThemeResource TextActionsGlowBrush}" BorderThickness="9" Margin="3" CornerRadius="10" Opacity="0.18" />
+                <Border BorderBrush="{ThemeResource TextActionsGlowBrush}" BorderThickness="6" Margin="6" CornerRadius="7" Opacity="0.32" />
+                <Border x:Name="TextActionsGlowRim" BorderBrush="{ThemeResource TextActionsGlowBrush}" BorderThickness="3" Margin="9" CornerRadius="4" />
+            </Grid>
             <Polyline x:Name="StrokePreview" Visibility="Collapsed" StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round" />
+            <Path x:Name="SnappedHighlighterPreview" Stretch="None" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw">
+                <Path.Data><GeometryGroup x:Name="SnappedHighlighterGeometry" FillRule="Nonzero" /></Path.Data>
+            </Path>
+            <Polygon x:Name="ArrowHeadPreview" Visibility="Collapsed" />
             <Rectangle x:Name="RectanglePreview" Visibility="Collapsed" />
             <Ellipse x:Name="EllipsePreview" Visibility="Collapsed" />
-            <Rectangle x:Name="SelectionFrame" Visibility="Collapsed" Stroke="#FF0078D4" StrokeThickness="1.5" StrokeDashArray="4,2" />
-            <Canvas x:Name="RecognizedBands" />
+            <Rectangle x:Name="SelectionFrame" Visibility="Collapsed" Stroke="#FF0078D4" StrokeThickness="1.5" StrokeDashArray="4,2" RenderTransformOrigin="0.5,0.5" />
+            <Canvas x:Name="ObjectOutlinePreview" />
+            <Path x:Name="RecognizedTextSpotlight" Visibility="Collapsed" IsHitTestVisible="False" AutomationProperties.AccessibilityView="Raw" Stretch="None" Fill="#48071026">
+                <Path.RenderTransform>
+                    <ScaleTransform x:Name="RecognizedTextSpotlightScale" />
+                </Path.RenderTransform>
+            </Path>
+            <Path Fill="#1946A2F8" Stretch="None" AutomationProperties.AccessibilityView="Raw">
+                <Path.Data><GeometryGroup x:Name="RecognizedBandTint" FillRule="Nonzero" /></Path.Data>
+            </Path>
+            <Path Fill="#FF1684E3" Stretch="None" AutomationProperties.AccessibilityView="Raw">
+                <Path.Data><GeometryGroup x:Name="RecognizedBandUnderline" FillRule="Nonzero" /></Path.Data>
+            </Path>
             <Rectangle x:Name="RecognizedDraftMask" Visibility="Collapsed" />
             <Canvas x:Name="SourceTextSelection" />
             <Canvas x:Name="ObjectHandles" />
+            <Canvas x:Name="CropOverlay" Visibility="Collapsed" />
+            <Grid x:Name="EraserPreview" Visibility="Collapsed">
+                <Ellipse Stroke="#CC000000" StrokeThickness="3" />
+                <Ellipse Stroke="White" StrokeThickness="1" />
+            </Grid>
         </Canvas>
         <Canvas x:Name="TextLayer" Visibility="Collapsed">
             <Border x:Name="TextEditorFrame" Background="White" BorderBrush="#FF0078D4" BorderThickness="1" Padding="0">
-                <RichEditBox x:Name="InlineEditor" AcceptsReturn="True" TextWrapping="Wrap" Padding="0" BorderThickness="0" MinWidth="0" MinHeight="0" Background="White" Foreground="Black" KeyDown="OnInlineKeyDown" TextChanged="OnInlineTextChanged" SelectionChanged="OnInlineSelectionChanged" GotFocus="OnInlineSelectionChanged" LostFocus="OnInlineSelectionChanged" />
+                <RichEditBox x:Name="InlineEditor" AcceptsReturn="True" TextWrapping="Wrap" Padding="0" BorderThickness="0" MinWidth="0" MinHeight="0" Background="White" Foreground="Black" KeyDown="OnInlineKeyDown" TextChanged="OnInlineTextChanged" SelectionChanged="OnInlineSelectionChanged" GotFocus="OnInlineSelectionChanged" LostFocus="OnInlineSelectionChanged" CopyingToClipboard="OnInlineCopyingToClipboard" CuttingToClipboard="OnInlineCuttingToClipboard" />
             </Border>
         </Canvas>
         <StackPanel x:Name="EmptyState" HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="4" Margin="12" IsHitTestVisible="False">

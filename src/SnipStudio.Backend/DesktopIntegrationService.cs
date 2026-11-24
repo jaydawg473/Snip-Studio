@@ -3,12 +3,13 @@ using System;
 using System.ComponentModel;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Win32;
 
 namespace SnipStudio.WinUI.Backend;
 
 /// <summary>
-/// Optional integrations for the WinUI preview only. Construct and dispose on
+/// Optional Windows integrations for Snip Studio. Construct and dispose on
 /// the HWND's UI thread. Construction does not register shortcuts, startup or a
 /// tray icon; every persistent change is an explicit settings operation.
 /// </summary>
@@ -18,7 +19,8 @@ public sealed class DesktopIntegrationService : IDisposable
     public const string RecordingShortcutLabel = "Ctrl+Alt+Shift+R";
     public const string KeyboardSettingsUri = "ms-settings:easeofaccess-keyboard";
     private const string StartupKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
-    private const string StartupValue = "Snip Studio WinUI3 Preview - Automation Forge";
+    private const string StartupValue = "Snip Studio - Automation Forge";
+    private const string StartupMutex = @"Local\SnipStudio.Startup";
     private const int CaptureHotkey = 0x5351, RecordingHotkey = 0x5352, PrintScreenHotkey = 0x5353;
     private const uint TrayMessage = 0x8000 + 105;
     private const nuint SubclassId = 0x53535733;
@@ -46,6 +48,10 @@ public sealed class DesktopIntegrationService : IDisposable
     public event EventHandler? RecordingRequested;
     public event EventHandler? RestoreRequested;
     public event EventHandler? ExitRequested;
+    public event EventHandler? SettingsRequested;
+    public event EventHandler? UpdatesRequested;
+    public event EventHandler? KeyboardSettingsRequested;
+    public event EventHandler? RetryPrintScreenRequested;
     public event EventHandler<DesktopIntegrationErrorEventArgs>? IntegrationFailed;
     public bool HotkeysEnabled { get { VerifyAccess(); return hotkeysEnabled; } }
     public bool PrintScreenEnabled { get { VerifyAccess(); return printScreenEnabled; } }
@@ -146,7 +152,8 @@ public sealed class DesktopIntegrationService : IDisposable
     {
         VerifyAccess();
         using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupKey, false);
-        return string.Equals(key?.GetValue(StartupValue) as string, BuildStartupCommand(), StringComparison.OrdinalIgnoreCase);
+        return string.Equals(key?.GetValue(StartupValue, null, RegistryValueOptions.DoNotExpandEnvironmentNames) as string,
+            BuildStartupCommand(), StringComparison.OrdinalIgnoreCase);
     }
 
     public void SetStartupEnabled(bool enabled)
@@ -157,25 +164,51 @@ public sealed class DesktopIntegrationService : IDisposable
         {
             string executable = Environment.ProcessPath ?? throw new InvalidOperationException("The application path is unavailable.");
             DesktopExecutableTrust.VerifySignedTimestampedExecutable(executable, requireAutomationForge: true);
-            using RegistryKey key = Registry.CurrentUser.CreateSubKey(StartupKey, true)
-                ?? throw new InvalidOperationException("Windows did not allow the startup entry to be opened.");
-            key.SetValue(StartupValue, command, RegistryValueKind.String);
-            if (!string.Equals(key.GetValue(StartupValue) as string, command, StringComparison.Ordinal))
-                throw new IOException("Windows did not confirm the new startup entry.");
         }
-        else
+
+        // Separate preview instances share this registry value. Keep the
+        // ownership check and registry write together across those instances.
+        using var mutex = new Mutex(false, StartupMutex);
+        try
         {
-            using RegistryKey? key = Registry.CurrentUser.OpenSubKey(StartupKey, true);
-            if (key is null) return;
-            string? existing = key.GetValue(StartupValue) as string;
-            if (existing is null) return;
-            if (!string.Equals(existing, command, StringComparison.OrdinalIgnoreCase))
-                throw new InvalidOperationException("The preview startup entry belongs to another installation. Change it in Windows Startup Apps or from that installation.");
-            key.DeleteValue(StartupValue, false);
-            if (key.GetValue(StartupValue) is not null)
-                throw new IOException("Windows did not confirm removal of the preview startup entry.");
+            if (!mutex.WaitOne(TimeSpan.FromSeconds(2)))
+                throw new IOException("Another Snip Studio instance is changing the startup entry. Try again.");
         }
+        catch (AbandonedMutexException)
+        {
+            // WaitOne transferred the lease. Validate the registry state below.
+        }
+
+        try
+        {
+            using RegistryKey? key = enabled
+                ? Registry.CurrentUser.CreateSubKey(StartupKey, writable: true)
+                    ?? throw new InvalidOperationException("Windows did not allow the startup entry to be opened.")
+                : Registry.CurrentUser.OpenSubKey(StartupKey, writable: true);
+            if (key is null) return;
+
+            object? existing = key.GetValue(StartupValue, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+            if (!StartupValueCanChange(existing, command))
+                throw new InvalidOperationException("The Snip Studio startup entry belongs to another installation. Change it in Windows Startup Apps or from that installation.");
+            if (enabled)
+            {
+                if (existing is not null) return;
+                key.SetValue(StartupValue, command, RegistryValueKind.String);
+                if (!string.Equals(key.GetValue(StartupValue) as string, command, StringComparison.Ordinal))
+                    throw new IOException("Windows did not confirm the new startup entry.");
+            }
+            else if (existing is not null)
+            {
+                key.DeleteValue(StartupValue, false);
+                if (key.GetValue(StartupValue) is not null)
+                    throw new IOException("Windows did not confirm removal of the Snip Studio startup entry.");
+            }
+        }
+        finally { mutex.ReleaseMutex(); }
     }
+
+    private static bool StartupValueCanChange(object? existing, string command) =>
+        existing is null || existing is string current && string.Equals(current, command, StringComparison.OrdinalIgnoreCase);
 
     private static string BuildStartupCommand()
     {
@@ -184,7 +217,7 @@ public sealed class DesktopIntegrationService : IDisposable
             path.IndexOfAny(new[] { '"', '\r', '\n' }) >= 0)
             throw new InvalidOperationException("This application path cannot be registered for startup.");
         string command = "\"" + Path.GetFullPath(path) + "\" --background";
-        if (command.Length > 260) throw new InvalidOperationException("Move the preview to a shorter path before enabling Windows startup.");
+        if (command.Length > 260) throw new InvalidOperationException("Move Snip Studio to a shorter path before enabling Windows startup.");
         return command;
     }
 
@@ -208,7 +241,7 @@ public sealed class DesktopIntegrationService : IDisposable
     {
         Size = (uint)Marshal.SizeOf<NotifyIconData>(), Window = hwnd, Id = 1,
         Flags = 0x0001 | 0x0002 | 0x0004, CallbackMessage = TrayMessage,
-        Icon = icon, Tip = "Snip Studio — WinUI 3 preview", Info = "", InfoTitle = ""
+        Icon = icon, Tip = "Snip Studio", Info = "", InfoTitle = ""
     };
 
     private void RemoveTrayIcon()
@@ -270,6 +303,11 @@ public sealed class DesktopIntegrationService : IDisposable
             AppendMenuW(menu, 0, 1, "Open Snip Studio");
             AppendMenuW(menu, 0, 2, "New screenshot");
             AppendMenuW(menu, 0x0800, 0, null);
+            AppendMenuW(menu, 0, 4, "Settings");
+            AppendMenuW(menu, 0, 5, "Check for updates");
+            AppendMenuW(menu, 0, 6, "Windows keyboard settings");
+            AppendMenuW(menu, 0, 7, "Retry Print Screen");
+            AppendMenuW(menu, 0x0800, 0, null);
             AppendMenuW(menu, 0, 3, "Exit");
             if (!GetCursorPos(out NativePoint point)) return;
             SetForegroundWindow(hwnd);
@@ -277,6 +315,10 @@ public sealed class DesktopIntegrationService : IDisposable
             if (selected == 1) { RestoreWindow(); Raise(RestoreRequested); }
             else if (selected == 2) { RestoreWindow(); Raise(CaptureRequested); }
             else if (selected == 3) Raise(ExitRequested);
+            else if (selected == 4) { RestoreWindow(); Raise(SettingsRequested); }
+            else if (selected == 5) { RestoreWindow(); Raise(UpdatesRequested); }
+            else if (selected == 6) { RestoreWindow(); Raise(KeyboardSettingsRequested); }
+            else if (selected == 7) { RestoreWindow(); Raise(RetryPrintScreenRequested); }
             PostMessageW(hwnd, 0, 0, 0); // documented foreground-menu dismissal handshake
         }
         finally { DestroyMenu(menu); }

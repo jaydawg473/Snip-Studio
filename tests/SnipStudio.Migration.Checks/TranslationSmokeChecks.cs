@@ -19,6 +19,7 @@ internal static partial class Program
         public double LanguageDiscoveryMilliseconds { get; set; }
         public double TranslationMilliseconds { get; set; }
         public List<object> ParentProcessMemorySamples { get; } = new();
+        public List<object> AdditionalPairChecks { get; } = new();
     }
 
     private sealed record TranslationSmokeRow(string Text, string[] ExactLiterals, bool ShouldTranslateProse);
@@ -63,7 +64,7 @@ internal static partial class Program
                 ElapsedMilliseconds = clock.Elapsed.TotalMilliseconds,
                 OverallCancellationBudgetSeconds = 85,
                 SourceLanguage = "de", TargetLanguage = "en",
-                Scope = "Actual reviewed local OfflineTranslationAdapter language discovery and one German-to-English model batch, exact source/identifier/quantity/duplicate/blank-row fidelity. Node executes only through the adapter's existing signature/hash/lease gate. No configured server or intentional network request is invoked by this test. Packet traffic, translation semantic quality, other model directions, child-process peak memory and native WinUI acceptance are not established.",
+                Scope = "Actual reviewed local OfflineTranslationAdapter language discovery, exact source/identifier/quantity/duplicate/blank-row fidelity for German to English, other five direct model directions and a pivot through English. Node executes through the adapter's signature/hash/lease gate. No configured server or intentional network request is invoked. Packet traffic, semantic quality, child-process peak memory and native WinUI acceptance are not established.",
                 Observations = observed,
                 Failure = failure
             }, new JsonSerializerOptions { WriteIndented = true });
@@ -146,6 +147,28 @@ internal static partial class Program
         Check(result.TranslatedSegments[1] == result.TranslatedSegments[7],
             "Duplicate technical rows remain separate, ordered and identically translated by the deterministic local model");
         Check(source.SequenceEqual(unchangedInput, StringComparer.Ordinal), "Source input remains unchanged after result verification");
+
+        (string Source, string Target, string Text)[] additionalPairs =
+        {
+            ("en", "de", "The door is open."),
+            ("en", "es", "The door is open."),
+            ("en", "fr", "The door is open."),
+            ("es", "en", "La puerta está abierta."),
+            ("fr", "en", "La porte est ouverte."),
+            ("de", "fr", "Die Tür ist offen.")
+        };
+        foreach (var pair in additionalPairs)
+        {
+            step.Restart();
+            var smoke = await adapter.TranslateAsync(new[] { pair.Text }, pair.Source, pair.Target, budget.Token);
+            step.Stop();
+            string? output = smoke.TranslatedSegments.SingleOrDefault();
+            bool ok = smoke.SourceLanguage == pair.Source && smoke.TargetLanguage == pair.Target &&
+                smoke.SourceSegments.SequenceEqual(new[] { pair.Text }) && !string.IsNullOrWhiteSpace(output) && output != pair.Text;
+            observed.AdditionalPairChecks.Add(new { pair.Source, pair.Target, SourceText = pair.Text, Translation = output,
+                Milliseconds = step.Elapsed.TotalMilliseconds, Passed = ok });
+            Check(ok, $"Offline model returns a translated row for {pair.Source} to {pair.Target}");
+        }
     }
 
     private static bool ExactSmokeLiteralsMatch(string source, string translated, IReadOnlyList<string> literals)

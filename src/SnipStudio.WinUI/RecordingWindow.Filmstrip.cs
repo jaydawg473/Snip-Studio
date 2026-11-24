@@ -17,6 +17,7 @@ public sealed partial class RecordingWindow
     private FilmstripDrag filmstripDrag;
     private Pointer? filmstripPointer;
     private double filmstripPosition, dragPosition, dragStart, dragEnd;
+    private double playbackSeekDuration;
     private long showRequestedPositionUntil;
     private bool filmstripSeekPending, seekWarningShown;
 
@@ -30,18 +31,34 @@ public sealed partial class RecordingWindow
     private void ResetFilmstrip()
     {
         EndFilmstripDrag();
-        filmstripTimer.Stop();
         filmstripSeekPending = seekWarningShown = false;
         showRequestedPositionUntil = 0;
         filmstripPosition = 0;
+        playbackSeekDuration = ReadPlaybackSeekDuration();
         FilmstripFrames.Children.Clear();
         FilmstripFrames.ColumnDefinitions.Clear();
         FilmstripFrames.Visibility = Visibility.Collapsed;
-        FilmstripMarks.Visibility = Visibility.Collapsed;
+        FilmstripMarks.Visibility = playbackSeekDuration > 0 ? Visibility.Visible : Visibility.Collapsed;
         FilmstripMessage.Visibility = Visibility.Visible;
-        FilmstripMessage.Text = "Reading video details…";
+        FilmstripMessage.Text = playbackSeekDuration > 0
+            ? "Reading video details. You can seek on the timeline."
+            : "Reading video details…";
         ToolTipService.SetToolTip(FilmstripMessage, null);
         FilmstripTime.Text = "";
+        UpdateFilmstripVisuals();
+    }
+
+    private double ReadPlaybackSeekDuration()
+    {
+        try
+        {
+            var session = player?.PlaybackSession;
+            return session?.CanSeek == true ? Math.Max(0, session.NaturalDuration.TotalSeconds) : 0;
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            return 0; // The normal timeline can still use the video details when they load.
+        }
     }
 
     private void BeginFilmstrip(string path, int generation, CancellationToken token)
@@ -55,7 +72,6 @@ public sealed partial class RecordingWindow
         FilmstripMessage.Text = "Reading filmstrip frames…";
         FilmstripMarks.Visibility = Visibility.Visible;
         UpdateFilmstripVisuals();
-        filmstripTimer.Start();
         _ = LoadFilmstripAsync(path, generation, token);
     }
 
@@ -104,7 +120,7 @@ public sealed partial class RecordingWindow
         }
     }
 
-    private double FilmstripDuration => metadata?.Duration.TotalSeconds ?? 0;
+    private double FilmstripDuration => metadata?.Duration.TotalSeconds ?? playbackSeekDuration;
     private double FilmstripFrameStep => 1d / Math.Max(1, metadata?.FramesPerSecond ?? 1);
     private bool FilmstripAvailable => !closed && !busy && !recorder.IsActive && stopTask == null && FilmstripDuration > 0 && player != null;
 
@@ -118,8 +134,9 @@ public sealed partial class RecordingWindow
         if (duration <= 0 || width <= 0 || height <= 0) return;
         double start = FilmstripX(TrimStartBox.Value);
         double end = FilmstripX(TrimEndBox.Value);
-        bool validRange = end > start;
+        bool validRange = metadata != null && end > start;
         FilmstripBeforeRange.Visibility = FilmstripAfterRange.Visibility = FilmstripRange.Visibility = validRange ? Visibility.Visible : Visibility.Collapsed;
+        FilmstripStartHandle.Visibility = FilmstripEndHandle.Visibility = validRange ? Visibility.Visible : Visibility.Collapsed;
         FilmstripBeforeRange.Width = start;
         FilmstripAfterRange.Width = width - end;
         FilmstripRange.Width = Math.Max(0, end - start);
@@ -156,7 +173,7 @@ public sealed partial class RecordingWindow
         dragEnd = TrimEndBox.Value;
         double startDistance = Math.Abs(point.Position.X - FilmstripX(dragStart));
         double endDistance = Math.Abs(point.Position.X - FilmstripX(dragEnd));
-        filmstripDrag = Math.Min(startDistance, endDistance) > 10
+        filmstripDrag = metadata == null || Math.Min(startDistance, endDistance) > 10
             ? FilmstripDrag.Playhead : startDistance <= endDistance ? FilmstripDrag.Start : FilmstripDrag.End;
         ApplyFilmstripPointer(point.Position.X);
         FlushFilmstripSeek();
@@ -205,8 +222,11 @@ public sealed partial class RecordingWindow
     private void CancelFilmstripDrag()
     {
         if (filmstripPointer == null) return;
-        TrimStartBox.Value = dragStart;
-        TrimEndBox.Value = dragEnd;
+        if (filmstripDrag is FilmstripDrag.Start or FilmstripDrag.End)
+        {
+            TrimStartBox.Value = dragStart;
+            TrimEndBox.Value = dragEnd;
+        }
         QueueFilmstripSeek(dragPosition);
         FlushFilmstripSeek();
         EndFilmstripDrag();
@@ -273,12 +293,16 @@ public sealed partial class RecordingWindow
     {
         if (seekWarningShown) return;
         seekWarningShown = true;
-        SetStatus("Windows could not seek this video. You can still enter trim times or save a copy.");
+        SetStatus(metadata == null
+            ? "Windows could not seek this video. You can still play it or save a copy."
+            : "Windows could not seek this video. You can still enter trim times or save a copy.");
     }
 
     private void OnFilmstripTick(object? sender, object args)
     {
-        if (!FilmstripAvailable || player is not { } playing) return;
+        if (closed || player is not { } playing) return;
+        RefreshReviewPlaybackState(playing);
+        if (!FilmstripAvailable) return;
         if (filmstripSeekPending) { FlushFilmstripSeek(); return; }
         if (filmstripPointer != null || Environment.TickCount64 < showRequestedPositionUntil) return;
         double position;

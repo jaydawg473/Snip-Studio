@@ -88,8 +88,8 @@ internal static partial class Program
                 AwaitBudgetSeconds = VideoSmokeBudgetSeconds,
                 ExpectedInputSHA256 = VideoSmokeFixtureSha256,
                 FixtureProvenance = "WriterChecks.cs: 30 generated 640x360/15fps painted frames, red top-left/lime bottom-left markers, and a generated 440Hz stereo tone; no hardware recording.",
-                ExportFixtureNote = "The original 64190-byte file is already too compact for the export planner's overhead/budget rule. Positive export uses an owned byte-identical media copy with one explicit 512 KiB MP4 free box appended. A smaller result proves removal/re-encoding of this padded copy, not improved compression of the compact original.",
-                Scope = "Actual public VideoReviewService metadata, filmstrip, copy, trim and export adapter; public ported video-frame decoder for orientation/color checks; exact source/copy hashes and rejected/canceled transaction preservation. AAC stream presence is checked through metadata, not decoded audio samples. No native WinUI playback or desktop interaction, capture, device audio, recording, installation or physical monitor acceptance. Waits share a fifty-second budget; synchronous native codec calls are not forcibly aborted by cancellation or timeout.",
+                ExportFixtureNote = "The original 64190-byte file is already too compact for the export planner's overhead/budget rule. Positive export uses an owned byte-identical media copy with one explicit 2 MiB MP4 free box appended. A smaller result proves removal/re-encoding of this padded copy, not improved compression of the compact original.",
+                Scope = "Actual video metadata, filmstrip, copy, trim, export and frame-decoder adapters; source/copy hashes and failure preservation. Synthetic frame and audio sources exercise the recorder's response to interruption during capture and finalization, and to startup failure. AAC stream presence is checked through metadata. No native WinUI playback, live capture, audio devices, installation or physical monitor acceptance. Waits share a fifty-second budget; synchronous native codec calls may outlive cancellation or timeout.",
                 Observations = observed,
                 Failure = failure
             }, new JsonSerializerOptions { WriteIndented = true });
@@ -114,8 +114,9 @@ internal static partial class Program
         await CheckFilmstripAsync(input, observed, budget).ConfigureAwait(false);
 
         string copy = Path.Combine(output, "exact-copy.mp4");
-        await VideoSmokeStepAsync("Save byte-exact original copy", () => VideoReviewService.SaveCopyAsync(input, copy, budget), observed, budget).ConfigureAwait(false);
-        Check(VideoSmokeHash(copy) == VideoSmokeFixtureSha256, "Save a copy preserves every generated source byte");
+        await VideoSmokeStepAsync("Save a byte-exact attachment copy at its size limit",
+            () => VideoReviewService.SaveCopyAsync(input, copy, budget, maximumBytes: VideoSmokeFixtureBytes), observed, budget).ConfigureAwait(false);
+        Check(VideoSmokeHash(copy) == VideoSmokeFixtureSha256, "An attachment copy at the byte limit preserves every generated source byte");
         RecordVideoSmokeFile(copy, "Exact media copy", observed);
 
         string trimmed = Path.Combine(output, "trimmed-0.3-to-1.3.mp4");
@@ -136,6 +137,12 @@ internal static partial class Program
         using (var sentinel = new FileStream(preserved, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             sentinel.Write(Encoding.UTF8.GetBytes("Opaque preservation sentinel; this is deliberately not playable video.\n"));
         string preservedHash = VideoSmokeHash(preserved);
+        await ExpectAsync<InvalidOperationException>(() => VideoSmokeStepAsync("Refuse an attachment copy one byte over its limit",
+            () => VideoReviewService.SaveCopyAsync(input, preserved, budget, maximumBytes: VideoSmokeFixtureBytes - 1), observed, budget),
+            "Exact copies honor the target size under the source read lease").ConfigureAwait(false);
+        Check(VideoSmokeHash(preserved) == preservedHash && VideoSmokeHash(input) == VideoSmokeFixtureSha256,
+            "Rejecting an oversize exact copy preserves existing target and input bytes");
+
         await ExpectAsync<InvalidOperationException>(() => VideoSmokeStepAsync("Reject compact original export without replacing destination",
             () => VideoReviewService.ExportAsync(input, preserved, original, VideoExportPreset.Small480p, 1, budget), observed, budget),
             "Already-compact original export is honestly rejected by the real planner").ConfigureAwait(false);
@@ -145,7 +152,7 @@ internal static partial class Program
         // The original MP4 has finite top-level boxes ending at EOF. Appending
         // an explicitly sized ISO BMFF free box leaves its media/offsets intact.
         // This artificial source-size padding is only an export-path fixture.
-        const int freeBoxBytes = 512 * 1024;
+        const int freeBoxBytes = 2 * 1024 * 1024;
         string padded = Path.Combine(output, "generated-media-with-free-box.mp4");
         byte[] fixture = File.ReadAllBytes(input);
         byte[] freeBox = new byte[freeBoxBytes];
@@ -185,6 +192,11 @@ internal static partial class Program
         Check(Math.Abs(exportedBoxCenter - originalBoxCenter) <= 12,
             "Export retains the moving-box position at the original source time within one frame and lossy edges");
 
+        await CheckAttachmentExportAsync(padded, paddedHash, paddedMetadata, paddedBytes.Length, preserved, preservedHash,
+            output, observed, budget).ConfigureAwait(false);
+        await CheckVideoPublicationRecoveryAsync(padded, paddedMetadata, paddedBytes.Length,
+            output, observed, budget).ConfigureAwait(false);
+
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
         await ExpectAsync<OperationCanceledException>(() => VideoSmokeStepAsync("Pre-canceled metadata request",
@@ -211,7 +223,93 @@ internal static partial class Program
         Check(!Directory.EnumerateFiles(output, ".snip-video-copy-*").Any(), "Failed copy leaves no partial copy temporary file");
         Check(VideoSmokeHash(input) == VideoSmokeFixtureSha256, "Every successful and failed workflow preserves the original generated MP4");
         RecordVideoSmokeFile(preserved, "Opaque failure/cancellation sentinel, not video", observed);
+        await CheckRecorderAudioRecoveryAsync(output, observed, budget).ConfigureAwait(false);
         observed.MemorySamples.Add(SampleMemory("After local synthetic video workflows; sampled, not peak memory"));
+    }
+
+    private static async Task CheckAttachmentExportAsync(string source, string sourceHash, VideoMetadata metadata, long sourceBytes,
+        string preservedDestination, string preservedHash, string output, VideoSmokeEvidence observed, CancellationToken budget)
+    {
+        const int targetMegabytes = 1;
+        const long targetBytes = targetMegabytes * 1000000L;
+        long reportedBytes = await VideoSmokeStepAsync("Read the current source size for export preflight",
+            () => VideoReviewService.ReadSourceSizeAsync(source, budget), observed, budget).ConfigureAwait(false);
+        Check(reportedBytes == sourceBytes, "Export preflight sees the actual bytes in the owned source");
+
+        var preparation = VideoReviewService.PrepareExport(source, reportedBytes, metadata, VideoExportPreset.TargetAttachmentSize, targetMegabytes);
+        Check(preparation.MaximumCopyBytes == null && preparation.EncodingPlan != null, "An oversized MP4 requires re-encoding");
+        VideoExportPlan plan = preparation.EncodingPlan!;
+        Check(sourceBytes > targetBytes && plan.TargetBytes == targetBytes && plan.EstimatedBytes <= targetBytes && plan.HasAudio,
+            "Attachment planner estimates a reduction under the requested decimal MB target and keeps audio");
+
+        foreach (int quickSize in new[] { 10, 20, 25 })
+        {
+            long limit = quickSize * 1_000_000L;
+            var fit = VideoReviewService.PrepareExport("recording.MP4", limit, null, VideoExportPreset.TargetAttachmentSize, quickSize);
+            Check(fit.EncodingPlan == null && fit.MaximumCopyBytes == limit,
+                $"The {quickSize} MB quick choice copies a fitting MP4 at the exact byte limit without relying on codec metadata");
+            var needsEncoding = VideoReviewService.PrepareExport(source, limit + 1, metadata, VideoExportPreset.TargetAttachmentSize, quickSize);
+            Check(needsEncoding.EncodingPlan?.TargetBytes == limit && needsEncoding.MaximumCopyBytes == null,
+                $"The {quickSize} MB quick choice encodes a video one byte over the limit");
+        }
+        var otherContainer = VideoReviewService.PrepareExport("recording.webm", sourceBytes, metadata, VideoExportPreset.TargetAttachmentSize, 10);
+        Check(otherContainer.EncodingPlan != null && otherContainer.MaximumCopyBytes == null,
+            "A fitting non-MP4 uses an MP4 conversion plan rather than a renamed copy");
+        Expect<InvalidOperationException>(() => VideoReviewService.PrepareExport("recording.mkv", sourceBytes, null,
+            VideoExportPreset.TargetAttachmentSize, 10), "An input needing re-encoding requires readable metadata");
+        Expect<ArgumentOutOfRangeException>(() => VideoReviewService.PrepareExport(source, sourceBytes, metadata,
+            VideoExportPreset.TargetAttachmentSize, 0), "An invalid attachment cap fails before copying or encoding");
+
+        string email = Path.Combine(output, "email-attachment.mp4");
+        VideoExportResult result = await VideoSmokeStepAsync("Encode a strict 1 MB attachment from the owned padded clip",
+            () => VideoReviewService.ExportAsync(source, email, plan, budget), observed, budget).ConfigureAwait(false);
+        Check(result.Path == email && result.Bytes == new FileInfo(email).Length && result.TargetBytes == targetBytes && result.TargetMet &&
+            result.Bytes > 0 && result.Bytes <= targetBytes && result.Bytes < sourceBytes,
+            "Attachment export measures the actual smaller MP4 and respects the requested limit");
+        VideoMetadata attachment = await VideoSmokeStepAsync("Inspect the email attachment MP4",
+            () => VideoReviewService.InspectAsync(email, budget), observed, budget).ConfigureAwait(false);
+        Check(attachment.HasAudio && attachment.Width == plan.Width && attachment.Height == plan.Height &&
+            Math.Abs((attachment.Duration - metadata.Duration).TotalSeconds) <= 2.0 / metadata.FramesPerSecond + .001,
+            "Email MP4 retains the audio stream, planned image size and source duration");
+        RecordVideoSmokeFile(email, "Native 1 MB attachment export", observed);
+        RecordVideoSmokeMetadata("email attachment", attachment, observed);
+
+        // A one-byte test ceiling forces the post-encode refusal deterministically
+        // without relying on codec bitrate variance or invalidating the encode plan.
+        plan.TargetBytes = 1;
+        InvalidOperationException? overLimit = null;
+        try
+        {
+            await VideoSmokeStepAsync("Reject over-limit attachment before replacing the existing destination",
+                () => VideoReviewService.ExportAsync(source, preservedDestination, plan, budget), observed, budget).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException error) { overLimit = error; }
+        Check(overLimit?.Message.Contains("attachment limit", StringComparison.Ordinal) == true,
+            "Strict oversize export reports the attachment limit after encoding");
+        Check(VideoSmokeHash(preservedDestination) == preservedHash && VideoSmokeHash(source) == sourceHash &&
+            !Directory.EnumerateFiles(output, ".snip-trim-*.mp4").Any(),
+            "Strict oversize export preserves both files and clears the rejected temporary MP4");
+
+        string legacy = Path.Combine(output, "legacy-over-limit-copy.mp4");
+        VideoExportResult legacyResult = await VideoSmokeStepAsync("Keep advisory targets for the legacy export API",
+            () => VideoTrimService.ExportAsync(source, legacy, plan, budget, progress: null), observed, budget).ConfigureAwait(false);
+        Check(File.Exists(legacy) && !legacyResult.TargetMet && legacyResult.Bytes < sourceBytes &&
+            VideoSmokeHash(source) == sourceHash,
+            "Legacy export still publishes a smaller copy and reports a missed target");
+
+        // With audio, a 1 MB target supports the minimum video bitrate at 23 s
+        // but has an insufficient budget at 24 s for these source dimensions.
+        var boundary = new VideoMetadata
+        {
+            Width = metadata.Width, Height = metadata.Height, FramesPerSecond = metadata.FramesPerSecond,
+            HasAudio = true, Duration = TimeSpan.FromSeconds(23)
+        };
+        VideoExportPlan boundaryPlan = VideoTrimService.CreateExportPlan(boundary, sourceBytes, VideoExportPreset.TargetAttachmentSize, targetMegabytes);
+        Check(boundaryPlan.VideoBitrate >= 200000 && boundaryPlan.EstimatedBytes <= targetBytes && boundaryPlan.AudioBitrate == 96000,
+            "Feasible attachment target keeps the minimum video and selected audio bitrates");
+        boundary.Duration = TimeSpan.FromSeconds(24);
+        Expect<InvalidOperationException>(() => VideoTrimService.CreateExportPlan(boundary, sourceBytes, VideoExportPreset.TargetAttachmentSize, targetMegabytes),
+            "Planner refuses an attachment duration that cannot meet the minimum bitrate and target");
     }
 
     private static async Task CheckFilmstripAsync(string path, VideoSmokeEvidence observed, CancellationToken budget)

@@ -1,4 +1,5 @@
 using Microsoft.UI.Xaml;
+using SnipStudio.WinUI.Backend;
 
 namespace SnipStudio.WinUI;
 
@@ -31,10 +32,17 @@ public partial class App : Application
 
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
-        // WinUI adapters own an isolated identity and settings. The legacy
-        // Program and its stable-channel integrations are never initialized.
+        // Initialize the original Snip Studio shell identity through the WinUI adapters.
         try
         {
+            string[] arguments = Environment.GetCommandLineArgs();
+            if (DesktopJumpList.IsCloseAllWithoutSavingRequest(arguments))
+            {
+                startupCompleted = true;
+                _ = DispatchTaskbarCloseRequestAsync();
+                return;
+            }
+            DesktopJumpList.Initialize();
             StartupDiagnostics.Stage("OnLaunched.MainWindow.constructor.begin");
             var mainWindow = new MainWindow();
             StartupDiagnostics.Stage("OnLaunched.MainWindow.constructor.completed");
@@ -43,10 +51,11 @@ public partial class App : Application
             startupCompleted = true;
             // File arguments are consumed only after native XAML activation.
             // The editor validates the file before replacing its current work.
-            string[] arguments = Environment.GetCommandLineArgs();
-            if (arguments.Contains("--background", StringComparer.OrdinalIgnoreCase))
+            if (DesktopJumpList.TryGetCaptureDelay(arguments, out int seconds))
+                _ = mainWindow.CaptureFromTaskbarAsync(seconds);
+            else if (arguments.Contains("--background", StringComparer.OrdinalIgnoreCase))
                 mainWindow.TryStartInBackground();
-            if (arguments.Length > 1 && !arguments[1].StartsWith("-", StringComparison.Ordinal))
+            else if (arguments.Length > 1 && !arguments[1].StartsWith("-", StringComparison.Ordinal))
                 _ = mainWindow.OpenInitialPathAsync(arguments[1]);
         }
         catch (Exception exception)
@@ -54,5 +63,15 @@ public partial class App : Application
             StartupDiagnostics.Failure("OnLaunched.failed", exception);
             throw;
         }
+    }
+
+    private async Task DispatchTaskbarCloseRequestAsync()
+    {
+        try { await Task.Run(TaskbarEditorCloseRequest.NotifyRunningEditors); }
+        catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException)
+        {
+            StartupDiagnostics.Failure("Taskbar close request failed", exception);
+        }
+        finally { Exit(); }
     }
 }

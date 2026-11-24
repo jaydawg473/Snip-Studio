@@ -133,18 +133,7 @@ namespace SnipStudio
                         RedirectStandardOutput = true,
                         RedirectStandardError = true
                     };
-                    // Parent-shell Node configuration must not inject modules or
-                    // change the packaged worker's module-resolution boundary.
-                    start.EnvironmentVariables.Remove("NODE_OPTIONS");
-                    start.EnvironmentVariables.Remove("NODE_PATH");
-                    start.EnvironmentVariables.Remove("NODE_COMPILE_CACHE");
-                    start.EnvironmentVariables.Remove("NODE_V8_COVERAGE");
-                    start.EnvironmentVariables.Remove("NODE_REDIRECT_WARNINGS");
-                    // The reviewed worker uses only built-in Node modules and
-                    // full paths inside its locked bundle. No external tools or
-                    // native modules from a user's PATH are part of this closure.
-                    start.EnvironmentVariables["PATH"] = Environment.SystemDirectory + Path.PathSeparator +
-                        Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+                    OfflineWorkerEnvironment.Configure(start);
                     process.StartInfo = start;
                     // Do not rely on a previously awaited file task being
                     // incomplete: Process.Start itself must never run on the

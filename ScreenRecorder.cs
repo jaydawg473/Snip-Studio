@@ -20,6 +20,8 @@ namespace SnipStudio
         public string MicrophoneDeviceId = "";
         public string SystemAudioDeviceId = "";
         internal Action BeforeFrameCapture;
+        internal bool HideTaskbars;
+        internal bool KeepPrimaryTaskbarVisible = true;
     }
 
     public sealed class RecordingStatusEventArgs : EventArgs
@@ -35,8 +37,10 @@ namespace SnipStudio
     public sealed class RecordingSaveException : IOException
     {
         public string RecoveryPath { get; private set; }
-        internal RecordingSaveException(string recoveryPath, Exception inner)
-            : base("The recording finished, but it could not be saved to the chosen filename. Your completed recording is preserved at:\n\n" + recoveryPath, inner)
+        internal RecordingSaveException(string recoveryPath, string destinationPath, Exception inner)
+            : base(recoveryPath != null
+                ? "The recording finished, but it could not be saved to the chosen filename. Your completed recording is preserved at:\n\n" + recoveryPath + "\n\n" + inner.Message
+                : "The recording finished, but publishing it could not be verified. Check the chosen filename:\n\n" + destinationPath + "\n\n" + inner.Message, inner)
         { RecoveryPath = recoveryPath; }
     }
 
@@ -46,6 +50,7 @@ namespace SnipStudio
         private readonly ManualResetEvent stop = new ManualResetEvent(false);
         private readonly Action<Bitmap, Rectangle, bool> captureFrame;
         private readonly Action<Thread> startWorker;
+        private readonly Func<ScreenRecordingOptions, IRecordingAudio> createAudio;
         private Stopwatch clock = new Stopwatch();
         private Thread worker;
         private TaskCompletionSource<bool> finished;
@@ -56,7 +61,7 @@ namespace SnipStudio
         private Rectangle sourceRegion;
         private int fps = 15;
         private Exception lastError;
-        private AudioCaptureMixer activeAudio;
+        private IRecordingAudio activeAudio;
         public event EventHandler<RecordingStatusEventArgs> StatusChanged;
         public bool IsRecording { get { return recording; } }
         public TimeSpan Duration { get { lock (gate) return stoppedAt >= 0 ? TimeSpan.FromTicks(stoppedAt) : activeAudio == null ? clock.Elapsed : activeAudio.Duration; } }
@@ -68,24 +73,41 @@ namespace SnipStudio
         public Exception Error { get { return lastError; } }
         public string DestinationPath { get; private set; }
         public string RecoveryPath { get; private set; }
+        public string AudioWarning { get; private set; }
+        internal string TaskbarWarning { get; private set; }
 
         public ScreenRecorder() : this(CaptureFrame) { }
         internal ScreenRecorder(Action<Bitmap, Rectangle, bool> captureFrame)
             : this(captureFrame, StartWorkerThread) { }
         internal ScreenRecorder(Action<Bitmap, Rectangle, bool> captureFrame, Action<Thread> startWorker)
+            : this(captureFrame, startWorker, CreateAudio) { }
+        internal ScreenRecorder(Action<Bitmap, Rectangle, bool> captureFrame, Action<Thread> startWorker,
+            Func<ScreenRecordingOptions, IRecordingAudio> createAudio)
         {
             if (captureFrame == null) throw new ArgumentNullException("captureFrame");
             if (startWorker == null) throw new ArgumentNullException("startWorker");
+            if (createAudio == null) throw new ArgumentNullException("createAudio");
             this.captureFrame = captureFrame;
             this.startWorker = startWorker;
+            this.createAudio = createAudio;
         }
 
         private static void StartWorkerThread(Thread thread) { thread.Start(); }
+
+        private static IRecordingAudio CreateAudio(ScreenRecordingOptions options)
+        {
+            return new AudioCaptureMixer(options.RecordMicrophone, options.RecordSystemAudio,
+                options.MicrophoneDeviceId, options.SystemAudioDeviceId);
+        }
 
         public Task StartAsync(Rectangle screenRegion, string destinationPath)
         { return StartAsync(screenRegion, destinationPath, new ScreenRecordingOptions()); }
 
         public Task StartAsync(Rectangle screenRegion, string destinationPath, ScreenRecordingOptions options)
+        { return StartAsync(screenRegion, destinationPath, options, null); }
+
+        internal Task StartAsync(Rectangle screenRegion, string destinationPath, ScreenRecordingOptions options,
+            Action<string> publishCompleted)
         {
             if (options == null) throw new ArgumentNullException("options");
             if (String.IsNullOrWhiteSpace(destinationPath)) throw new ArgumentNullException("destinationPath");
@@ -103,6 +125,9 @@ namespace SnipStudio
             snapshot.MicrophoneDeviceId = options.MicrophoneDeviceId ?? "";
             snapshot.SystemAudioDeviceId = options.SystemAudioDeviceId ?? "";
             snapshot.BeforeFrameCapture = options.BeforeFrameCapture;
+            snapshot.HideTaskbars = options.HideTaskbars;
+            snapshot.KeepPrimaryTaskbarVisible = options.KeepPrimaryTaskbarVisible;
+            bool replaceExisting = publishCompleted == null && File.Exists(path);
             TaskCompletionSource<bool> ready = new TaskCompletionSource<bool>();
             lock (gate)
             {
@@ -118,10 +143,12 @@ namespace SnipStudio
                 sourceRegion = region;
                 DestinationPath = path;
                 RecoveryPath = null;
+                AudioWarning = null;
+                TaskbarWarning = null;
                 finished = new TaskCompletionSource<bool>();
                 try
                 {
-                    worker = new Thread(new ThreadStart(delegate { Record(region, path, snapshot, ready); }));
+                    worker = new Thread(new ThreadStart(delegate { Record(region, path, snapshot, ready, publishCompleted, replaceExisting); }));
                     worker.IsBackground = true;
                     worker.Name = "Snip Studio screen recorder";
                     worker.SetApartmentState(ApartmentState.MTA);
@@ -162,10 +189,12 @@ namespace SnipStudio
             return new Size(Math.Max(2, (int)(source.Width * scale) & ~1), Math.Max(2, (int)(source.Height * scale) & ~1));
         }
 
-        private void Record(Rectangle region, string path, ScreenRecordingOptions options, TaskCompletionSource<bool> ready)
+        private void Record(Rectangle region, string path, ScreenRecordingOptions options, TaskCompletionSource<bool> ready,
+            Action<string> publishCompleted, bool replaceExisting)
         {
             string temporary = Path.Combine(Path.GetDirectoryName(path), ".snip-recording-" + Guid.NewGuid().ToString("N") + ".mp4");
-            AudioCaptureMixer audio = null;
+            IRecordingAudio audio = null;
+            TaskbarVisibilityScope taskbars = null;
             bool published = false;
             bool finalized = false;
             Exception failure = null;
@@ -177,9 +206,11 @@ namespace SnipStudio
                 {
                     if (withAudio)
                     {
-                        audio = new AudioCaptureMixer(options.RecordMicrophone, options.RecordSystemAudio, options.MicrophoneDeviceId, options.SystemAudioDeviceId);
+                        audio = createAudio(options);
                         audio.Start();
                     }
+                    if (options.HideTaskbars)
+                        taskbars = TaskbarVisibilityScope.Hide(options.KeepPrimaryTaskbarVisible);
                     lock (gate) { activeAudio = audio; clock.Start(); recording = true; starting = false; }
                     ready.TrySetResult(true);
                     Notify(true, withAudio ? audio.Status : "Recording screen without audio", null);
@@ -192,9 +223,10 @@ namespace SnipStudio
                         long now = ElapsedTicks(audio);
                         if (now >= nextVideo)
                         {
-                            if (options.BeforeFrameCapture != null)
+                            if (options.BeforeFrameCapture != null || taskbars != null)
                             {
-                                options.BeforeFrameCapture();
+                                options.BeforeFrameCapture?.Invoke();
+                                taskbars?.PrepareFrame();
                                 // A taskbar re-hide can briefly wait for the
                                 // desktop compositor. Timestamp the actual frame.
                                 now = ElapsedTicks(audio);
@@ -206,11 +238,15 @@ namespace SnipStudio
                         }
                         if (audio != null)
                         {
-                            if (audio.Error != null) throw new InvalidOperationException("An enabled audio source stopped. The recording was not saved.", audio.Error);
+                            CheckAudioInterruption(audio);
                             long availableTicks = Math.Max(0, ElapsedTicks(audio) - TimeSpan.TicksPerMillisecond * 100);
                             WriteAudioUntil(encoder, audio, availableTicks * 48000 / TimeSpan.TicksPerSecond, ref audioFrames);
                         }
-                        if (now - lastStatus >= TimeSpan.TicksPerSecond / 2) { lastStatus = now; Notify(true, "Recording", null); }
+                        if (now - lastStatus >= TimeSpan.TicksPerSecond / 2)
+                        {
+                            lastStatus = now;
+                            Notify(true, AudioWarning == null ? "Recording" : "Recording with interrupted audio", null);
+                        }
                         long wait = nextVideo - ElapsedTicks(audio);
                         if (wait > 0) stop.WaitOne((int)Math.Min(20, Math.Max(1, wait / TimeSpan.TicksPerMillisecond)));
                     }
@@ -228,7 +264,7 @@ namespace SnipStudio
                         // Let the last device-period packets arrive; the exported end timestamp stays fixed.
                         Thread.Sleep(100);
                         audio.Stop();
-                        if (audio.Error != null) throw new InvalidOperationException("An enabled audio source stopped. The recording was not saved.", audio.Error);
+                        CheckAudioInterruption(audio);
                         WriteAudioUntil(encoder, audio, Math.Max(1, endTicks * 48000 / TimeSpan.TicksPerSecond), ref audioFrames);
                     }
                     encoder.Complete();
@@ -236,16 +272,17 @@ namespace SnipStudio
                 finalized = true;
                 try
                 {
-                    if (File.Exists(path)) File.Replace(temporary, path, null);
+                    if (publishCompleted != null) publishCompleted(temporary);
+                    else if (replaceExisting) File.Replace(temporary, path, null);
                     else File.Move(temporary, path);
                 }
                 catch (Exception error)
                 {
-                    RecoveryPath = temporary;
-                    throw new RecordingSaveException(temporary, error);
+                    RecoveryPath = File.Exists(temporary) ? temporary : null;
+                    throw new RecordingSaveException(RecoveryPath, path, error);
                 }
                 published = true;
-                Notify(false, "Recording saved", null);
+                Notify(false, AudioWarning == null ? "Recording saved" : "Recording saved with interrupted audio", null);
             }
             catch (Exception error)
             {
@@ -257,6 +294,15 @@ namespace SnipStudio
             finally
             {
                 lock (gate) { activeAudio = null; recording = false; starting = false; clock.Stop(); }
+                if (taskbars != null)
+                {
+                    try { TaskbarWarning = taskbars.RestoreAfterCapture(); }
+                    catch (Exception error)
+                    {
+                        TaskbarWarning = "Windows could not confirm taskbar restoration: " + error.Message;
+                    }
+                    if (!String.IsNullOrEmpty(TaskbarWarning)) Trace.WriteLine(TaskbarWarning, "Recording taskbars");
+                }
                 if (audio != null) audio.Dispose();
                 if (!published && !finalized && File.Exists(temporary)) { try { File.Delete(temporary); } catch (Exception) { } }
                 lock (gate) { if (disposed) stop.Dispose(); }
@@ -265,9 +311,16 @@ namespace SnipStudio
             }
         }
 
-        private long ElapsedTicks(AudioCaptureMixer audio) { return audio == null ? clock.Elapsed.Ticks : audio.Duration.Ticks; }
+        private void CheckAudioInterruption(IRecordingAudio audio)
+        {
+            Exception failure = audio.Error;
+            if (failure != null && AudioWarning == null)
+                AudioWarning = "An audio source stopped. Some audio may be missing. " + failure.Message;
+        }
 
-        private static void WriteAudioUntil(MediaFoundationVideoWriter encoder, AudioCaptureMixer audio, long desiredFrames, ref long framesWritten)
+        private long ElapsedTicks(IRecordingAudio audio) { return audio == null ? clock.Elapsed.Ticks : audio.Duration.Ticks; }
+
+        private static void WriteAudioUntil(MediaFoundationVideoWriter encoder, IRecordingAudio audio, long desiredFrames, ref long framesWritten)
         {
             while (framesWritten < desiredFrames)
             {

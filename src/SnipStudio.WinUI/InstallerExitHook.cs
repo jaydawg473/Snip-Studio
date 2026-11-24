@@ -6,7 +6,7 @@ namespace SnipStudio.WinUI;
 /// <summary>Lets Setup request the same protected exit as the notification-area menu.</summary>
 internal sealed class InstallerExitHook
 {
-    private const string MessageName = "AutomationForge.SnipStudio.WinUI3.RequestInstallerExit.v1";
+    private const string MessageName = "AutomationForge.SnipStudio.RequestInstallerExit.v1";
     private const int Acknowledged = 0x5355;
     private const uint WmNcDestroy = 0x0082;
     private const nuint SubclassId = 0x53534955;
@@ -45,6 +45,10 @@ internal sealed class InstallerExitHook
 
     private nint WindowProcedure(nint hwnd, uint message, nuint wParam, nint lParam, nuint id, nuint data)
     {
+        if (TaskbarEditorCloseRequest.Message != 0 && message == TaskbarEditorCloseRequest.Message &&
+            wParam == TaskbarEditorCloseRequest.Acknowledged && lParam == 0)
+            return MainWindow.QueueTaskbarEditorClose(window.DispatcherQueue, window as MainWindow)
+                ? (nint)TaskbarEditorCloseRequest.Acknowledged : 0;
         if (message == ExitMessage && wParam == Acknowledged)
         {
             if (lParam == 1) return Acknowledged;

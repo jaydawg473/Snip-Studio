@@ -7,8 +7,8 @@ using System.Windows.Forms;
 
 namespace SnipStudio.WinUI.Backend;
 
-// Transient native desktop HUDs belong to the capture STA only. The editor,
-// options and result review remain WinUI. No legacy MainForm dependency.
+// Transient native desktop HUDs belong to the capture STA only.
+// The editor and options remain WinUI. No legacy MainForm dependency.
 internal sealed class CaptureSessionHud : Form
 {
     private readonly Rectangle captureRegion;

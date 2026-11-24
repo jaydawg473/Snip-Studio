@@ -55,8 +55,20 @@ namespace SnipStudio
             ThrowIfDisposed();
             if (image == null) throw new ArgumentNullException("image");
             Bitmap copy = CopyImage(image);
+            try { SetOwnedImage(copy); }
+            catch { copy.Dispose(); throw; }
+        }
+
+        // Takes ownership on success after the caller has fully decoded and
+        // detached the image from its source stream.
+        internal void SetOwnedImage(Bitmap image, List<Annotation> annotations = null)
+        {
+            ThrowIfDisposed();
+            var next = new DocumentState(new ImageFrame(image), annotations ?? new List<Annotation>(), nextRevision + 1);
+            if (states.Capacity == 0) states.Capacity = 1;
             ClearStates();
-            states.Add(new DocumentState(new ImageFrame(copy), new List<Annotation>(), ++nextRevision));
+            states.Add(next);
+            nextRevision = next.Revision;
             position = 0;
             savedRevision = -1;
         }
@@ -374,10 +386,12 @@ namespace SnipStudio
         {
             RectangleF bounds = GetAnnotationBounds(index);
             if (bounds.IsEmpty) return PointF.Empty;
-            float visibleX = Math.Min(16, Math.Max(1, bounds.Width));
-            float visibleY = Math.Min(16, Math.Max(1, bounds.Height));
-            return new PointF(Math.Max(visibleX - bounds.Right, Math.Min(ImageSize.Width - visibleX - bounds.Left, delta.X)),
-                Math.Max(visibleY - bounds.Bottom, Math.Min(ImageSize.Height - visibleY - bounds.Top, delta.Y)));
+            float visibleX = Math.Min(ImageSize.Width, Math.Min(16, Math.Max(1, bounds.Width)));
+            float visibleY = Math.Min(ImageSize.Height, Math.Min(16, Math.Max(1, bounds.Height)));
+            // A crop or rotation can leave less than the normal visible margin.
+            // Keep zero in each range so moving along one axis never jumps along the other.
+            return new PointF(Math.Max(Math.Min(0, visibleX - bounds.Right), Math.Min(Math.Max(0, ImageSize.Width - visibleX - bounds.Left), delta.X)),
+                Math.Max(Math.Min(0, visibleY - bounds.Bottom), Math.Min(Math.Max(0, ImageSize.Height - visibleY - bounds.Top), delta.Y)));
         }
 
         public bool MoveAnnotation(int index, PointF delta)
@@ -404,7 +418,9 @@ namespace SnipStudio
             return true;
         }
 
-        public void AddHighlightBands(IEnumerable<RectangleF> bands, Color color)
+        private const byte DefaultHighlighterAlpha = 80;
+
+        public void AddHighlightBands(IEnumerable<RectangleF> bands, Color color, byte? highlighterAlpha = null)
         {
             RequireImage();
             if (bands == null) throw new ArgumentNullException("bands");
@@ -414,10 +430,12 @@ namespace SnipStudio
                 ValidatePoint(bounds.Location); ValidatePoint(new PointF(bounds.Right, bounds.Bottom));
                 if (bounds.Width > 0 && bounds.Height > 0) valid.Add(bounds);
             }
-            if (valid.Count > 0) Add(new HighlightBandsAnnotation(valid.ToArray(), Color.FromArgb(80, color.R, color.G, color.B)));
+            if (valid.Count > 0)
+                Add(new HighlightBandsAnnotation(valid.ToArray(), Color.FromArgb(highlighterAlpha ?? DefaultHighlighterAlpha, color)));
         }
 
-        public void AddStroke(IEnumerable<PointF> points, Color color, float width, bool highlighter)
+        public void AddStroke(IEnumerable<PointF> points, Color color, float width, bool highlighter,
+            byte? highlighterAlpha = null)
         {
             RequireImage();
             if (points == null) throw new ArgumentNullException("points");
@@ -429,6 +447,7 @@ namespace SnipStudio
                 copy.Add(point);
             }
             if (copy.Count == 0) return;
+            if (highlighter) color = Color.FromArgb(highlighterAlpha ?? DefaultHighlighterAlpha, color);
             Add(new StrokeAnnotation(copy.ToArray(), color, width, highlighter));
         }
 
@@ -545,12 +564,42 @@ namespace SnipStudio
             catch { patched.Dispose(); throw; }
         }
 
+        internal TextAnnotation PrepareReviewedTextNote(int index, string translated, out string failure)
+        {
+            TextAnnotation original = GetTextAnnotationObject(index);
+            TextAnnotation replacement;
+            try
+            {
+                if (original == null || !RichTextLayout.TryReplaceUniformSingleLine(original.Rtf, translated, out string rtf))
+                {
+                    failure = "This note contains formatting or line breaks that need to be edited directly.";
+                    return null;
+                }
+                replacement = new TextAnnotation(translated, rtf, original.Location, original.Color,
+                    original.FontSize, original.LayoutWidth, original.MinimumHeight, original.FontFamily, original.FontStyle);
+            }
+            catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
+            {
+                failure = "The reviewed text could not be laid out in the existing note. Shorten it and try again.";
+                return null;
+            }
+            RectangleF ink = replacement.InkBounds;
+            if (ink.IsEmpty || !original.Bounds.Contains(ink) ||
+                !new RectangleF(Point.Empty, ImageSize).Contains(ink))
+            {
+                failure = "The reviewed text does not fit the existing note. Shorten it or resize the note and recognize the snip again.";
+                return null;
+            }
+            failure = null;
+            return replacement;
+        }
+
         internal int ReplaceRecognizedTextBlocks(IList<RecognizedTextReplacement> replacements,
-            object expectedImageIdentity, long expectedRevision)
+            object expectedImageIdentity, long expectedRevision, IReadOnlyDictionary<int, TextAnnotation> noteEdits = null)
         {
             RequireImage();
             if (replacements == null) throw new ArgumentNullException("replacements");
-            if (replacements.Count == 0) return -1;
+            if (replacements.Count == 0 && (noteEdits == null || noteEdits.Count == 0)) return -1;
             if (!Object.ReferenceEquals(expectedImageIdentity, BaseIdentity) || expectedRevision != Revision) return -1;
 
             List<Rectangle> masks = new List<Rectangle>();
@@ -598,13 +647,36 @@ namespace SnipStudio
             // Sampled flat-color masks cover only source raster text. The
             // original capture is shared, untouched, across this single history
             // state. Existing highlights/shapes/notes retain their draw order.
-            List<Annotation> annotations = new List<Annotation>();
-            annotations.Add(new SourceTextMasksAnnotation(masks.ToArray(), backgrounds.ToArray()));
-            annotations.AddRange(Current.Annotations);
-            annotations.AddRange(text);
+            List<Annotation> annotations = new List<Annotation>(Current.Annotations);
+            int lastEditedNote = -1;
+            if (noteEdits != null)
+                foreach (KeyValuePair<int, TextAnnotation> edit in noteEdits)
+                {
+                    TextAnnotation original = GetTextAnnotationObject(edit.Key);
+                    if (original == null || edit.Value == null)
+                        throw new ArgumentException("Every reviewed note must have an existing annotation.", "noteEdits");
+                    foreach (KeyValuePair<int, TextAnnotation> other in noteEdits)
+                    {
+                        if (other.Key >= edit.Key) continue;
+                        RectangleF overlap = RectangleF.Intersect(edit.Value.InkBounds, other.Value.InkBounds);
+                        TextAnnotation previous = GetTextAnnotationObject(other.Key);
+                        if (!overlap.IsEmpty && !RectangleF.Intersect(original.InkBounds, previous.InkBounds).Contains(overlap))
+                            throw new ArgumentException("The reviewed notes would newly overlap. Shorten their text.", "noteEdits");
+                    }
+                    foreach (TextAnnotation raster in text)
+                        if (edit.Value.InkBounds.IntersectsWith(raster.InkBounds))
+                            throw new ArgumentException("A reviewed note and an image line would overlap. Shorten their text.", "noteEdits");
+                    annotations[edit.Key] = edit.Value;
+                    lastEditedNote = Math.Max(lastEditedNote, edit.Key);
+                }
+            if (text.Count != 0)
+            {
+                annotations.Insert(0, new SourceTextMasksAnnotation(masks.ToArray(), backgrounds.ToArray()));
+                annotations.AddRange(text);
+            }
             Current.Frame.AddReference();
             Commit(new DocumentState(Current.Frame, annotations, ++nextRevision));
-            return annotations.Count - 1;
+            return text.Count != 0 ? annotations.Count - 1 : lastEditedNote;
         }
 
         private void ValidateTranslationExtension(RecognizedTextReplacement replacement, Rectangle mask,
@@ -620,8 +692,12 @@ namespace SnipStudio
             foreach (Annotation existing in Current.Annotations)
                 if (existing.Bounds.IntersectsWith(extension))
                     throw new ArgumentException("Translation extension would overlap an existing annotation.", "replacements");
+            // Another erase mask may meet the padding above or below this
+            // text. Only the visible extension can cover that source line.
+            Rectangle inkExtension = Rectangle.FromLTRB(extension.Left, (int)Math.Floor(ink.Top),
+                extension.Right, (int)Math.Ceiling(ink.Bottom));
             foreach (RecognizedTextReplacement other in replacements)
-                if (other != null && !Object.ReferenceEquals(other, replacement) && other.Bounds.IntersectsWith(extension))
+                if (other != null && !Object.ReferenceEquals(other, replacement) && other.Bounds.IntersectsWith(inkExtension))
                     throw new ArgumentException("Translation extension would overlap another source line.", "replacements");
             Bitmap source = Current.Frame.Bitmap;
             Color background = replacement.Background;
@@ -774,7 +850,7 @@ namespace SnipStudio
             return bytes;
         }
 
-        private static Bitmap CopyImage(Bitmap image)
+        internal static Bitmap CopyImage(Bitmap image)
         {
             Bitmap copy = new Bitmap(image.Width, image.Height, PixelFormat.Format32bppArgb);
             try
@@ -923,8 +999,12 @@ namespace SnipStudio
                 bounds = union;
             }
 
-            private SourceTextMasksAnnotation(RectangleF[] regions, Color[] backgrounds, RectangleF bounds)
+            internal SourceTextMasksAnnotation(RectangleF[] regions, Color[] backgrounds, RectangleF bounds)
             { this.regions = regions; this.backgrounds = backgrounds; this.bounds = bounds; }
+
+            internal int RegionCount { get { return regions.Length; } }
+            internal RectangleF GetRegion(int index) { return regions[index]; }
+            internal Color GetBackground(int index) { return backgrounds[index]; }
 
             public override RectangleF Bounds { get { return bounds; } }
             // A mask belongs to its source pixels, so moving/erasing the
@@ -954,10 +1034,15 @@ namespace SnipStudio
             public StrokeAnnotation(PointF[] points, Color color, float width, bool highlighter)
             {
                 this.points = (PointF[])points.Clone();
-                this.color = highlighter ? Color.FromArgb(80, color.R, color.G, color.B) : color;
+                this.color = color;
                 this.width = width;
                 this.highlighter = highlighter;
             }
+            internal int PointCount { get { return points.Length; } }
+            internal PointF GetPoint(int index) { return points[index]; }
+            internal Color Ink { get { return color; } }
+            internal float Width { get { return width; } }
+            internal bool IsHighlighter { get { return highlighter; } }
             public override RectangleF Bounds
             {
                 get
@@ -1017,7 +1102,7 @@ namespace SnipStudio
             public override void Draw(Graphics graphics)
             {
                 if (!Style.VisibleOutline) return;
-                using (Pen pen = new Pen(Color, Width))
+                using (Pen pen = Style.CreateOutlinePen())
                 using (AdjustableArrowCap cap = new AdjustableArrowCap(4, 5, true))
                 {
                     pen.StartCap = LineCap.Round;
@@ -1027,32 +1112,44 @@ namespace SnipStudio
             }
             public override bool HitTest(PointF point, float radius)
             { return Style.VisibleOutline && DistanceToSegment(point, start, end) <= radius + Math.Max(Width / 2, Width * 4); }
+            internal bool HitTestOutline(PointF point, float radius)
+            {
+                if (!Style.VisibleOutline) return false;
+                if (DistanceToSegment(point, start, end) <= radius + Width / 2) return true;
+                double dx = end.X - start.X, dy = end.Y - start.Y;
+                double length = Math.Sqrt(dx * dx + dy * dy);
+                if (length <= 0) return false;
+                double fromTipX = end.X - point.X, fromTipY = end.Y - point.Y;
+                double depth = (fromTipX * dx + fromTipY * dy) / length;
+                double headDepth = Math.Min(length, Width * 5);
+                if (depth < -radius || depth > headDepth + radius) return false;
+                double sideways = Math.Abs(fromTipY * dx - fromTipX * dy) / length;
+                return sideways <= radius + Width * 2 * Math.Max(0, Math.Min(1, depth / headDepth));
+            }
         }
 
-        internal sealed class RectangleAnnotation : Annotation, IStyledShape
+        internal sealed class RectangleAnnotation : ClosedShapeAnnotation
         {
-            private readonly RectangleF bounds;
-            internal RectangleF GeometryBounds { get { return bounds; } }
             public RectangleAnnotation(RectangleF bounds, Color color, float width)
                 : this(bounds, new ShapeStyle(Color.Empty, color, width)) { }
-            internal RectangleAnnotation(RectangleF bounds, ShapeStyle style)
-            { this.bounds = bounds; Style = style; }
-            public ShapeStyle Style { get; private set; }
-            public EditorTool ShapeTool { get { return EditorTool.Rectangle; } }
-            public Annotation WithStyle(ShapeStyle style) { return new RectangleAnnotation(bounds, style); }
-            public override RectangleF Bounds { get { RectangleF result = bounds; if (Style.VisibleOutline) result.Inflate(Style.OutlineWidth / 2, Style.OutlineWidth / 2); return result; } }
-            public override Annotation Translate(PointF delta) { RectangleF result = bounds; result.Offset(delta); return new RectangleAnnotation(result, Style); }
-            public override void Draw(Graphics graphics)
+            internal RectangleAnnotation(RectangleF bounds, ShapeStyle style, float rotationDegrees = 0)
+                : base(bounds, style, rotationDegrees, false) { }
+            public override EditorTool ShapeTool { get { return EditorTool.Rectangle; } }
+            internal override ClosedShapeAnnotation WithGeometry(RectangleF frame, ShapeStyle style, float rotationDegrees)
+            { return new RectangleAnnotation(frame, style, rotationDegrees); }
+            protected override void DrawGeometry(Graphics graphics, RectangleF bounds)
             {
                 if (Style.VisibleFill)
                     using (Brush fill = new SolidBrush(Style.EffectiveFillColor)) graphics.FillRectangle(fill, bounds);
                 if (Style.VisibleOutline)
-                    using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth))
+                    using (Pen pen = Style.CreateOutlinePen())
                         graphics.DrawRectangle(pen, bounds.X, bounds.Y, bounds.Width, bounds.Height);
             }
-            public override bool HitTest(PointF point, float radius)
+            protected override bool ContainsGeometry(PointF point) { return GeometryBounds.Contains(point); }
+            protected override bool HitTestGeometry(PointF point, float radius, bool includeFill)
             {
-                if (Style.VisibleFill && bounds.Contains(point)) return true;
+                RectangleF bounds = GeometryBounds;
+                if (includeFill && Style.VisibleFill && bounds.Contains(point)) return true;
                 if (!Style.VisibleOutline) return false;
                 float tolerance = radius + Style.OutlineWidth / 2;
                 return DistanceToSegment(point, new PointF(bounds.Left, bounds.Top), new PointF(bounds.Right, bounds.Top)) <= tolerance ||
@@ -1062,30 +1159,34 @@ namespace SnipStudio
             }
         }
 
-        internal sealed class EllipseAnnotation : Annotation, IStyledShape
+        internal sealed class EllipseAnnotation : ClosedShapeAnnotation
         {
-            private readonly RectangleF bounds;
-            internal RectangleF GeometryBounds { get { return bounds; } }
-            internal EllipseAnnotation(RectangleF bounds, ShapeStyle style) { this.bounds = bounds; Style = style; }
-            public ShapeStyle Style { get; private set; }
-            public EditorTool ShapeTool { get { return EditorTool.Ellipse; } }
-            public Annotation WithStyle(ShapeStyle style) { return new EllipseAnnotation(bounds, style); }
-            public override RectangleF Bounds { get { RectangleF result = bounds; if (Style.VisibleOutline) result.Inflate(Style.OutlineWidth / 2, Style.OutlineWidth / 2); return result; } }
-            public override Annotation Translate(PointF delta) { RectangleF result = bounds; result.Offset(delta); return new EllipseAnnotation(result, Style); }
-            public override void Draw(Graphics graphics)
+            internal EllipseAnnotation(RectangleF bounds, ShapeStyle style, float rotationDegrees = 0)
+                : base(bounds, style, rotationDegrees, true) { }
+            public override EditorTool ShapeTool { get { return EditorTool.Ellipse; } }
+            internal override ClosedShapeAnnotation WithGeometry(RectangleF frame, ShapeStyle style, float rotationDegrees)
+            { return new EllipseAnnotation(frame, style, rotationDegrees); }
+            protected override void DrawGeometry(Graphics graphics, RectangleF bounds)
             {
                 if (Style.VisibleFill)
                     using (Brush fill = new SolidBrush(Style.EffectiveFillColor)) graphics.FillEllipse(fill, bounds);
                 if (Style.VisibleOutline)
-                    using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth)) graphics.DrawEllipse(pen, bounds);
+                    using (Pen pen = Style.CreateOutlinePen()) graphics.DrawEllipse(pen, bounds);
             }
-            public override bool HitTest(PointF point, float radius)
+            protected override bool ContainsGeometry(PointF point)
+            {
+                RectangleF frame = GeometryBounds;
+                double x = (point.X - frame.X) / frame.Width * 2 - 1;
+                double y = (point.Y - frame.Y) / frame.Height * 2 - 1;
+                return x * x + y * y <= 1;
+            }
+            protected override bool HitTestGeometry(PointF point, float radius, bool includeFill)
             {
                 if (!Style.VisibleFill && !Style.VisibleOutline) return false;
                 using (GraphicsPath path = new GraphicsPath())
                 {
-                    path.AddEllipse(bounds);
-                    if (Style.VisibleFill && path.IsVisible(point)) return true;
+                    path.AddEllipse(GeometryBounds);
+                    if (includeFill && Style.VisibleFill && path.IsVisible(point)) return true;
                     if (!Style.VisibleOutline) return false;
                     using (Pen hit = new Pen(Color.Black, Style.OutlineWidth + radius * 2)) return path.IsOutlineVisible(point, hit);
                 }
@@ -1106,7 +1207,7 @@ namespace SnipStudio
             public override void Draw(Graphics graphics)
             {
                 if (!Style.VisibleOutline) return;
-                using (Pen pen = new Pen(Style.EffectiveOutlineColor, Style.OutlineWidth))
+                using (Pen pen = Style.CreateOutlinePen())
                 { pen.StartCap = LineCap.Round; pen.EndCap = LineCap.Round; graphics.DrawLine(pen, start, end); }
             }
             public override bool HitTest(PointF point, float radius)
@@ -1237,6 +1338,9 @@ namespace SnipStudio
             private readonly RectangleF[] bands;
             private readonly Color color;
             public HighlightBandsAnnotation(RectangleF[] bands, Color color) { this.bands = (RectangleF[])bands.Clone(); this.color = color; }
+            internal int BandCount { get { return bands.Length; } }
+            internal RectangleF GetBand(int index) { return bands[index]; }
+            internal Color Ink { get { return color; } }
             public override void Draw(Graphics graphics)
             {
                 using (Brush brush = new SolidBrush(color)) foreach (RectangleF band in bands) graphics.FillRectangle(brush, band);

@@ -22,6 +22,8 @@ public sealed partial class MainWindow
     private DesktopIntegrationService? desktopIntegration;
     private MainWindow? shortcutListenerSuccessor;
     private readonly HashSet<RecordingWindow> recordingWindows = [];
+    private RecordingWindow? recordingCaptureWindow;
+    private bool selectingRecordingCapture, restoreEditorAfterCanceledExit;
     private bool explicitExit;
     private bool desktopVisualInitialized;
     private string? externalSnapshotPath;
@@ -41,6 +43,7 @@ public sealed partial class MainWindow
             if (!desktopVisualInitialized)
             {
                 preferences = preferencesStore.Load();
+                selectedCaptureKind = preferences.LastScreenshotCaptureKind;
                 ApplyVisualPreferences();
                 desktopVisualInitialized = true;
             }
@@ -50,9 +53,13 @@ public sealed partial class MainWindow
             desktopIntegration = new DesktopIntegrationService(WindowHandle);
             desktopIntegration.CaptureRequested += async (_, _) => { if (!busy && !applicationExitPending) await CaptureAsync(CaptureKind.Rectangle, false); };
             desktopIntegration.RecordingRequested += async (_, _) => { if (!busy && !applicationExitPending) await BeginRecordingCaptureAsync(); };
-            desktopIntegration.RestoreRequested += (_, _) => { AppWindow.Show(); Activate(); };
+            desktopIntegration.RestoreRequested += (_, _) =>
+            {
+                if (!selectingRecordingCapture && !TryActivateRecordingCapture()) { AppWindow.Show(); Activate(); }
+            };
             desktopIntegration.ExitRequested += async (_, _) => await RequestApplicationExitAsync();
             desktopIntegration.IntegrationFailed += (_, args) => SetStatus("Windows integration could not finish: " + args.Exception.Message);
+            AttachDesktopShellCommands(desktopIntegration);
             ApplyDesktopIntegrationPreferences(desktopIntegration, preferences);
             if ((preferencesStore.LoadWarning ?? desktopIntegration.GetPrintScreenSetupHint()) is string warning) SetStatus(warning);
         }
@@ -97,7 +104,7 @@ public sealed partial class MainWindow
         catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException) { return; }
         if (closed || !preferences.AutoCheckForUpdates || update is not { NewerPublishedVersion: true } || PreviewNotice.IsOpen) return;
         PreviewNotice.Title = "Snip Studio " + update.PublishedTag + " is available";
-        PreviewNotice.Message = "Open Check for updates to review the WinUI release.";
+        PreviewNotice.Message = "Choose Check for updates to see the Snip Studio release.";
         PreviewNotice.IsOpen = true;
     }
 
@@ -108,7 +115,7 @@ public sealed partial class MainWindow
         {
             penColor = preferences.InkArgb;
             highlighterColor = preferences.HighlighterArgb;
-            StrokeWidthBox.Value = preferences.StrokeWidth;
+            penWidth = highlighterWidth = shapeWidth = (float)preferences.StrokeWidth;
         }
         Viewport.RequireCtrlForWheelZoom = preferences.RequireCtrlForWheelZoom;
         ApplyWorkspacePreferences();
@@ -116,73 +123,11 @@ public sealed partial class MainWindow
         SetTool(selectedTool, whileBusy: true, revealOptions: !contextDismissed);
     }
 
-    private async void OnSettingsClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Settings", async () =>
-    {
-        using var sizing = BeginSettingsWindowSizing();
-        await Task.Yield();
-        Root.UpdateLayout();
-        var settingsStore = new DesktopPreferencesStore();
-        DesktopPreferences previous = settingsStore.Load();
-        DesktopPreferences settings = previous.Clone();
-        if (!previous.RememberCaptureDelay) settings.CaptureDelaySeconds = sessionCaptureDelaySeconds;
-        var view = new DesktopSettingsView(Root.XamlRoot, AppWindow.Id, settings, SavePreferences, ActionToken);
-        if (await view.ShowAsync() is null) return false;
-
-        preferences = settingsStore.Load();
-        bool initializeInk = previous.InkArgb != preferences.InkArgb ||
-            previous.HighlighterArgb != preferences.HighlighterArgb || previous.StrokeWidth != preferences.StrokeWidth;
-        foreach (MainWindow editor in editorWindows)
-        {
-            editor.preferences = preferences.Clone();
-            editor.ApplyVisualPreferences(initializeInk);
-        }
-        if (desktopOwner is MainWindow owner) _ = owner.CheckForAutomaticUpdateAsync();
-        SetStatus(desktopOwner?.desktopIntegration?.GetPrintScreenSetupHint() ?? "Settings saved.");
-        return true;
-
-        void SavePreferences(DesktopPreferences draft)
-        {
-            int selectedDelay = draft.CaptureDelaySeconds;
-            if (!draft.RememberCaptureDelay) draft.CaptureDelaySeconds = 0;
-            DesktopPreferences active = desktopOwner?.preferences ?? preferences;
-            DesktopPreferences next = active.Clone();
-            if (draft.HotkeysEnabled != previous.HotkeysEnabled) next.HotkeysEnabled = draft.HotkeysEnabled;
-            if (draft.UsePrintScreen != previous.UsePrintScreen) next.UsePrintScreen = draft.UsePrintScreen;
-            if (draft.KeepRunningInTray != previous.KeepRunningInTray) next.KeepRunningInTray = draft.KeepRunningInTray;
-            if (draft.KeepShortcutsAfterClose != previous.KeepShortcutsAfterClose) next.KeepShortcutsAfterClose = draft.KeepShortcutsAfterClose;
-            if (draft.StartupWithWindows != previous.StartupWithWindows) next.StartupWithWindows = draft.StartupWithWindows;
-            bool shortcutsChanged = next.HotkeysEnabled != active.HotkeysEnabled ||
-                next.UsePrintScreen != active.UsePrintScreen || next.KeepRunningInTray != active.KeepRunningInTray ||
-                next.KeepShortcutsAfterClose != active.KeepShortcutsAfterClose;
-            bool startupChanged = next.StartupWithWindows != active.StartupWithWindows;
-            DesktopIntegrationService? integration = desktopOwner?.desktopIntegration;
-            if ((shortcutsChanged || startupChanged) && integration is null)
-                throw new InvalidOperationException("Windows integration is unavailable. Restore the previous shortcut and startup choices or reopen Snip Studio.");
-            try
-            {
-                if (shortcutsChanged) ApplyDesktopIntegrationPreferences(integration!, next);
-                if (startupChanged) integration!.SetStartupEnabled(next.StartupWithWindows);
-                settingsStore.Save(draft);
-                if (selectedDelay != settings.CaptureDelaySeconds || draft.RememberCaptureDelay != previous.RememberCaptureDelay)
-                    sessionCaptureDelaySeconds = selectedDelay;
-            }
-            catch (Exception failure) when (failure is not OutOfMemoryException and not AccessViolationException)
-            {
-                var rollbackFailures = new List<string>();
-                if (shortcutsChanged)
-                    try { ApplyDesktopIntegrationPreferences(integration!, active); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
-                if (startupChanged)
-                    try { integration!.SetStartupEnabled(active.StartupWithWindows); } catch (Exception rollback) { rollbackFailures.Add(rollback.Message); }
-                string detail = rollbackFailures.Count == 0 ? "" : " Review Windows integration settings. " + string.Join(" ", rollbackFailures);
-                throw new InvalidOperationException("Settings were not saved. " + failure.Message + detail, failure);
-            }
-        }
-    }, commitDraft: false);
-
     private async void OnRecentClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Recent files", async () =>
     {
-        string? path = await DesktopDialogs.ShowRecentAsync(Root.XamlRoot, preferencesStore.RecentPaths);
+        string? path = await DesktopDialogs.ShowRecentAsync(AppWindow.Id, () => preferencesStore.RecentPaths, preferences.Theme, ActionToken);
         if (path is null) return false;
+        ActionToken.ThrowIfCancellationRequested();
         if (IsVideoPath(path)) { OpenRecordingWindow(path); return true; }
         if (string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("This entry is an exported PDF. Open the original image to continue editing; PDF import is not supported.");
@@ -197,22 +142,34 @@ public sealed partial class MainWindow
 
     private async Task<bool> OpenPathCoreAsync(string path)
     {
+        CancellationToken cancellationToken = ActionToken;
+        cancellationToken.ThrowIfCancellationRequested();
+        path = Path.GetFullPath(path);
         if (!await ConfirmReplaceAsync()) return false;
-        session.Open(path);
+        bool project = IsEditableProjectPath(path);
+        SetStatus(project ? "Opening editable snip…" : "Opening image…");
+        ImageSaveTarget? saveTarget = null;
+        if (project) await session.OpenEditableProjectAsync(path, cancellationToken);
+        else saveTarget = await session.OpenWithSaveTargetAsync(path, cancellationToken);
         if (Viewport.IsTextEditing) Viewport.EndTextEdit();
         ResetDocumentSelection();
         displayPath = path;
+        currentImageSaveTarget = saveTarget;
         suggestedName = Path.GetFileNameWithoutExtension(path) + "-edited";
         AddRecentSafely(path);
         await RefreshPreviewAsync(resetView: true);
         SetStatus("Opened " + Path.GetFileName(path) + ". " + ToolInstruction()); return true;
     }
 
-    private static bool IsVideoPath(string path) => new[] { ".mp4", ".wmv", ".mov", ".avi", ".m4v" }.Contains(Path.GetExtension(path), StringComparer.OrdinalIgnoreCase);
+    private static bool IsVideoPath(string path) => RecordingWindow.IsSupportedVideoPath(path);
 
     private void AddRecentSafely(string path)
     {
-        try { preferencesStore.AddRecent(path); }
+        try
+        {
+            preferencesStore.AddRecent(path);
+            DesktopJumpList.AddRecent(path);
+        }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException)
         {
             // A video review can outlive the editor that opened it. Persist its
@@ -226,7 +183,13 @@ public sealed partial class MainWindow
     }
 
     private async void OnCaptureClicked(object sender, RoutedEventArgs args) => await NewCaptureAsync();
-    private Task NewCaptureAsync() => recordingCaptureMode ? BeginRecordingCaptureAsync() : CaptureAsync(selectedCaptureKind, false);
+    private Task NewCaptureAsync()
+    {
+        if (busy || closed || closePending || applicationExitPending) return Task.CompletedTask;
+        return recordingCaptureMode ? BeginRecordingCaptureAsync()
+            : CaptureAsync(selectedCaptureKind, scrolling: false, preserveOpenSnip: true);
+    }
+
     private void OnScreenshotModeClicked(object sender, RoutedEventArgs args)
     {
         if (busy || closed || applicationExitPending) return;
@@ -244,7 +207,11 @@ public sealed partial class MainWindow
                 if (mode is not CaptureKind.Rectangle and not CaptureKind.Window) return;
                 selectedRecordingCaptureKind = mode;
             }
-            else selectedCaptureKind = mode;
+            else if (!RememberScreenshotCaptureKind(mode))
+            {
+                UpdateCaptureControls();
+                return;
+            }
             UpdateCaptureControls();
             SetStatus(CaptureModeLabel.Text + " capture ready. Select New to start.");
         }
@@ -339,17 +306,32 @@ public sealed partial class MainWindow
         if (!recordingCaptureMode) await CaptureAsync(CaptureKind.Rectangle, true);
     }
 
-    private async Task CaptureAsync(CaptureKind kind, bool scrolling)
+    private async void OnCaptureOpenSnipsClicked(object sender, RoutedEventArgs args) =>
+        await CaptureAsync(selectedCaptureKind, scrolling: false, includeOpenSnips: true);
+
+    private async Task CaptureAsync(CaptureKind kind, bool scrolling, bool includeOpenSnips = false,
+        int? overrideDelaySeconds = null, bool preserveOpenSnip = false)
     {
         await RunActionAsync(scrolling ? "Choose the scrolling area…" : "Preparing capture…", async () =>
         {
-            bool newWindow = preferences.CaptureInNewWindow && session.HasImage;
+            if (editorWindows.Any(editor => editor != this && !editor.closed && (editor.busy || editor.closePending)))
+            {
+                SetStatus("Finish or cancel the open action in the other Snip Studio window before capturing.");
+                return false;
+            }
+            bool newWindow = session.HasImage && (preserveOpenSnip || preferences.CaptureInNewWindow);
             if (!newWindow && !await ConfirmReplaceAsync()) return false;
+            List<nint> hiddenWindows = CaptureTransientWindowHandles();
+            if (!includeOpenSnips)
+                foreach (MainWindow editor in editorWindows)
+                    if (editor != this && !editor.closed) hiddenWindows.Add(editor.WindowHandle);
             var request = new CaptureRequest
             {
                 OwnerWindow = WindowHandle,
+                KeepOwnerVisible = includeOpenSnips,
+                AdditionalWindowsToHide = hiddenWindows,
                 Kind = kind,
-                DelaySeconds = ScreenshotDelaySeconds,
+                DelaySeconds = overrideDelaySeconds ?? ScreenshotDelaySeconds,
                 UseHdrColorCorrection = preferences.UseHdrColorCorrection,
                 HideTaskbars = preferences.HideTaskbars,
                 KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible,
@@ -359,16 +341,15 @@ public sealed partial class MainWindow
             CapturedImage? capture;
             try
             {
-                if (scrolling) capture = await CaptureCoordinator.CaptureScrollingAsync(request, new Progress<CaptureProgress>(progress => SetStatus(progress.Status)), cancellationToken: ActionToken);
+                if (scrolling)
+                    capture = await CaptureCoordinator.CaptureScrollingAsync(request,
+                        new Progress<CaptureProgress>(progress => SetStatus(progress.Status)),
+                        cancellationToken: ActionToken, previewAppearance: Root.ActualTheme == ElementTheme.Dark
+                            ? ScrollingReviewAppearance.Dark : ScrollingReviewAppearance.Light);
                 else capture = await CaptureCoordinator.CaptureAsync(request, ActionToken);
             }
             finally { if (!closed) { AppWindow.Show(); Activate(); } }
             if (capture is null) { SetStatus("Capture canceled. Your previous snip is kept."); return false; }
-            if (capture.StoppedEarly)
-            {
-                var dialog = new ContentDialog { XamlRoot = Root.XamlRoot, Title = "Keep this partial scrolling capture?", Content = capture.Warning, PrimaryButtonText = "Keep capture", CloseButtonText = "Discard", DefaultButton = ContentDialogButton.Close };
-                if (await dialog.ShowAsync() != ContentDialogResult.Primary) { SetStatus("Partial capture discarded. Your previous snip is kept."); return false; }
-            }
             string captureName = "Screenshot " + DateTime.Now.ToString("yyyy-MM-dd HHmmss");
             MainWindow capturedEditor = this;
             EditorSession.CaptureBaseline baseline;
@@ -417,9 +398,19 @@ public sealed partial class MainWindow
                 }
                 catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or ArgumentException) { feedback += " Original capture could not be saved automatically: " + exception.Message; }
             }
-            SetStatus((scrolling ? $"Captured {capture.FrameCount} scrolling frames. " : "Capture ready. ") + feedback + " " + ToolInstruction());
+            if (newWindow) SetStatus("New capture opened in a separate window. Your current snip is kept.");
+            if (!capturedEditor.closed)
+                capturedEditor.SetStatus((scrolling ? $"Captured {capture.FrameCount} scrolling frames. " : "Capture ready. ") +
+                    feedback + " " + capturedEditor.ToolInstruction());
             return true;
         }, commitDraft: false);
+    }
+
+    private static List<nint> CaptureTransientWindowHandles()
+    {
+        List<nint> windows = OpenOcrToolWindowHandles().ToList();
+        if (settingsWindow is { } settings) windows.Add(settings.WindowHandle);
+        return windows;
     }
 
     private static void WriteOriginalCapture(string path, byte[] png)
@@ -445,40 +436,66 @@ public sealed partial class MainWindow
     private async Task BeginRecordingCaptureAsync()
     {
         if (busy || closed || applicationExitPending) return;
+        if (TryActivateRecordingCapture()) return;
         recordingCaptureMode = true;
         UpdateCaptureControls();
         CaptureRectangle? selectedRegion = null;
-        bool selectedArea = await RunActionAsync("Choose the recording area. Escape cancels.", async () =>
+        bool editorWasVisible = AppWindow.IsVisible;
+        bool handedOff = false;
+        selectingRecordingCapture = true;
+        try
         {
-            CaptureRectangle? selected;
-            try
+            bool selectedArea = await RunActionAsync("Choose the recording area. Escape cancels.", async () =>
             {
-                selected = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
+                // Keep the editor out of the handoff to the recorder. The coordinator
+                // preserves the visibility of the capture owner it receives.
+                if (editorWasVisible) AppWindow.Hide();
+                selectedRegion = await CaptureCoordinator.SelectRecordingRegionAsync(new CaptureRequest
                 {
                     OwnerWindow = WindowHandle, Kind = selectedRecordingCaptureKind,
+                    AdditionalWindowsToHide = CaptureTransientWindowHandles(),
                     DelaySeconds = 0, HideTaskbars = preferences.HideTaskbars,
                     KeepPrimaryTaskbarVisible = preferences.KeepPrimaryTaskbarVisible
                 }, ActionToken);
-            }
-            finally { if (!closed) { AppWindow.Show(); Activate(); } }
-            ActionToken.ThrowIfCancellationRequested();
-            if (selected is not { } region)
-            {
+                ActionToken.ThrowIfCancellationRequested();
+                if (selectedRegion.HasValue) return true;
                 SetStatus("Recording canceled. Your previous snip is kept.");
                 return false;
-            }
-            selectedRegion = region;
-            return true;
-        }, commitDraft: false);
-        // Activate the recording controls after the main action restores any
-        // inline-text focus. Choosing video never applies or discards that draft.
-        if (selectedArea && selectedRegion is { } selected && !closed && !applicationExitPending &&
-            OpenRecordingWindow(initialRegion: new(selected.X, selected.Y, selected.Width, selected.Height), captureWorkflow: true))
-            SetStatus("Recording area selected. Choose audio, then Start recording. Your previous snip is kept.");
+            }, commitDraft: false);
+            if (selectedArea && selectedRegion is { } selected && !closed && !applicationExitPending)
+                handedOff = OpenRecordingWindow(initialRegion: new(selected.X, selected.Y, selected.Width, selected.Height),
+                    captureWorkflow: true, restoreEditorOnClose: editorWasVisible);
+        }
+        finally
+        {
+            selectingRecordingCapture = false;
+            if (!handedOff && editorWasVisible) RestoreEditorAfterRecording();
+        }
+    }
+
+    private bool TryActivateRecordingCapture()
+    {
+        if (recordingCaptureWindow is not { IsClosed: false } window) return false;
+        window.ActivateRecordingCapture();
+        return true;
+    }
+
+    private void RestoreEditorAfterRecording()
+    {
+        if (closed) return;
+        if (applicationExitPending)
+        {
+            restoreEditorAfterCanceledExit = true;
+            return;
+        }
+        AppWindow.Show();
+        Activate();
+        Viewport.RestoreTextFocus();
     }
 
     private void OnVideoReviewClicked(object sender, RoutedEventArgs args) { if (!busy) OpenRecordingWindow(); }
-    private bool OpenRecordingWindow(string? path = null, RecordingRegion? initialRegion = null, bool captureWorkflow = false)
+    private bool OpenRecordingWindow(string? path = null, RecordingRegion? initialRegion = null, bool captureWorkflow = false,
+        bool restoreEditorOnClose = false)
     {
         if (closed || applicationExitPending) return false;
         RecordingWindow window;
@@ -486,12 +503,14 @@ public sealed partial class MainWindow
         catch (Exception exception) when (exception is not OutOfMemoryException and not AccessViolationException) { ReportUnexpectedFailure(exception); return false; }
         window.ConfigureDefaults(preferences.DefaultMicrophone, preferences.DefaultSystemAudio, preferences.RecordingFolder,
             preferences.DefaultMicrophoneDeviceId, preferences.DefaultSystemAudioDeviceId, preferences.AutoCopyRecordingChanges,
-            preferences.AutoSaveOriginalRecordings, preferences.AskSaveEditedRecordings);
+            preferences.AutoSaveOriginalRecordings, preferences.AskSaveEditedRecordings,
+            hideTaskbars: preferences.HideTaskbars, keepPrimaryTaskbarVisible: preferences.KeepPrimaryTaskbarVisible);
         recordingWindows.Add(window);
         allRecordingWindows.Add(window);
-        window.RecordingStateChanged += (_, active) =>
+        if (captureWorkflow) recordingCaptureWindow = window;
+        else window.RecordingStateChanged += (_, active) =>
         {
-            if (closed) return;
+            if (closed || applicationExitPending || recordingCaptureWindow is { IsClosed: false }) return;
             if (active) AppWindow.Hide(); else if (!recordingWindows.Any(candidate => candidate.IsRecording)) { AppWindow.Show(); Activate(); }
         };
         window.RecordingSaved += (_, savedPath) => AddRecentSafely(savedPath);
@@ -499,7 +518,13 @@ public sealed partial class MainWindow
         {
             allRecordingWindows.Remove(window);
             recordingWindows.Remove(window);
-            if (!closed && !recordingWindows.Any(candidate => candidate.IsRecording)) AppWindow.Show();
+            if (recordingCaptureWindow == window)
+            {
+                recordingCaptureWindow = null;
+                if (restoreEditorOnClose) RestoreEditorAfterRecording();
+            }
+            else if (!closed && !applicationExitPending && recordingCaptureWindow is null &&
+                !recordingWindows.Any(candidate => candidate.IsRecording)) AppWindow.Show();
         };
         window.Activate();
         return true;
@@ -543,9 +568,9 @@ public sealed partial class MainWindow
                     selectedText = ocrSelection?.Text ?? "";
                 if (selectedText.Length > 0)
                 {
-                    SetClipboardText(selectedText, intent);
-                    SetStatus("Selected text copied.");
-                    return true;
+                    bool copiedText = SetClipboardText(selectedText, intent);
+                    SetStatus(copiedText ? "Selected text copied." : "Copy skipped because a newer clipboard action is active.");
+                    return copiedText;
                 }
             }
             if (Viewport.IsTextEditing)
@@ -553,8 +578,11 @@ public sealed partial class MainWindow
                 CommitTextDraft();
                 await RefreshPreviewAsync(resetView: false, allowAutoCopy: false);
             }
-            var image = await session.RenderPreviewAsync(ActionToken);
-            bool copied = await DesktopImageActions.CopyPngAsync(image.PngBytes, intent, () => !closed && session.Revision == image.Revision);
+            CancellationToken cancellationToken = ActionToken;
+            var image = await session.RenderPreviewAsync(cancellationToken);
+            bool copied = await DesktopImageActions.CopyPngAsync(image.PngBytes, intent, () =>
+                !cancellationToken.IsCancellationRequested && !closed && session.Revision == image.Revision);
+            if (!copied) cancellationToken.ThrowIfCancellationRequested();
             if (!closed) SetStatus(copied ? "Image copied to the clipboard." : "Copy skipped because a newer clipboard action is active.");
             return copied;
         }, commitDraft: false);
@@ -567,7 +595,7 @@ public sealed partial class MainWindow
     {
         if (!session.HasImage) return false;
         var image = await session.RenderPreviewAsync(ActionToken);
-        bool printed = DesktopPrintingService.PrintImage(image.PngBytes, WindowHandle);
+        bool printed = await WindowsPrintSession.PrintAsync(Root, WindowHandle, image.PngBytes, ActionToken);
         SetStatus(printed ? "Image sent to the selected printer." : "Print canceled. Your image is kept."); return printed;
     });
 
@@ -583,6 +611,7 @@ public sealed partial class MainWindow
         ResetDocumentSelection();
         if (Viewport.IsTextEditing) Viewport.EndTextEdit();
         displayPath = null;
+        currentImageSaveTarget = null;
         suggestedName = name;
         return session.GetCaptureBaseline();
     }
@@ -600,7 +629,7 @@ public sealed partial class MainWindow
         return opened ? baseline : null;
     }
 
-    private async void OnUpdatesClicked(object sender, RoutedEventArgs args) => await RunActionAsync("Checking release information…", async () => { await DesktopDialogs.ShowUpdatesAsync(Root.XamlRoot); return true; }, commitDraft: false);
+    private async void OnUpdatesClicked(object sender, RoutedEventArgs args) => await OpenUpdatesAsync();
     private void OnFullScreenClicked(object sender, RoutedEventArgs args) => ToggleFullScreen();
     private void ToggleFullScreen()
     {
@@ -701,8 +730,9 @@ public sealed partial class MainWindow
     }
 
     private static bool CanExitWithoutPrompt() =>
+        settingsWindow?.CanCloseWithoutPrompt != false &&
         editorWindows.All(editor => editor.closed || (!editor.busy && !editor.closePending &&
-            !editor.session.IsDirty && !editor.Viewport.IsTextEditing)) &&
+            !editor.session.IsDirty && !editor.Viewport.IsTextEditing && !editor.HasPendingTextToolWork)) &&
         allRecordingWindows.All(recording => recording.IsClosed || recording.CanCloseWithoutPrompt);
 
     private Task RequestApplicationExitAsync() => RequestApplicationExitAsync(this, silent: false);
@@ -710,7 +740,14 @@ public sealed partial class MainWindow
     private static async Task RequestApplicationExitAsync(MainWindow? initiator, bool silent)
     {
         if (applicationExitPending || silent && !CanExitWithoutPrompt()) return;
+        if (settingsWindow is { CanCloseWithoutPrompt: false } pendingSettings)
+        {
+            pendingSettings.ShowPendingExit();
+            initiator?.SetStatus("Save or cancel Settings before exiting Snip Studio.");
+            return;
+        }
         MainWindow[] editors = editorWindows.Where(editor => !editor.closed).ToArray();
+        if (HasBlockingTextReview()) return;
         if (editors.Any(editor => editor.busy || editor.closePending))
         {
             initiator?.desktopIntegration?.RestoreWindow();
@@ -730,9 +767,6 @@ public sealed partial class MainWindow
                 if (editor.session.IsDirty || editor.Viewport.IsTextEditing)
                 {
                     if (silent) return;
-                    editor.AppWindow.Show();
-                    if (editor.AppWindow.Presenter is OverlappedPresenter presenter) presenter.Restore();
-                    editor.Activate();
                     bool confirmed = await editor.RunActionAsync("Review changes before exiting…", editor.ConfirmApplicationExitAsync, commitDraft: false);
                     if (!confirmed) return;
                 }
@@ -741,13 +775,41 @@ public sealed partial class MainWindow
             if (reviewed.Any(item => !item.Editor.closed && (item.Editor.busy || item.Editor.closePending ||
                 item.Editor.Viewport.CaptureTextDraft() != item.Draft || item.Editor.session.Revision != item.Revision)))
             { initiator?.SetStatus("An editor changed while exit was being reviewed. Your windows are kept; review them before exiting again."); return; }
+            if (HasBlockingTextReview()) return;
+            if (settingsWindow is { CanCloseWithoutPrompt: false } changedSettings)
+            {
+                if (!silent)
+                {
+                    changedSettings.ShowPendingExit();
+                    initiator?.SetStatus("Save or cancel Settings before exiting Snip Studio.");
+                }
+                return;
+            }
+            settingsWindow?.Close();
             foreach (MainWindow editor in editors.Where(editor => !editor.closed))
             { editor.explicitExit = true; editor.allowClose = true; editor.Close(); }
         }
         finally
         {
             applicationExitPending = false;
-            foreach (MainWindow editor in editorWindows.ToArray()) if (!editor.closed) editor.UpdateCommands();
+            foreach (MainWindow editor in editorWindows.ToArray())
+            {
+                if (editor.closed) continue;
+                if (editor.restoreEditorAfterCanceledExit)
+                {
+                    editor.restoreEditorAfterCanceledExit = false;
+                    if (!editor.AppWindow.IsVisible) editor.RestoreEditorAfterRecording();
+                }
+                editor.UpdateCommands();
+            }
+        }
+
+        bool HasBlockingTextReview()
+        {
+            MainWindow? editor = editors.FirstOrDefault(window => !window.closed && window.HasPendingTextToolWork);
+            if (editor is null) return false;
+            if (!silent) editor.ShowPendingTextToolWork();
+            return true;
         }
     }
 }

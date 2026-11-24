@@ -9,58 +9,121 @@ namespace SnipStudio.WinUI;
 public static class DesktopImageActions
 {
     private const int MaximumBytes = 128 * 1024 * 1024;
+    private const int ClipboardCannotOpen = unchecked((int)0x800401D0);
+    private const int ClipboardCannotClose = unchecked((int)0x800401D4);
+    private const int WindowsBusy = unchecked((int)0x800700AA);
+    private static readonly int[] ClipboardRetryDelays = { 40, 80, 140, 220, 320 };
     private static readonly Dictionary<nint, SharePayload> shares = new();
     private static readonly Guid ManagerInterface = new("A5CAEE9B-8708-49D1-8D36-67D25A8DA00C");
+    private static readonly object clipboardIntentGate = new();
     private static ClipboardPayload? pendingClipboard;
-    private static long clipboardWriteIntent;
+    private static ClipboardWriteRequest? currentClipboardWrite;
 
-    internal static long BeginClipboardWrite() => Interlocked.Increment(ref clipboardWriteIntent);
-    internal static bool IsCurrentClipboardWrite(long intent) => intent == Interlocked.Read(ref clipboardWriteIntent);
+    internal static long BeginClipboardWrite()
+    {
+        lock (clipboardIntentGate)
+        {
+            long intent = (currentClipboardWrite?.Intent ?? 0) + 1;
+            Volatile.Write(ref currentClipboardWrite, new ClipboardWriteRequest(intent, ObserveClipboard()));
+            return intent;
+        }
+    }
+
+    internal static bool IsCurrentClipboardWrite(long intent) => Volatile.Read(ref currentClipboardWrite)?.Intent == intent;
 
     internal static async Task<bool> CopyPngAsync(byte[] png, long intent, Func<bool>? isCurrent = null)
     {
         Validate(png);
+        ClipboardWriteRequest? request = Volatile.Read(ref currentClipboardWrite);
+        if (request is null || request.Intent != intent) return false;
+        ClipboardObservation observed = request.Clipboard;
+        bool CanCopy() => IsCurrentClipboardWrite(intent) && isCurrent?.Invoke() != false && ObserveClipboard() == observed;
+        if (!CanCopy()) return false;
+
         InMemoryRandomAccessStream stream = await CreateStreamAsync(png);
-        if (!IsCurrentClipboardWrite(intent) || isCurrent?.Invoke() == false)
-        {
-            stream.Dispose();
-            return false;
-        }
-        var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
-        data.Properties.Title = "Snip Studio image";
-        data.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
-        // An explicit copy remains available to paste, but is not offered for
-        // Windows clipboard history or cross-device roaming by this application.
-        var payload = new ClipboardPayload(stream, data);
-        bool attempted = false;
+        bool submitted = false, accepted = false, persisted = false;
+        ClipboardPayload? payload = null;
         try
         {
-            attempted = true;
-            if (!Clipboard.SetContentWithOptions(data, new ClipboardContentOptions { IsAllowedInHistory = false, IsRoamable = false }))
-                throw new InvalidOperationException("Windows could not copy the image. Your document is kept; try Copy again.");
-            ClipboardPayload? previous = pendingClipboard;
-            pendingClipboard = payload;
-            previous?.Dispose();
-            Clipboard.Flush();
-            // Persistent success has copied the data. On a Flush failure the
-            // clipboard can still own this delayed payload, so retain its
-            // independent bytes until our next successful replacement instead
-            // of leaving a closed stream behind for the next paste. This is a
-            // bounded one-payload lease; other clipboard providers may keep OLE
-            // references even after an uncertain persistence failure.
-            if (ReferenceEquals(pendingClipboard, payload)) pendingClipboard = null;
-            payload.Dispose();
-            return true;
+            if (!CanCopy()) return false;
+            var data = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
+            data.Properties.Title = "Snip Studio image";
+            data.SetBitmap(RandomAccessStreamReference.CreateFromStream(stream));
+            payload = new ClipboardPayload(stream, data);
+            // Keep clipboard history and cross-device roaming disabled for the
+            // image, including after a temporarily busy clipboard is retried.
+            var options = new ClipboardContentOptions { IsAllowedInHistory = false, IsRoamable = false };
+            ClipboardWriteResult result = await RetryClipboardWriteAsync(CanCopy, () =>
+            {
+                if (!accepted)
+                {
+                    submitted = true;
+                    if (!Clipboard.SetContentWithOptions(data, options)) return false;
+                    accepted = true;
+                    observed = ObserveClipboard();
+                    // Windows can still own a delayed image after a Flush
+                    // failure. Keep one accepted payload alive until it is
+                    // persisted or superseded by another accepted image.
+                    ClipboardPayload? previous = pendingClipboard;
+                    pendingClipboard = payload;
+                    previous?.Dispose();
+                }
+
+                // Flush the accepted payload in place, never submit it again.
+                Clipboard.Flush();
+                persisted = true;
+                return true;
+            }, Task.Delay);
+            if (result == ClipboardWriteResult.Busy)
+                throw new InvalidOperationException(accepted
+                    ? "Windows accepted the image but could not finish saving it to the clipboard."
+                    : "The Windows clipboard stayed busy. Try Copy image again.");
+            return result == ClipboardWriteResult.Copied;
         }
         finally
         {
-            // A SetContent failure can leave OLE owning the package. Without a
-            // successful persistence result, let native references release the
-            // independent stream naturally; do not force-close it for a late
-            // consumer. Failures before submission own no external references.
-            if (!attempted) payload.Dispose();
+            if (persisted && ReferenceEquals(pendingClipboard, payload)) pendingClipboard = null;
+            // An uncertain native failure can leave a delayed reference.
+            // Dispose only before submission or after confirmed persistence.
+            if (!submitted || persisted)
+            {
+                if (payload is null) stream.Dispose();
+                else payload.Dispose();
+            }
         }
     }
+
+    private static async Task<ClipboardWriteResult> RetryClipboardWriteAsync(
+        Func<bool> canCopy, Func<bool> tryWrite, Func<int, Task> delay)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            if (!canCopy()) return ClipboardWriteResult.Superseded;
+            try
+            {
+                if (tryWrite()) return ClipboardWriteResult.Copied;
+            }
+            catch (Exception exception) when (exception.HResult is ClipboardCannotOpen or ClipboardCannotClose or WindowsBusy)
+            {
+                // The Windows clipboard or OLE is temporarily unavailable.
+            }
+            if (!canCopy()) return ClipboardWriteResult.Superseded;
+            if (attempt == ClipboardRetryDelays.Length) return ClipboardWriteResult.Busy;
+            // The foreground editor's STA can process input between attempts.
+            await delay(ClipboardRetryDelays[attempt]);
+        }
+    }
+
+    private enum ClipboardWriteResult { Copied, Superseded, Busy }
+    private sealed record ClipboardWriteRequest(long Intent, ClipboardObservation Clipboard);
+    private readonly record struct ClipboardObservation(uint Sequence, nint Owner);
+    private static ClipboardObservation ObserveClipboard() => new(GetClipboardSequenceNumber(), GetClipboardOwner());
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern uint GetClipboardSequenceNumber();
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    private static extern nint GetClipboardOwner();
 
     public static async Task SharePngAsync(byte[] png, nint hwnd)
     {

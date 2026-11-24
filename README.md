@@ -1,12 +1,18 @@
 <img src="assets/app-256.png" width="72" alt="Snip Studio icon">
 
-# Snip Studio — WinUI 3 migration
+# Snip Studio
 
-Snip Studio brings capture, image editing, text extraction, recording and video review into a native WinUI 3 desktop interface. This separate Automation Forge repository preserves the history of [stable Snip Studio](https://github.com/jaydawg473/Snip-Studio), starting from 0.6.24 at `f7e4e778f2af7c73c22eec94c46a4b70180e68cd`.
+Snip Studio brings capture, image editing, text extraction, recording and video review into a native WinUI 3 desktop interface. Stable releases use the [original Snip Studio repository](https://github.com/jaydawg473/Snip-Studio).
 
-**Current source: `0.7.0-preview.4`, file version `0.7.0.4`. Production release status: INSUFFICIENT EVIDENCE.** Current build/publish, 1,673 component assertions, 7 local translation checks, 47 generated-video checks and static installer/ZIP verification passed. The source uses a narrow selected-shape icon dropdown, a simple mode hint and image-only tools/zoom after opening an image. Recording follows mode → New → area, with a 460 × 128-DIP icon bar and Options flyout. Full native/device and installation acceptance remain incomplete. See [verification, artifact hashes and reference limits](VERIFICATION-WINUI.md).
+## Current release source
 
-The requested layout restoration preserves the product's identity and existing workflows. It does not claim improved OCR accuracy or faster capture/recording. The supplied dense filename example retains a measured recognition limit shared with stable 0.6.24; no identifiers are guessed or silently corrected.
+The source version is **0.7.0** (file version **0.7.0.0**). **Check for updates** offers releases from the original Snip Studio update channel. Use the validation and release notes alongside a signed package to identify its verified source and test results.
+
+## Preview.4 reference
+
+**Historical reference: `0.7.0-preview.4`, file version `0.7.0.4`.** That build passed 1,673 component assertions, 7 local translation checks, 47 generated-video checks and static installer/ZIP verification. Its layout introduced the selected-shape icon dropdown, a mode hint and image-only tools and zoom after opening an image. See [the preview.4 verification record](VERIFICATION-WINUI.md).
+
+The layout reference preserves the product's existing controls and workflows. Consult each signed build's validation for its OCR, capture and recording results.
 
 ## Available workflows in the current source
 
@@ -16,28 +22,29 @@ The requested layout restoration preserves the product's identity and existing w
 | Image editing | Open/Paste, multiple editor windows, Select and Move view, Pen, Highlighter, Line, Arrow, Rectangle, Ellipse and emoji. Selected-object properties, resize/move, annotation erasing, crop, source-area removal, Undo and Redo. |
 | Editable text | On-canvas text drafts, font family, image-pixel size, color, bold, italic and underline. Apply/Cancel retains a clear draft boundary. |
 | OCR and translation | Local Windows OCR, original recognition output, selectable rows, source-style conversion and recognized-word selection. Conversion selects Text. Translation offers local processing or an explicitly chosen HTTPS server, with reviewed rows before applying. Font recovery remains approximate; review identifiers, leading zeros and duplicate rows. |
-| View | Fit, zoom presets, pan, full screen and toolbar overflow. Resize to snip is enabled by default with a Settings choice. Source sizing preserves manual window sizing and clamps automatic sizing/minimums to the work area. Preview.4 minimum tracking and Settings restoration await native checks; earlier autosize/125% observations belong to preview.3. |
-| Recording and video | Camera/video buttons select mutually exclusive modes. In video mode, New/Ctrl+N selects Rectangle/Window; cancel keeps the snip. Screenshot delay is disabled in video mode. The source icon bar targets 460 × 128 DIP with Start or Stop, timer, microphone/system-audio icon toggles and Options. Its flyout does not enlarge the bar. Start saves to a unique configured-folder MP4 and minimizes; reopen from the taskbar to Stop and review. Open video remains separate. Current native/audio acceptance is pending. |
-| Files and Windows | Flattened PNG/JPEG/BMP/PDF Save As, image/text clipboard actions, Windows Share, printing, recent snips/recordings, external-editor working copies, keyboard shortcuts and Help. Settings offer separate preview tray, startup and global-shortcut choices. |
-| Recovery and release information | Cancellation and failure feedback, dirty-document prompts, atomic image/video-copy writes and recoverable preview preferences. Manual update checks read this migration repository's release information; they do not download or execute an installer. |
+| View | Fit, zoom presets, pan, full screen and toolbar overflow. Resize to snip is enabled by default with a Settings choice. Source sizing preserves manual window sizing and clamps automatic sizing/minimums to the work area. |
+| Recording and video | Camera and video modes share New/Ctrl+N. In video mode, choose a rectangle or window, adjust the area and audio, then select Start. The recording bar keeps Stop available and positions the controls outside the recorded area when space permits. Stop and save opens the MP4 for review, trimming or export. Open video is also available from the file menu. |
+| Files and Windows | Flattened PNG/JPEG/BMP/PDF Save As, image/text clipboard actions, Windows Share, printing, recent snips/recordings, external-editor working copies, keyboard shortcuts and Help. Settings offer tray, startup and global-shortcut choices. |
+| Recovery and release information | Cancellation and failure feedback, dirty-document prompts, atomic image/video-copy writes and recoverable preferences. Update checks read the original repository and offer the verified release URL for a browser download. |
 
 The main editor, recording/video review and settings use WinUI controls. Temporary capture selectors, scrolling controls and recording boundaries still use dedicated WinForms STA overlays. The renderer retains Windows GDI+/RichEdit dependencies. This is a Windows migration with an explicit hybrid boundary; it is not an all-WinUI rewrite.
 
 The final bundle excludes six unused upstream shell benchmark utilities. All 107 retained model/runtime/license hashes and model definitions are unchanged. The backend keeps strict manifest, file-count, signature, hash, path and lease checks; translation passed after repinning. No shell utilities are shipped or were executed. The earlier 745-file candidate is held and superseded.
 
-## Using the preview
+## Using Snip Studio
 
-Use a signed candidate whose included validation, source/signature receipts and hash manifest identify its exact bytes and audit results. Extract the complete portable folder and launch `SnipStudio.WinUI3.Preview.exe`, keeping the adjacent runtime, resources, translation data and notices together. Verify valid timestamped Automation Forge signatures on our executables and valid original publisher signatures on bundled third-party binaries before execution. This source README does not predeclare a package audit result.
+Use a signed package with its validation and hash manifest. For a portable build, extract the complete folder and open `Snip Studio.exe` with the adjacent runtime, resources, translation data and notices. The application and Setup carry timestamped Automation Forge signatures. Bundled third-party binaries with publisher signatures retain those signatures.
 
-The preview has its own application identity and stores preferences at `%LocalAppData%\SnipStudio.WinUI3\preferences.json`. Tray behavior, sign-in startup and global shortcuts are deliberate Settings choices. The stable application and its preferences remain separate. Saving produces a flattened image or PDF; editable objects and Undo history remain in the open editor rather than in the exported file.
+Snip Studio stores preferences at `%LocalAppData%\SnipStudio\preferences.json`. Legacy `preferences.xml` is kept for recovery and Settings import. Tray behavior, sign-in startup and global shortcuts are available in Settings. Use Save editable snip to reopen the image and continue editing its annotations. PNG, JPEG, BMP and PDF exports flatten the image.
 
-Images, OCR, drawing and recording are processed locally. Sharing and a configured translation server are explicit actions; the server receives selected text only when Translate is chosen. Manual update checks contact GitHub. Local startup diagnostics are bounded and redact known application/profile paths; they do not deliberately record images, clipboard contents or document text.
+Images, OCR, drawing and recording are processed locally. A configured translation server receives selected text when you choose Translate. Update checks contact GitHub. Settings controls automatic checks. Startup diagnostics record fixed stages, exception types, error codes and method names.
 
-The preceding signed UI candidate (code9a5f7bc) reopened and Open displayed a native file chooser. UI source is unchanged by the bundle cleanup, but final c642955 binaries were not launched while the user continued desktop work. Filename entry failed in the desktop tool, then another foreground app appeared, so inputs stopped while the user continued desktop work. Full file opening, recording-bar/flyout, Settings and hardware acceptance remain unverified. Static installer/ZIP reconciliation passed without executing Setup or Uninstall; no installation or public GitHub Release was performed. Local artifacts are under `artifacts/release-0.7.0-preview.4`. See [verification](VERIFICATION-WINUI.md) for exact scope and hashes.
+The signed local package includes `VALIDATION.md` for the exact tests, hardware and live workflow coverage, and installation status of that candidate.
 
 ## Source and development
 
 - [Migration design and remaining work](MIGRATION.md)
+- [Snip Studio 0.7.0 release notes](release-notes-0.7.0.md)
 - [Preview.4 release notes](release-notes-0.7.0-preview.4.md)
 - [Native WinUI frontend](src/SnipStudio.WinUI)
 - [Windows backend adapters](src/SnipStudio.Backend)

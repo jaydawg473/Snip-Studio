@@ -113,6 +113,19 @@ namespace SnipStudio
         }
         internal static string GetPlainText(string rtf) { return Metadata(rtf).Text; }
 
+        internal static bool TryReplaceUniformSingleLine(string rtf, string text, out string updated)
+        {
+            updated = null;
+            if (text.Contains("\r") || text.Contains("\n")) return false;
+            RichTextBox box = Load(rtf);
+            if (box.Text.Contains("\r") || box.Text.Contains("\n") || !RichEditFormatting.TryReplaceUniformText(box, text))
+                return false;
+            updated = box.Rtf;
+            RememberMetadata(updated, box);
+            box.ClearUndo();
+            return true;
+        }
+
         // Loading a complete RTF document and inserting its SelectedRtf do not
         // have identical paragraph semantics. Preview the actual insertion in
         // a detached native control, including the target selection/context,
@@ -165,7 +178,9 @@ namespace SnipStudio
             if (layouts.TryGetValue(key, out entry)) { entry.Used = ++clock; return entry; }
             ValidateRtf(rtf);
 
-            RichTextBox box = Load(rtf);
+            // A matching Rtf property can skip stream-in on a reused control.
+            // Measure the saved RTF so an evicted layout renders the same way.
+            RichTextBox box = Load(rtf, forceStreamIn: true);
             int height;
             float dpiX, dpiY;
             using (Bitmap probe = new Bitmap(1, 1, PixelFormat.Format32bppRgb))
@@ -407,10 +422,11 @@ namespace SnipStudio
             }
             return editor;
         }
-        private static RichTextBox Load(string rtf)
+        private static RichTextBox Load(string rtf, bool forceStreamIn = false)
         {
             ValidateRtf(rtf);
             RichTextBox box = Editor();
+            if (forceStreamIn) box.Clear();
             box.Rtf = rtf;
             if (box.TextLength > MaximumTextLength) throw new ArgumentException("Use at most 16,000 characters in one text note.", "rtf");
             box.ClearUndo(); RememberMetadata(rtf, box); return box;

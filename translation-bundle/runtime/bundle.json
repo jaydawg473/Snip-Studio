@@ -33,7 +33,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/deen/deen.student.tiny11.v2.9f70fcb17bf9572d.tar.gz",
-      "archiveSha256": "9f70fcb17bf9572d969aee69ed34c5d8b54c896c60dfe057da37f2e51d46895f"
+      "archiveSha256": "9f70fcb17bf9572d969aee69ed34c5d8b54c896c60dfe057da37f2e51d46895f",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140837,
+        "lex.s2t.bin": 5047568,
+        "vocab.deen.spm": 784269
+      }
     },
     {
       "source": "en",
@@ -62,7 +67,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/deen/ende.student.tiny11.v2.93821e13b3c511b5.tar.gz",
-      "archiveSha256": "93821e13b3c511b5390f9fb79f476f738d66e3656889bf076e906897e614fed2"
+      "archiveSha256": "93821e13b3c511b5390f9fb79f476f738d66e3656889bf076e906897e614fed2",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140754,
+        "lex.s2t.bin": 3062492,
+        "vocab.deen.spm": 797501
+      }
     },
     {
       "source": "es",
@@ -92,7 +102,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/esen/esen.student.tiny11.v1.09576f06d0ad805e.tar.gz",
-      "archiveSha256": "09576f06d0ad805e6851defdd63434840729c3bcc5cf19db732f00298dcdb5d9"
+      "archiveSha256": "09576f06d0ad805e6851defdd63434840729c3bcc5cf19db732f00298dcdb5d9",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140755,
+        "lex.s2t.bin": 3860888,
+        "vocab.esen.spm": 825463
+      }
     },
     {
       "source": "en",
@@ -122,7 +137,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/esen/enes.student.tiny11.v1.a7203a8f8e9daea8.tar.gz",
-      "archiveSha256": "a7203a8f8e9daea85698d5912f25cca6fecae3e4097b188a0c31ed2d58e13c61"
+      "archiveSha256": "a7203a8f8e9daea85698d5912f25cca6fecae3e4097b188a0c31ed2d58e13c61",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140755,
+        "lex.s2t.bin": 3347104,
+        "vocab.esen.spm": 825463
+      }
     },
     {
       "source": "fr",
@@ -151,7 +171,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/fren/fren.student.tiny11.v1.dccea16d03c0a389.tar.gz",
-      "archiveSha256": "dccea16d03c0a3897b4ce085db676ae4bb2777f7e2b1755c04c0f92efa894b01"
+      "archiveSha256": "dccea16d03c0a3897b4ce085db676ae4bb2777f7e2b1755c04c0f92efa894b01",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140961,
+        "lex.s2t.bin": 8818768,
+        "vocab.fren.spm": 831382
+      }
     },
     {
       "source": "en",
@@ -180,7 +205,12 @@
         "quiet-translation": true
       },
       "archiveUrl": "https://data.statmt.org/bergamot/models/fren/enfr.student.tiny11.v1.805d112122af03d0.tar.gz",
-      "archiveSha256": "805d112122af03d0fe2769eacaaaf5a9eac2c4b97e862a5b2cf0eb95862a7efb"
+      "archiveSha256": "805d112122af03d0fe2769eacaaaf5a9eac2c4b97e862a5b2cf0eb95862a7efb",
+      "expandedBytes": {
+        "model.intgemm.alphas.bin": 17140961,
+        "lex.s2t.bin": 7886500,
+        "vocab.fren.spm": 831382
+      }
     }
   ],
   "licenseReview": {
@@ -260,11 +290,11 @@
     },
     {
       "path": "de-en-tiny/lex.s2t.bin",
-      "sha256": "2f7c0f7bbce97ae5b52454074a892ba7b7610fb98e3c5d341e4ca79f0850c4de"
+      "sha256": "8f15628dcfcb1b9f848b112af867f5f8cfae34ecda56965e28b9d9f4c9bfcf28"
     },
     {
       "path": "de-en-tiny/model.intgemm.alphas.bin",
-      "sha256": "1980225d00dc5645491777accff5b3c9d20b92eff67a25135f1cf8fe2ed8fb8f"
+      "sha256": "ae8fc5e8b58ffa5482302393b7f55c15b2af793f6eef29084362bf8d188a2c8c"
     },
     {
       "path": "de-en-tiny/model_info.json",
@@ -272,7 +302,7 @@
     },
     {
       "path": "de-en-tiny/vocab.deen.spm",
-      "sha256": "417668f2ed297970febafb5b079a9d5ebc4ed0b3550ac8386d67a90473a09bd7"
+      "sha256": "7dc23ae73eebf7cf0e3526463431b83b89800704a697cb13dab9c6f0d62b964a"
     },
     {
       "path": "en-de-tiny/catalog-entry.yml",
@@ -284,11 +314,11 @@
     },
     {
       "path": "en-de-tiny/lex.s2t.bin",
-      "sha256": "764797d075f0642c0b079cce6547348d65fe4e92ac69fa6a8605cd8b53dacb3f"
+      "sha256": "261be8a0a554b0bc27165f90120c861692d3f8e4efd3462296ca0a728894490c"
     },
     {
       "path": "en-de-tiny/model.intgemm.alphas.bin",
-      "sha256": "e6bf0f6cdd8b96340b93840b28b5fbcd4703f775edd38e9c96793596d9194199"
+      "sha256": "59b54ff63dd44a2a381297610ee3c20503f07c9dbe84288ddc329e5fcae34523"
     },
     {
       "path": "en-de-tiny/model_info.json",
@@ -296,7 +326,7 @@
     },
     {
       "path": "en-de-tiny/vocab.deen.spm",
-      "sha256": "bc8f8229933d8294c727f3eab12f6f064e7082b929f2d29494c8a1e619ba174c"
+      "sha256": "34ea7e83f2103439e01acda21b802cad4615a46a0e1d83e0b9a1fd4a33a11ee5"
     },
     {
       "path": "en-es-tiny/catalog-entry.yml",
@@ -308,11 +338,11 @@
     },
     {
       "path": "en-es-tiny/lex.s2t.bin",
-      "sha256": "3a113d713dec3cf1d12bba5b138ae616e28bba4bbc7fe7fd39ba145e26b86d7f"
+      "sha256": "f8e67d687046d5ad07748f58645a41d47632baa3ad791aa715263f9f629a232c"
     },
     {
       "path": "en-es-tiny/model.intgemm.alphas.bin",
-      "sha256": "fa7460037a3163e03fe1d23602f964bff2331da6ee813637e092ddf37156ef53"
+      "sha256": "89f42f08c0a37513507254d336448b278f02d366d60a12377beb7390ac744849"
     },
     {
       "path": "en-es-tiny/model_info.json",
@@ -320,7 +350,7 @@
     },
     {
       "path": "en-es-tiny/vocab.esen.spm",
-      "sha256": "909b1eea1face0d7f90a474fe29a8c0fef8d104b6e41e65616f864c964ba8845"
+      "sha256": "c51a4f18f7a63ce44fb86461204f9eed441da2ef865d773e36d5c55d35380c87"
     },
     {
       "path": "en-fr-tiny/catalog-entry.yml",
@@ -332,11 +362,11 @@
     },
     {
       "path": "en-fr-tiny/lex.s2t.bin",
-      "sha256": "38fb44bad1fd5f1e6bfdcf15cc8baa09d61aad2a4f9c587914e24e7b5c25c32c"
+      "sha256": "e8f16827a9a835351c1e52aeff0e54d68895c6ab6d7b792df05e6d50d5b4063a"
     },
     {
       "path": "en-fr-tiny/model.intgemm.alphas.bin",
-      "sha256": "0678019c4d74c8c81d2de17e3e58d3aba5f5eb48f5595d9240c17f69d30461de"
+      "sha256": "ecdd10a6f4e5a4f4c7fca7d33ae4d1929d8dee781a9bbf2c1668dac3e25d05b5"
     },
     {
       "path": "en-fr-tiny/model_info.json",
@@ -344,7 +374,7 @@
     },
     {
       "path": "en-fr-tiny/vocab.fren.spm",
-      "sha256": "4c84b95b62c930f0791466d73eb996841eef474c96d0c2f0e6c6d80640f2005a"
+      "sha256": "07c8a738e0cedab8244a9cba1cf7a588091a66249684080ced2d9d8c65fc0215"
     },
     {
       "path": "es-en-tiny/catalog-entry.yml",
@@ -356,11 +386,11 @@
     },
     {
       "path": "es-en-tiny/lex.s2t.bin",
-      "sha256": "f11a2c23ef85ab1fee1c412b908d69bc20d66fd59faa8f7da5a5f0347eddf969"
+      "sha256": "36fb913bb823110b6050669fcfee360bf4c2e0195fec2cf9cd99dd69db5a271f"
     },
     {
       "path": "es-en-tiny/model.intgemm.alphas.bin",
-      "sha256": "4b6b7f451094aaa447d012658af158ffc708fc8842dde2f871a58404f5457fe0"
+      "sha256": "f4bf781950047c24af9627fea9b39e0e969bd155715f231853a71bcd3c29fdc4"
     },
     {
       "path": "es-en-tiny/model_info.json",
@@ -368,7 +398,7 @@
     },
     {
       "path": "es-en-tiny/vocab.esen.spm",
-      "sha256": "909b1eea1face0d7f90a474fe29a8c0fef8d104b6e41e65616f864c964ba8845"
+      "sha256": "c51a4f18f7a63ce44fb86461204f9eed441da2ef865d773e36d5c55d35380c87"
     },
     {
       "path": "fr-en-tiny/catalog-entry.yml",
@@ -380,11 +410,11 @@
     },
     {
       "path": "fr-en-tiny/lex.s2t.bin",
-      "sha256": "3148abf21ea98a4d69d0e4504e0d68a6c060204a9b9a39b76855aee1d5b2c8ea"
+      "sha256": "eb36402355a68a490705c748df712ddc2e229eda04662d50b57b61873b204c82"
     },
     {
       "path": "fr-en-tiny/model.intgemm.alphas.bin",
-      "sha256": "185f76d24c2d400fe4ea0cb2487df77722641b97a3ef10633872e8a7fdf40e09"
+      "sha256": "501e3e7528285b3fdbad700862f193530390979a36b8b8bdcfadd222ed601d4d"
     },
     {
       "path": "fr-en-tiny/model_info.json",
@@ -392,7 +422,7 @@
     },
     {
       "path": "fr-en-tiny/vocab.fren.spm",
-      "sha256": "4c84b95b62c930f0791466d73eb996841eef474c96d0c2f0e6c6d80640f2005a"
+      "sha256": "07c8a738e0cedab8244a9cba1cf7a588091a66249684080ced2d9d8c65fc0215"
     },
     {
       "path": "licenses/Bergamot-model-policy.md",
@@ -644,7 +674,7 @@
     },
     {
       "path": "worker.js",
-      "sha256": "69e7bc60f23d8481425f6765848e3456607332dcb2990bb7b3b474eb35aa051f"
+      "sha256": "e7a551807b20eeda10dbf2616bfac18c46b4527e60c98111229b942bd7212b3b"
     }
   ]
 }

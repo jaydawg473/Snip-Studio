@@ -1,4 +1,5 @@
 """Assemble verified data archives without executing their contents."""
+import gzip
 import hashlib
 import json
 import re
@@ -102,16 +103,28 @@ for model in models:
         raise RuntimeError("Model identity differs from the signed catalog")
     config = parse_config((destination / "config.intgemm8bitalpha.yml").read_text(encoding="utf-8"))
     files = {"model": config["models"][0], "shortlist": config["shortlist"][0], "vocabs": config["vocabs"]}
-    for filename in [files["model"], files["shortlist"], *files["vocabs"]]:
-        if Path(filename).name != filename or not (destination / filename).is_file():
+    expanded_bytes = {}
+    for filename in dict.fromkeys([files["model"], files["shortlist"], *files["vocabs"]]):
+        original = destination / filename
+        if Path(filename).name != filename or not original.is_file():
             raise RuntimeError("Required model file missing")
+        size = original.stat().st_size
+        if not 0 < size <= 256 * 1024 * 1024:
+            raise RuntimeError("Unexpected model file size")
+        temporary = destination / (filename + ".gzip.tmp")
+        with original.open("rb") as read, temporary.open("wb") as compressed:
+            with gzip.GzipFile(filename="", mode="wb", fileobj=compressed, compresslevel=6, mtime=0) as write:
+                shutil.copyfileobj(read, write)
+        temporary.replace(original)
+        expanded_bytes[filename] = size
     # The desktop wrapper uses one interactive worker, not the large native CLI
     # batch/workspace values used to benchmark the original model archives.
     runtime_config = {key: value for key, value in config.items() if key not in ["models", "vocabs", "shortlist"]}
     runtime_config.update({"workspace": 128, "mini-batch": 1, "quiet": True, "quiet-translation": True})
     source_code, target_code, _ = name.split("-")
     entries.append({"source": source_code, "target": target_code, "directory": name,
-                    "files": files, "config": runtime_config, "archiveUrl": model["url"], "archiveSha256": model["checksum"]})
+                    "files": files, "expandedBytes": expanded_bytes, "config": runtime_config,
+                    "archiveUrl": model["url"], "archiveSha256": model["checksum"]})
 
 shutil.copyfile(ROOT / "worker.js", PAYLOAD / "worker.js")
 (ROOT / "bundle-draft.json").write_text(json.dumps({"version": 1, "engine": {"name": "Bergamot", "version": "0.4.9", "node": "24.22.3"}, "models": entries}, indent=2) + "\n", encoding="utf-8")

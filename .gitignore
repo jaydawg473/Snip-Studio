@@ -75,6 +75,7 @@ preferences.xml
 *.bin
 *.spm
 *.wasm
+!/ocr-bundle/runtime/ort/dist/ort-wasm-simd-threaded.wasm
 *.tgz
 *.tar.gz
 *.7z

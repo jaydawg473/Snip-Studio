@@ -272,6 +272,15 @@ namespace SnipStudio
             lock (stateGate) RestoreAndDispose();
         }
 
+        // A successfully captured image remains usable if Explorer fails to
+        // restore a taskbar. Return the restoration error for visible feedback.
+        internal string RestoreAfterCapture()
+        {
+            try { Dispose(); }
+            catch (TaskbarRestorationException failure) { return failure.Message; }
+            return "";
+        }
+
         private void RestoreAndDispose()
         {
             if (disposed) return;
@@ -292,13 +301,13 @@ namespace SnipStudio
                         if (!queued && taskbar.HideQueued && !operations.Show(taskbar.Handle, 4)) queueFailure = true;
                     }
                 if (queueFailure)
-                    throw new InvalidOperationException("Windows could not queue restoration for all taskbars.");
+                    throw new TaskbarRestorationException("Windows could not queue restoration for all taskbars.");
                 if (!WaitForVisibility(true, 180))
                 {
                     foreach (TaskbarWindow taskbar in taskbars)
                         if (SameWindow(taskbar) && !operations.Visible(taskbar.Handle)) operations.Show(taskbar.Handle, 4);
                     if (!WaitForVisibility(true, 180))
-                        throw new InvalidOperationException("Windows did not confirm that all taskbars were restored.");
+                        throw new TaskbarRestorationException("Windows did not confirm that all taskbars were restored.");
                 }
                 operations.Flush();
             }
@@ -309,6 +318,11 @@ namespace SnipStudio
                     lock (gate) { active = false; ownsGate = false; }
                 }
             }
+        }
+
+        private sealed class TaskbarRestorationException : InvalidOperationException
+        {
+            internal TaskbarRestorationException(string message) : base(message) { }
         }
 
         private static Operations NativeOperations()

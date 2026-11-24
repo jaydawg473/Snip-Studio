@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Xml;
 using System.Xml.Linq;
+using SnipStudio.WinUI.Backend;
 
 namespace SnipStudio.WinUI;
 
@@ -12,7 +13,7 @@ internal static class LegacySettingsImport
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
         "SnipStudio", "preferences.xml");
 
-    internal static DesktopPreferences Import(string sourcePath, DesktopPreferences current)
+    internal static DesktopPreferences Import(string sourcePath, DesktopPreferences current, bool firstLaunch = false)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentNullException.ThrowIfNull(current);
@@ -32,9 +33,22 @@ internal static class LegacySettingsImport
         draft.RequireCtrlForWheelZoom = ReadBoolean("RequireCtrlForWheelZoom") ?? draft.RequireCtrlForWheelZoom;
         draft.AutoCheckForUpdates = ReadBoolean("AutoCheckForUpdates") ?? draft.AutoCheckForUpdates;
         draft.InkArgb = ReadColor("InkArgb") ?? draft.InkArgb;
+        draft.RecentInkColors = ReadRecentInkColors() ?? draft.RecentInkColors;
         draft.StrokeWidth = ReadInteger("StrokeWidth", 1, 100) ?? draft.StrokeWidth;
+        draft.LastSaveFolder = ReadFolder("SaveFolder") ?? draft.LastSaveFolder;
+        draft.EditorApplicationPath = ReadExecutable("EditorApplicationPath") ?? draft.EditorApplicationPath;
+        // The original stored its default Print Screen choice without recording
+        // consent. Keep automatic import passive; the reviewed draft can set it.
+        if (!firstLaunch) draft.UsePrintScreen = ReadBoolean("UsePrintScreen") ?? draft.UsePrintScreen;
+        draft.KeepShortcutsAfterClose = ReadBoolean("KeepShortcutsAfterClose") ?? draft.KeepShortcutsAfterClose;
+        if (!firstLaunch || (ReadScalar("TrayBehaviorConfirmed")?.Trim() is "true" or "1"))
+            draft.KeepRunningInTray = ReadBoolean("KeepRunningInTray") ?? draft.KeepRunningInTray;
+        draft.StartupWithWindows = ReadBoolean("StartupWithWindows") ?? draft.StartupWithWindows;
+        draft.TranslationSourceLanguage = ReadLanguage("TranslationSourceLanguage") ?? draft.TranslationSourceLanguage;
+        draft.TranslationTargetLanguage = ReadLanguage("TranslationTargetLanguage") ?? draft.TranslationTargetLanguage;
 
         draft.CaptureDelaySeconds = ReadInteger("DelaySeconds", 0, 10) ?? draft.CaptureDelaySeconds;
+        if (ReadCaptureKind() is CaptureKind captureKind) draft.LastScreenshotCaptureKind = captureKind;
         draft.RememberCaptureDelay = ReadBoolean("RememberCaptureDelay") ?? draft.RememberCaptureDelay;
         draft.CaptureInNewWindow = ReadBoolean("MultipleWindows") ?? draft.CaptureInNewWindow;
         draft.AutoCopyCaptures = ReadBoolean("AutoCopyScreenshotChanges") ?? draft.AutoCopyCaptures;
@@ -66,14 +80,65 @@ internal static class LegacySettingsImport
 
         return draft;
 
-        string? ReadScalar(string name)
+        XElement? ReadElement(string name)
         {
             using IEnumerator<XElement> values = settings[name].GetEnumerator();
             if (!values.MoveNext()) return null;
             XElement element = values.Current;
             if (values.MoveNext())
                 throw new InvalidDataException("The settings file contains a duplicate preference.");
-            return element.HasElements ? null : element.Value;
+            return element;
+        }
+
+        string? ReadScalar(string name) => ReadElement(name) is { HasElements: false } element ? element.Value : null;
+
+        CaptureKind? ReadCaptureKind()
+        {
+            // Legacy index 4 invokes scrolling capture and is not a screenshot shape.
+            CaptureKind? kind = ReadScalar("CaptureModeIndex")?.Trim() switch
+            {
+                "0" => CaptureKind.Rectangle, "1" => CaptureKind.Freeform, "2" => CaptureKind.Window,
+                "3" => CaptureKind.Monitor, "5" => CaptureKind.AllMonitors, _ => null
+            };
+            if (kind.HasValue) imported++;
+            return kind;
+        }
+
+        uint[]? ReadRecentInkColors()
+        {
+            if (ReadElement("RecentInkColors") is not { } colors) return null;
+            var values = new List<uint>();
+            foreach (XElement item in colors.Elements())
+            {
+                if (item.Name != "int" || item.HasElements ||
+                    !int.TryParse(item.Value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int argb)) return null;
+                uint color = unchecked((uint)argb);
+                if (!values.Contains(color)) values.Add(color);
+                if (values.Count == 8) break;
+            }
+            if (!colors.HasElements && !string.IsNullOrWhiteSpace(colors.Value)) return null;
+            imported++;
+            return values.ToArray();
+        }
+
+        string? ReadExecutable(string name)
+        {
+            string? candidate = ReadScalar(name)?.Trim();
+            if (candidate is null) return null;
+            if (candidate.Length > 0 && (candidate.Length > 32767 || !Path.IsPathFullyQualified(candidate) ||
+                candidate.Any(char.IsControl) || candidate.IndexOfAny(Path.GetInvalidPathChars()) >= 0 ||
+                !Path.GetExtension(candidate).Equals(".exe", StringComparison.OrdinalIgnoreCase))) return null;
+            imported++;
+            return candidate;
+        }
+
+        string? ReadLanguage(string name)
+        {
+            string? code = ReadScalar(name)?.Trim();
+            if (code is null || code.Length > 35 || !code.All(character => char.IsAsciiLetterOrDigit(character) || character == '-'))
+                return null;
+            imported++;
+            return code;
         }
 
         bool? ReadBoolean(string name)

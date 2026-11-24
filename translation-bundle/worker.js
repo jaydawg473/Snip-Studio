@@ -6,7 +6,9 @@ const fs = require('node:fs');
 const fsp = require('node:fs/promises');
 const path = require('node:path');
 const { fileURLToPath, pathToFileURL } = require('node:url');
+const { promisify } = require('node:util');
 const { Worker: NodeWorker } = require('node:worker_threads');
+const gunzip = promisify(require('node:zlib').gunzip);
 
 const ROOT = fs.realpathSync(__dirname);
 const MAX_FRAME = 1024 * 1024;
@@ -119,13 +121,21 @@ function readManifest() {
     if (!withinRoot(directory) || path.dirname(directory) !== ROOT || !fs.statSync(directory).isDirectory()) throw new Error('Invalid model directory.');
     const files = entry.files;
     if (!files || typeof files !== 'object' || !Array.isArray(files.vocabs) || files.vocabs.length < 1 || files.vocabs.length > 2) throw new Error('Invalid model files.');
+    const asset = name => {
+      const filename = localFile(directory, name);
+      const sizes = entry.expandedBytes;
+      if (sizes === undefined) return { filename };
+      const expandedBytes = sizes && Object.hasOwn(sizes, name) ? sizes[name] : 0;
+      if (!Number.isSafeInteger(expandedBytes) || expandedBytes < 1 || expandedBytes > MAX_FILE) throw new Error('Invalid expanded model size.');
+      return { filename, expandedBytes };
+    };
     return {
       from: entry.source,
       to: entry.target,
       files: {
-        model: localFile(directory, files.model),
-        shortlist: localFile(directory, files.shortlist),
-        vocabs: files.vocabs.map(name => localFile(directory, name))
+        model: asset(files.model),
+        shortlist: asset(files.shortlist),
+        vocabs: files.vocabs.map(asset)
       },
       config: safeConfig(entry.config)
     };
@@ -141,8 +151,14 @@ function getTranslator() {
     const registry = await manifestPromise;
     const { LatencyOptimisedTranslator, TranslatorBacking } = await import(pathToFileURL(path.join(ROOT, 'bergamot', 'translator.js')).href);
     const buffers = new Map();
-    const load = filename => {
-      if (!buffers.has(filename)) buffers.set(filename, fsp.readFile(filename).then(bytes => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)));
+    const load = ({ filename, expandedBytes }) => {
+      if (!buffers.has(filename)) buffers.set(filename, fsp.readFile(filename).then(async bytes => {
+        if (expandedBytes !== undefined) {
+          bytes = await gunzip(bytes, { maxOutputLength: expandedBytes, rejectGarbageAfterEnd: true });
+          if (bytes.byteLength !== expandedBytes) throw new Error('Expanded model size differs from the reviewed bundle.');
+        }
+        return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+      }));
       return buffers.get(filename);
     };
     class LocalBacking extends TranslatorBacking {
