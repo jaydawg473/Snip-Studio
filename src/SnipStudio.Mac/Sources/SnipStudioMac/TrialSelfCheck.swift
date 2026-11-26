@@ -16,6 +16,7 @@ enum TrialSelfCheck {
             try StudioRecordingChromeGeometry.selfCheck()
             try StudioFreeformMask.selfCheck()
             try StudioOCRReplacement.selfCheck()
+            try StudioTranslationServer.selfCheck()
             if #available(macOS 15.0, *) {
                 try StudioTranslationReviewSelfCheck.run()
                 let crop = try StudioScreenRecorder.displayRect(

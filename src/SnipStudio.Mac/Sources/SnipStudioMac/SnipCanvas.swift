@@ -33,6 +33,7 @@ struct SnipCanvas: View {
     @State private var textSelectionFrame: CGRect?
     @State private var snappedWordIndices = Set<Int>()
     @State private var lastSnapLocation: CGPoint?
+    @State private var panningDrag = false
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
@@ -74,22 +75,20 @@ struct SnipCanvas: View {
                    imageSize: CGSize(width: CGFloat(image.width), height: CGFloat(image.height)), viewport: proxy.size,
                    zoom: zoom, displayScale: displayScale
                ) {
-                ScrollView([.horizontal, .vertical]) {
+                StudioCanvasScroll { pan in
                     GeometryReader { surface in
                         let origin = surface.frame(in: .named(viewport)).origin
                         let imageFrame = layout.imageFrame(
                             surfaceOrigin: origin, viewportOrigin: proxy.frame(in: .global).origin
                         )
                         // The drawing surface stays the size of the visible viewport at every zoom.
-                        raster(image, frame: imageFrame, layout: layout)
+                        raster(image, frame: imageFrame, layout: layout, pan: pan)
                             .frame(width: proxy.size.width, height: proxy.size.height)
                             .position(x: proxy.size.width / 2 - origin.x, y: proxy.size.height / 2 - origin.y)
                     }
                     .frame(width: layout.surfaceSize.width, height: layout.surfaceSize.height)
                 }
                 .coordinateSpace(name: viewport)
-                .defaultScrollAnchor(.center)
-                .scrollBounceBehavior(.basedOnSize)
                 .clipped()
                 .onChange(of: layout.scale * displayScale, initial: true) { _, selectedScale in
                     onZoomChanged(selectedScale)
@@ -105,6 +104,7 @@ struct SnipCanvas: View {
                     lastEraseLocation = nil
                     annotationDrag = nil
                     resetSnapDrag()
+                    panningDrag = false
                 }
             }
         }
@@ -129,7 +129,7 @@ struct SnipCanvas: View {
         }
     }
 
-    private func raster(_ image: CGImage, frame: CGRect, layout: SnipViewportLayout) -> some View {
+    private func raster(_ image: CGImage, frame: CGRect, layout: SnipViewportLayout, pan: StudioPanAction?) -> some View {
         let editedID = textDraft?.wrappedValue?.annotationID
         let strokes = document.strokes
         let draft = document.draftStroke
@@ -194,7 +194,7 @@ struct SnipCanvas: View {
             }
             .contentShape(Rectangle())
             .accessibilityLabel("Snip editor canvas")
-            .gesture(inkGesture(in: frame, layout: layout), including: allowsDrawing || annotationSelection != nil ? .all : .none)
+            .gesture(inkGesture(in: frame, layout: layout, pan: pan), including: allowsDrawing || annotationSelection != nil ? .all : .none)
             .gesture(SpatialTapGesture().onEnded { event in
                 guard frame.contains(event.location), textDraft?.wrappedValue == nil else { return }
                 onTextTap?(layout.imagePoint(event.location, in: frame))
@@ -292,12 +292,21 @@ struct SnipCanvas: View {
         ink.fill(Path(stroke.outline), with: .color(Color(cgColor: stroke.color)))
     }
 
-    private func inkGesture(in frame: CGRect, layout: SnipViewportLayout) -> some Gesture {
+    private func inkGesture(in frame: CGRect, layout: SnipViewportLayout, pan: StudioPanAction?) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .updating($dragActive) { _, active, _ in active = true }
             .onChanged { event in
                 if let annotationSelection {
+                    if panningDrag {
+                        pan?(.changed(event.translation))
+                        return
+                    }
                     moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
+                    if annotationDrag == nil, let pan, hypot(event.translation.width, event.translation.height) >= 3 {
+                        panningDrag = true
+                        pan(.began)
+                        pan(.changed(event.translation))
+                    }
                 } else if automaticMove(for: event, in: frame, layout: layout) {
                     return
                 } else if erasesAnnotations {
@@ -310,6 +319,11 @@ struct SnipCanvas: View {
             .onEnded { event in
                 // A click can complete without a distinct drag update.
                 if let annotationSelection {
+                    if panningDrag {
+                        pan?(.ended)
+                        panningDrag = false
+                        return
+                    }
                     moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
                     finishAnnotationMove(automatic: false)
                 } else if automaticMove(for: event, in: frame, layout: layout) {

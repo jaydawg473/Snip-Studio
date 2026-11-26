@@ -8,17 +8,22 @@ struct StudioTranslationReview: View {
     let apply: @MainActor ([String]) async throws -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(StudioTranslationServer.preferenceKey) private var configuredServer = ""
     @State private var rows: [ReviewRow]
     @State private var languages: [LanguageChoice] = []
     @State private var sourceID: String?
     @State private var targetID: String?
     @State private var job: TranslationJob?
     @State private var applicationJob: Task<Void, Never>?
+    @State private var serverJob: Task<Void, Never>?
+    @State private var requestedServer: URL?
+    @State private var confirmsServer = false
     @State private var loadedLanguages = false
     @State private var translatedLanguage: String?
     @State private var hasReviewEdits = false
     @State private var replacingReview = false
     @State private var detail = ""
+    private var isTranslating: Bool { job != nil || serverJob != nil }
 
     init(lines: [RecognizedLine], apply: @escaping @MainActor ([String]) async throws -> Void) {
         self.apply = apply
@@ -54,7 +59,10 @@ struct StudioTranslationReview: View {
         .padding(16)
         .frame(minWidth: 660, idealWidth: 760, minHeight: 470, idealHeight: 550)
         .task { await loadLanguages() }
-        .onDisappear { applicationJob?.cancel() }
+        .onDisappear {
+            applicationJob?.cancel()
+            serverJob?.cancel()
+        }
         .overlay(alignment: .topLeading) {
             if let job {
                 Color.clear
@@ -73,6 +81,14 @@ struct StudioTranslationReview: View {
         } message: {
             Text("The edited rows stay available until the new translation finishes.")
         }
+        .confirmationDialog("Send recognized text to the translation server?", isPresented: $confirmsServer) {
+            Button("Send text and translate") {
+                if let requestedServer { beginServerTranslation(requestedServer) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Snip Studio will send eligible text rows to \(requestedServer?.absoluteString ?? "the configured server"). The screenshot stays on this Mac.")
+        }
     }
 
     private var languageControls: some View {
@@ -82,18 +98,22 @@ struct StudioTranslationReview: View {
                 ForEach(languages) { choice in Text(choice.name).tag(Optional(choice.id)) }
             }
             .fixedSize()
-            .disabled(job != nil || applicationJob != nil || languages.isEmpty)
+            .disabled(isTranslating || applicationJob != nil || languages.isEmpty)
             Picker("To", selection: $targetID) {
                 if targetID == nil { Text("Select language").tag(nil as String?) }
                 ForEach(languages) { choice in Text(choice.name).tag(Optional(choice.id)) }
             }
             .fixedSize()
-            .disabled(job != nil || applicationJob != nil || languages.isEmpty)
-            if job == nil {
+            .disabled(isTranslating || applicationJob != nil || languages.isEmpty)
+            if !isTranslating {
                 Button("Translate on this Mac") {
                     if hasReviewEdits { replacingReview = true } else { beginTranslation() }
                 }
                 .disabled(applicationJob != nil || targetID == nil || sourceID == targetID || !rows.contains { !$0.protected })
+                if !configuredServer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Button("Use server…") { confirmServer() }
+                        .disabled(applicationJob != nil || targetID == nil || sourceID == targetID || !rows.contains { !$0.protected })
+                }
             } else {
                 ProgressView().controlSize(.small).accessibilityLabel("Translating")
                 Button("Cancel translation") { cancelTranslation() }
@@ -151,7 +171,7 @@ struct StudioTranslationReview: View {
                 .labelsHidden()
                 .lineLimit(1...5)
                 .accessibilityLabel("Translated row \(row.id + 1)")
-                .disabled(job != nil || applicationJob != nil)
+                .disabled(isTranslating || applicationJob != nil)
                 if row.keptAfterValidation {
                     Text("Review this row. The suggestion changed the original numbers or identifiers.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -163,7 +183,7 @@ struct StudioTranslationReview: View {
     }
 
     private var canUseReview: Bool {
-        job == nil && applicationJob == nil && translatedLanguage != nil && rows.allSatisfy { row in
+        !isTranslating && applicationJob == nil && translatedLanguage != nil && rows.allSatisfy { row in
             row.source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
             !row.reviewedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         }
@@ -210,7 +230,43 @@ struct StudioTranslationReview: View {
 
     private func cancelTranslation() {
         job = nil
-        detail = "Translation canceled."
+        if let serverJob {
+            serverJob.cancel()
+            detail = "Canceling server translation…"
+        } else {
+            detail = "Translation canceled."
+        }
+    }
+
+    private func confirmServer() {
+        do {
+            requestedServer = try StudioTranslationServer.parse(configuredServer)
+            confirmsServer = true
+        } catch { detail = error.localizedDescription }
+    }
+
+    private func beginServerTranslation(_ endpoint: URL) {
+        guard !isTranslating, let target = languages.first(where: { $0.id == targetID }), sourceID != targetID else { return }
+        let eligible = rows.filter { !$0.protected }
+        guard !eligible.isEmpty else { return }
+        let from = sourceID ?? ""
+        detail = "Translating with the configured server…"
+        serverJob = Task { @MainActor in
+            defer { serverJob = nil }
+            do {
+                let suggestions = try await StudioTranslationServer.translate(
+                    rows: eligible.map(\.source), source: from, target: target.id, server: endpoint
+                )
+                try Task.checkCancellation()
+                guard suggestions.count == eligible.count else { throw TranslationReviewIssue.missingRows }
+                let pairs = zip(eligible.map(\.id), suggestions).map { ($0.0, $0.1) }
+                try useSuggestions(pairs, textCount: eligible.count, targetName: target.name)
+            } catch is CancellationError {
+                detail = "Translation canceled. Your reviewed rows are still available."
+            } catch {
+                detail = error.localizedDescription
+            }
+        }
     }
 
     private func translate(using session: TranslationSession, job running: TranslationJob) async {
@@ -218,27 +274,11 @@ struct StudioTranslationReview: View {
         do {
             let responses = try await session.translations(from: running.requests)
             guard job?.id == running.id, !Task.isCancelled else { return }
-            var review = rows
-            var assigned = Set<Int>()
-            for response in responses {
-                guard let token = response.clientIdentifier, let id = Int(token), review.indices.contains(id),
-                      !review[id].protected, assigned.insert(id).inserted else {
-                    throw TranslationReviewIssue.missingRows
-                }
-                let source = review[id].source
-                if let translated = TranslationRowPolicy.reviewedSuggestion(response.targetText, original: source) {
-                    review[id].translation = translated
-                    review[id].keptAfterValidation = false
-                } else {
-                    review[id].translation = source
-                    review[id].keptAfterValidation = true
-                }
+            let suggestions = try responses.map { response -> (Int, String) in
+                guard let token = response.clientIdentifier, let id = Int(token) else { throw TranslationReviewIssue.missingRows }
+                return (id, response.targetText)
             }
-            guard assigned.count == running.requests.count else { throw TranslationReviewIssue.missingRows }
-            rows = review
-            translatedLanguage = running.targetName
-            hasReviewEdits = false
-            detail = "Compare and edit the translated rows before applying them."
+            try useSuggestions(suggestions, textCount: running.requests.count, targetName: running.targetName)
         } catch {
             guard job?.id == running.id, !Task.isCancelled else { return }
             if error is CancellationError || (error as? CocoaError)?.code == .userCancelled {
@@ -248,6 +288,25 @@ struct StudioTranslationReview: View {
             }
         }
         if job?.id == running.id { job = nil }
+    }
+
+    private func useSuggestions(_ suggestions: [(Int, String)], textCount: Int, targetName: String) throws {
+        var review = rows
+        var assigned = Set<Int>()
+        for (id, suggestion) in suggestions {
+            guard review.indices.contains(id), !review[id].protected, assigned.insert(id).inserted else {
+                throw TranslationReviewIssue.missingRows
+            }
+            let source = review[id].source
+            let validated = TranslationRowPolicy.reviewedSuggestion(suggestion, original: source)
+            review[id].translation = validated ?? source
+            review[id].keptAfterValidation = validated == nil
+        }
+        guard assigned.count == textCount else { throw TranslationReviewIssue.missingRows }
+        rows = review
+        translatedLanguage = targetName
+        hasReviewEdits = false
+        detail = "Compare and edit the translated rows before applying them."
     }
 
     private func copyTranslation() {
@@ -301,7 +360,7 @@ struct StudioTranslationReview: View {
     private enum TranslationReviewIssue: LocalizedError {
         case missingRows
 
-        var errorDescription: String? { "macOS returned an incomplete set of translated rows." }
+        var errorDescription: String? { "Translation returned an incomplete set of rows." }
     }
 }
 

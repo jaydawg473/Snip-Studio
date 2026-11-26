@@ -835,7 +835,9 @@ struct StudioView: View {
         if value != .move { selectedAnnotationID = nil }
         showOptions = true
         switch value {
-        case .move: status = "Scroll to move around a zoomed screenshot."
+        case .move:
+            if #available(macOS 15.0, *) { status = "Drag blank canvas or scroll to pan." }
+            else { status = "Scroll to move around a zoomed screenshot." }
         case .pen: status = "Draw on the screenshot."
         case .highlight:
             status = "Drag across text to highlight it. Hold Shift for freehand."

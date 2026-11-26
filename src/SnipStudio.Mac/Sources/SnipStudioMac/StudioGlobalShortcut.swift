@@ -5,7 +5,42 @@ import Foundation
 @MainActor
 final class StudioGlobalShortcut: ObservableObject {
     static let preferenceKey = "studioGlobalCaptureShortcutEnabled"
-    static let displayName = "⌘⇧6"
+    static let chordPreferenceKey = "studioGlobalCaptureShortcutChord"
+
+    enum Chord: String, CaseIterable, Identifiable {
+        case commandShift6, commandShift7, commandShift8, commandShift9, commandOptionC, commandOptionS
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .commandShift6: "⌘⇧6"
+            case .commandShift7: "⌘⇧7"
+            case .commandShift8: "⌘⇧8"
+            case .commandShift9: "⌘⇧9"
+            case .commandOptionC: "⌘⌥C"
+            case .commandOptionS: "⌘⌥S"
+            }
+        }
+
+        var keyCode: UInt32 {
+            switch self {
+            case .commandShift6: UInt32(kVK_ANSI_6)
+            case .commandShift7: UInt32(kVK_ANSI_7)
+            case .commandShift8: UInt32(kVK_ANSI_8)
+            case .commandShift9: UInt32(kVK_ANSI_9)
+            case .commandOptionC: UInt32(kVK_ANSI_C)
+            case .commandOptionS: UInt32(kVK_ANSI_S)
+            }
+        }
+
+        var modifiers: UInt32 {
+            switch self {
+            case .commandOptionC, .commandOptionS: UInt32(cmdKey | optionKey)
+            default: UInt32(cmdKey | shiftKey)
+            }
+        }
+    }
 
     @Published private(set) var isRegistered = false
     @Published private(set) var errorMessage: String?
@@ -17,14 +52,14 @@ final class StudioGlobalShortcut: ObservableObject {
     private var registration: Registration?
     private var action: (@MainActor () -> Void)?
 
-    func update(enabled: Bool, action: @escaping @MainActor () -> Void) {
-        if !enabled {
+    func update(enabled: Bool, chord: Chord, action: @escaping @MainActor () -> Void) {
+        if !enabled || (registration != nil && registration?.chord != chord) {
             self.action = nil
             if Self.activeOwner === self { Self.activeOwner = nil }
             registration = nil
             isRegistered = false
             errorMessage = nil
-            return
+            if !enabled { return }
         }
 
         if registration != nil {
@@ -33,7 +68,7 @@ final class StudioGlobalShortcut: ObservableObject {
         }
 
         guard Self.activeOwner == nil else {
-            errorMessage = conflictMessage
+            errorMessage = conflictMessage(for: chord)
             return
         }
 
@@ -45,7 +80,7 @@ final class StudioGlobalShortcut: ObservableObject {
         var handler: EventHandlerRef?
         let installStatus = InstallEventHandler(target, studioShortcutHandler, 1, &eventType, nil, &handler)
         guard installStatus == noErr, let handler else {
-            errorMessage = unavailableMessage
+            errorMessage = unavailableMessage(for: chord)
             return
         }
 
@@ -53,16 +88,16 @@ final class StudioGlobalShortcut: ObservableObject {
         let key = EventHotKeyID(signature: Self.signature, id: Self.lastRegistrationID)
         var hotKey: EventHotKeyRef?
         let registerStatus = RegisterEventHotKey(
-            UInt32(kVK_ANSI_6), UInt32(cmdKey | shiftKey), key, target,
+            chord.keyCode, chord.modifiers, key, target,
             UInt32(kEventHotKeyExclusive), &hotKey
         )
         guard registerStatus == noErr, let hotKey else {
             RemoveEventHandler(handler)
-            errorMessage = registerStatus == eventHotKeyExistsErr ? conflictMessage : unavailableMessage
+            errorMessage = registerStatus == eventHotKeyExistsErr ? conflictMessage(for: chord) : unavailableMessage(for: chord)
             return
         }
 
-        registration = Registration(id: key.id, handles: Handles(hotKey: hotKey, handler: handler))
+        registration = Registration(id: key.id, chord: chord, handles: Handles(hotKey: hotKey, handler: handler))
         self.action = action
         Self.activeOwner = self
         errorMessage = nil
@@ -82,20 +117,22 @@ final class StudioGlobalShortcut: ObservableObject {
         return noErr
     }
 
-    private var conflictMessage: String {
-        "Another app is using \(Self.displayName). Free that shortcut and turn it on again."
+    private func conflictMessage(for chord: Chord) -> String {
+        "Another app is using \(chord.title). Choose a different shortcut or free it and try again."
     }
 
-    private var unavailableMessage: String {
-        "macOS could not enable \(Self.displayName). You can still start a capture from Snip Studio."
+    private func unavailableMessage(for chord: Chord) -> String {
+        "macOS could not enable \(chord.title). You can still start a capture from Snip Studio."
     }
 
     private final class Registration {
         let id: UInt32
+        let chord: Chord
         let handles: Handles
 
-        init(id: UInt32, handles: Handles) {
+        init(id: UInt32, chord: Chord, handles: Handles) {
             self.id = id
+            self.chord = chord
             self.handles = handles
         }
 

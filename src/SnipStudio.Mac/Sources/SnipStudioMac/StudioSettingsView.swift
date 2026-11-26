@@ -13,6 +13,7 @@ struct StudioSettingsView: View {
     @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
     @AppStorage(StudioSettings.resizeToSnip) private var resizeToSnip = true
+    @AppStorage(StudioTranslationServer.preferenceKey) private var translationServer = ""
 
     var body: some View {
         Form {
@@ -41,6 +42,12 @@ struct StudioSettingsView: View {
             }
             StudioDesktopSettingsView(shortcut: shortcut)
             StudioSettingsBackupSection()
+            Section("Translation") {
+                TextField("Optional LibreTranslate server", text: $translationServer)
+                    .textFieldStyle(.roundedBorder)
+                Text("Enter an HTTPS server address. Snip Studio asks each time before sending recognized text.")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)

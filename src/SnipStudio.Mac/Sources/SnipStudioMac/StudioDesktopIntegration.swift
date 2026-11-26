@@ -37,13 +37,19 @@ struct StudioDesktopSettingsView: View {
     @ObservedObject var shortcut: StudioGlobalShortcut
     @AppStorage(StudioDesktopIntegration.showInMenuBar) private var showInMenuBar = false
     @AppStorage(StudioGlobalShortcut.preferenceKey) private var shortcutEnabled = false
+    @AppStorage(StudioGlobalShortcut.chordPreferenceKey) private var shortcutChord = StudioGlobalShortcut.Chord.commandShift6
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
 
     var body: some View {
         Section("Desktop") {
             Toggle("Show Snip Studio in the menu bar", isOn: $showInMenuBar)
-            Toggle("Capture a region with \(StudioGlobalShortcut.displayName)", isOn: $shortcutEnabled)
+            Toggle("Enable the global capture shortcut", isOn: $shortcutEnabled)
+            if shortcutEnabled {
+                Picker("Capture shortcut", selection: $shortcutChord) {
+                    ForEach(StudioGlobalShortcut.Chord.allCases) { chord in Text(chord.title).tag(chord) }
+                }
+            }
             if shortcutEnabled, let error = shortcut.errorMessage {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
             }
@@ -125,12 +131,18 @@ struct StudioGlobalCaptureRegistration: ViewModifier {
     let shortcut: StudioGlobalShortcut
     @Environment(\.openWindow) private var openWindow
     @AppStorage(StudioGlobalShortcut.preferenceKey) private var enabled = false
+    @AppStorage(StudioGlobalShortcut.chordPreferenceKey) private var chord = StudioGlobalShortcut.Chord.commandShift6
+
+    private struct Preference: Equatable {
+        let enabled: Bool
+        let chord: StudioGlobalShortcut.Chord
+    }
 
     func body(content: Content) -> some View {
-        content.onChange(of: enabled, initial: true) { _, value in
+        content.onChange(of: Preference(enabled: enabled, chord: chord), initial: true) { _, value in
             let delegate = applicationDelegate
             let open = openWindow
-            shortcut.update(enabled: value) { [weak delegate] in
+            shortcut.update(enabled: value.enabled, chord: value.chord) { [weak delegate] in
                 guard let delegate else { return }
                 StudioDesktopIntegration.captureRegion(applicationDelegate: delegate) { id in
                     open(id: "studio", value: id)
