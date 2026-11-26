@@ -20,6 +20,9 @@ struct InkStroke: Identifiable, Sendable {
     private(set) var points: [CGPoint]
     let shape: SnipShape?
     private(set) var textNote: StudioTextAnnotation?
+    private(set) var fillColor: CGColor?
+    private(set) var emoji: String?
+    private(set) var bitmap: CGImage?
     private(set) var lineStyle: SnipLineStyle
     private var quarterTurns = 0
     private var committedOutline: CommittedOutline?
@@ -28,17 +31,24 @@ struct InkStroke: Identifiable, Sendable {
     var origin: CGPoint { points[0] }
 
     init(color: CGColor, width: CGFloat, at point: CGPoint,
-         shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid) {
+         shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid, fill: CGColor? = nil) {
         self.color = color
         self.width = width
         points = [point]
         self.shape = shape
         self.lineStyle = lineStyle
+        fillColor = fill
     }
 
     fileprivate init(note: StudioTextAnnotation, color: CGColor, at origin: CGPoint) {
         self.init(color: color, width: 1, at: origin)
         textNote = note
+    }
+
+    fileprivate init(emoji: String, size: CGFloat, at origin: CGPoint) throws {
+        self.init(color: CGColor(gray: 0, alpha: 0), width: size, at: origin)
+        self.emoji = emoji
+        bitmap = try StudioEmojiRaster.image(for: emoji, pixelSize: size)
     }
 
     fileprivate init(projectRecord record: StudioProjectAnnotation) throws {
@@ -52,6 +62,13 @@ struct InkStroke: Identifiable, Sendable {
         points = record.points
         quarterTurns = record.quarterTurns
         textNote = record.text
+        if let fill = record.fill, fill.count == 4 {
+            fillColor = CGColor(red: fill[0], green: fill[1], blue: fill[2], alpha: fill[3])
+        }
+        if let emoji = record.emoji {
+            self.emoji = emoji
+            bitmap = try StudioEmojiRaster.image(for: emoji, pixelSize: width)
+        }
         guard prepareForCommit() else { throw EditorDocumentError.invalidProjectAnnotation }
     }
 
@@ -62,7 +79,9 @@ struct InkStroke: Identifiable, Sendable {
         return StudioProjectAnnotation(points: points, red: components[0], green: components[1],
                                        blue: components[2], alpha: components[3], width: width,
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
-                                       quarterTurns: quarterTurns, text: textNote)
+                                       quarterTurns: quarterTurns, text: textNote,
+                                       fill: fillColor?.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+                                       emoji: emoji)
     }
 
     mutating func extend(to point: CGPoint) {
@@ -111,6 +130,53 @@ struct InkStroke: Identifiable, Sendable {
         return copy
     }
 
+    fileprivate func filled(with color: CGColor?) -> InkStroke? {
+        guard shape == .rectangle || shape == .ellipse else { return nil }
+        if let fillColor, let color, CFEqual(fillColor, color) { return nil }
+        if fillColor == nil && color == nil { return nil }
+        var copy = self
+        copy.fillColor = color
+        return copy
+    }
+
+    fileprivate func scaled(by factor: CGFloat) throws -> InkStroke? {
+        guard factor.isFinite, factor > 0, factor != 1 else { return nil }
+        var copy = self
+        copy.committedOutline = nil
+        if var note = textNote {
+            note.pixelSize *= factor
+            guard StudioTextAnnotation.pixelSizeRange.contains(note.pixelSize) else { return nil }
+            copy.textNote = note
+        } else if let emoji {
+            copy.width *= factor
+            copy.bitmap = try StudioEmojiRaster.image(for: emoji, pixelSize: copy.width)
+        } else if points.count == 1 {
+            copy.width *= factor
+            guard (1...512).contains(copy.width) else { return nil }
+        } else {
+            let pivot = CGPoint(x: bounds.midX, y: bounds.midY)
+            copy.points = points.map { CGPoint(x: pivot.x + ($0.x - pivot.x) * factor,
+                                               y: pivot.y + ($0.y - pivot.y) * factor) }
+        }
+        return copy
+    }
+
+    var bitmapFrame: CGRect {
+        guard let bitmap else { return .null }
+        return CGRect(origin: origin, size: CGSize(width: bitmap.width, height: bitmap.height))
+    }
+
+    var bitmapTransform: CGAffineTransform { quarterTurnTransform }
+
+    var fillOutline: CGPath? {
+        guard fillColor != nil, let shape, (shape == .rectangle || shape == .ellipse), let last = points.last else { return nil }
+        let area = CGRect(x: origin.x, y: origin.y, width: last.x - origin.x, height: last.y - origin.y).standardized
+        guard !area.isEmpty else { return nil }
+        var transform = quarterTurnTransform
+        if shape == .rectangle { return CGPath(rect: area, transform: &transform) }
+        return CGPath(ellipseIn: area, transform: &transform)
+    }
+
     fileprivate func restyled(color: CGColor?, width: CGFloat?, lineStyle: SnipLineStyle?) -> InkStroke? {
         let newColor = color ?? self.color
         let newWidth = width ?? self.width
@@ -137,6 +203,7 @@ struct InkStroke: Identifiable, Sendable {
     private var unrotatedOutline: CGPath {
         let path = CGMutablePath()
         let first = points[0]
+        if bitmap != nil { return CGPath(rect: bitmapFrame, transform: nil) }
         if let textNote { return textNote.makeOutline(at: first) }
         if let shape { return shapeOutline(shape, from: first, to: points[points.count - 1]) }
         if points.count == 1 {
@@ -161,7 +228,7 @@ struct InkStroke: Identifiable, Sendable {
             maximum.x = max(maximum.x, point.x)
             maximum.y = max(maximum.y, point.y)
         }
-        let textBounds = textNote?.bounds(at: start)
+        let textBounds = bitmap == nil ? textNote?.bounds(at: start) : bitmapFrame
         let x = textBounds?.midX ?? minimum.x + (maximum.x - minimum.x) / 2
         let y = textBounds?.midY ?? minimum.y + (maximum.y - minimum.y) / 2
         switch quarterTurns {
@@ -174,6 +241,7 @@ struct InkStroke: Identifiable, Sendable {
 
     func contains(_ point: CGPoint, tolerance: CGFloat) -> Bool {
         guard bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
+        if fillOutline?.contains(point) == true { return true }
         let path = outline
         if path.contains(point) { return true }
         guard tolerance > 0 else { return false }
@@ -457,14 +525,30 @@ final class EditorDocument: ObservableObject {
         }
     }
 
-    func beginShape(at point: CGPoint, color: CGColor, width: CGFloat, shape: SnipShape, lineStyle: SnipLineStyle) {
-        beginAnnotation(at: point, color: color, width: width, shape: shape, lineStyle: lineStyle)
+    func beginShape(at point: CGPoint, color: CGColor, width: CGFloat, shape: SnipShape, lineStyle: SnipLineStyle,
+                    fill: CGColor? = nil) {
+        beginAnnotation(at: point, color: color, width: width, shape: shape, lineStyle: lineStyle, fill: fill)
     }
 
     private func beginAnnotation(at point: CGPoint, color: CGColor, width: CGFloat,
-                                 shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid) {
+                                 shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid, fill: CGColor? = nil) {
         guard image != nil, !isDrawing, width.isFinite, width > 0, point.x.isFinite, point.y.isFinite else { return }
-        draftStroke = InkStroke(color: color, width: width, at: point, shape: shape, lineStyle: lineStyle)
+        draftStroke = InkStroke(color: color, width: width, at: point, shape: shape, lineStyle: lineStyle, fill: fill)
+    }
+
+    func addEmoji(_ emoji: String, at origin: CGPoint, size: CGFloat) throws {
+        guard image != nil, origin.x.isFinite, origin.y.isFinite else { throw EditorDocumentError.noImage }
+        var sticker = try InkStroke(emoji: emoji, size: size, at: origin)
+        if sticker.prepareForCommit() { commit(.insert(sticker)) }
+    }
+
+    func setFill(id: UUID, color: CGColor?) {
+        _ = updateAnnotation(id: id) { $0.filled(with: color) }
+    }
+
+    func resizeAnnotation(id: UUID, factor: CGFloat) throws {
+        guard let stroke = annotation(withID: id), let changed = try stroke.scaled(by: factor) else { return }
+        _ = updateAnnotation(id: id) { _ in changed }
     }
 
     func extendStroke(to point: CGPoint) {
@@ -673,6 +757,21 @@ struct PngSnapshot: Sendable {
         context.scaleBy(x: 1, y: -1)
         for stroke in strokes {
             try Task.checkCancellation()
+            if let bitmap = stroke.bitmap {
+                let frame = stroke.bitmapFrame
+                context.saveGState()
+                context.concatenate(stroke.bitmapTransform)
+                context.translateBy(x: frame.minX, y: frame.maxY)
+                context.scaleBy(x: 1, y: -1)
+                context.draw(bitmap, in: CGRect(origin: .zero, size: frame.size))
+                context.restoreGState()
+                continue
+            }
+            if let fill = stroke.fillColor, let area = stroke.fillOutline {
+                context.setFillColor(fill)
+                context.addPath(area)
+                context.fillPath()
+            }
             context.setFillColor(stroke.color)
             context.addPath(stroke.outline)
             context.fillPath()

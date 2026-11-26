@@ -12,6 +12,8 @@ struct StudioVideoReview: View {
     @State private var exportTask: Task<Void, Never>?
     @State private var exportStatus = ""
     @State private var exportError: String?
+    @State private var workingCopy: URL?
+    @State private var openingEditor = false
     @State private var showCompression = false
     @State private var maximumSize = "20"
     @State private var compressSelection = false
@@ -40,6 +42,7 @@ struct StudioVideoReview: View {
         .background(StudioColors.canvas)
         .task(id: url) {
             exportStatus = ""
+            workingCopy = nil
             await model.load(url)
         }
         .onDisappear {
@@ -215,8 +218,19 @@ struct StudioVideoReview: View {
             Text(exportStatus.isEmpty ? model.hint : exportStatus)
                 .lineLimit(1)
                 .foregroundStyle(.secondary)
+                .help(exportStatus.isEmpty ? model.hint : exportStatus)
             Spacer(minLength: 0)
-            if exportTask != nil {
+            if let workingCopy {
+                Button("Show working copy") {
+                    NSWorkspace.shared.activateFileViewerSelecting([workingCopy])
+                }
+                .controlSize(.small)
+                .help(workingCopy.path(percentEncoded: false))
+            }
+            Button("Edit in app…", systemImage: "pencil") { saveVideo(.workingCopy) }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(!model.isReady || exportTask != nil)
+            if exportTask != nil && !openingEditor {
                 Button("Cancel") { exportTask?.cancel() }.controlSize(.small)
             }
         }
@@ -241,6 +255,18 @@ struct StudioVideoReview: View {
         model.pause()
 
         let panel = NSSavePanel()
+        var editorPicker: StudioVideoEditorPicker?
+        if case .workingCopy = action {
+            guard let picker = StudioVideoEditorPicker(for: url) else {
+                exportError = "macOS could not find an installed app for this video type. Save a copy and import it from your editor."
+                return
+            }
+            editorPicker = picker
+            panel.title = "Save Working Copy"
+            panel.prompt = "Save and Open"
+            panel.message = "Choose a location and an app. The original video stays unchanged."
+            panel.accessoryView = picker.accessoryView
+        }
         let stem = url.deletingPathExtension().lastPathComponent
         let suffix = action.outputsMP4 ? "mp4" : url.pathExtension
         if action.outputsMP4 {
@@ -250,6 +276,7 @@ struct StudioVideoReview: View {
         }
         panel.nameFieldStringValue = "\(stem) \(action.filenameSuffix)" + (suffix.isEmpty ? "" : ".\(suffix)")
         guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let selectedEditor = editorPicker?.selection
 
         let range = model.trimTimes
         exportStatus = action.status
@@ -260,6 +287,17 @@ struct StudioVideoReview: View {
                 case .original:
                     try await StudioVideoExporter.saveCopy(from: url, to: destination)
                     exportStatus = "Saved \(destination.lastPathComponent)."
+                case .workingCopy:
+                    guard let selectedEditor else {
+                        exportStatus = "Select an app to open the working copy."
+                        return
+                    }
+                    try await StudioVideoExporter.saveCopy(from: url, to: destination)
+                    workingCopy = destination
+                    exportStatus = "Working copy saved to \(destination.path(percentEncoded: false))."
+                    if !Task.isCancelled {
+                        await openWorkingCopy(destination, with: selectedEditor)
+                    }
                 case .trimmed:
                     try await StudioVideoExporter.saveTrimmedCopy(from: url, to: destination, start: range.start, end: range.end)
                     exportStatus = "Saved \(destination.lastPathComponent)."
@@ -279,14 +317,27 @@ struct StudioVideoReview: View {
             }
         }
     }
+
+    private func openWorkingCopy(_ destination: URL, with editor: StudioVideoEditor) async {
+        openingEditor = true
+        defer { openingEditor = false }
+        do {
+            _ = try await NSWorkspace.shared.open(
+                [destination], withApplicationAt: editor.url, configuration: NSWorkspace.OpenConfiguration()
+            )
+            exportStatus = "Opened \(destination.lastPathComponent) in \(editor.name)."
+        } catch {
+            exportError = "\(editor.name) couldn’t open the video. The working copy was saved to \(destination.path(percentEncoded: false)). \(error.localizedDescription)"
+        }
+    }
 }
 
 private enum VideoSaveAction {
-    case original, trimmed, compressed(maximumBytes: Int64, useTrim: Bool)
+    case original, workingCopy, trimmed, compressed(maximumBytes: Int64, useTrim: Bool)
 
     var outputsMP4: Bool {
         switch self {
-        case .original: false
+        case .original, .workingCopy: false
         case .trimmed, .compressed: true
         }
     }
@@ -294,6 +345,7 @@ private enum VideoSaveAction {
     var filenameSuffix: String {
         switch self {
         case .original: "copy"
+        case .workingCopy: "working copy"
         case .trimmed: "trimmed"
         case .compressed: "compressed"
         }
@@ -302,9 +354,65 @@ private enum VideoSaveAction {
     var status: String {
         switch self {
         case .original: "Copying video…"
+        case .workingCopy: "Creating working copy…"
         case .trimmed: "Saving trimmed video…"
         case .compressed: "Compressing video…"
         }
+    }
+}
+
+private struct StudioVideoEditor {
+    let url: URL
+    let name: String
+}
+
+@MainActor
+private struct StudioVideoEditorPicker {
+    let accessoryView: NSView
+    private let popup: NSPopUpButton
+    private let editors: [StudioVideoEditor]
+
+    var selection: StudioVideoEditor? {
+        let index = popup.indexOfSelectedItem
+        return editors.indices.contains(index) ? editors[index] : nil
+    }
+
+    init?(for source: URL) {
+        let workspace = NSWorkspace.shared
+        let defaultApp = workspace.urlForApplication(toOpen: source)?.resolvingSymlinksInPath()
+        let compatible = workspace.urlsForApplications(toOpen: source).map { $0.resolvingSymlinksInPath() }
+        let ownApp = Bundle.main.bundleURL.resolvingSymlinksInPath()
+        var seen = Set<URL>()
+        let urls = ([defaultApp].compactMap { $0 } + compatible).filter {
+            $0.isFileURL && $0 != ownApp && seen.insert($0).inserted
+        }
+        let editors = urls.map { url in
+            StudioVideoEditor(url: url, name: FileManager.default.displayName(atPath: url.path(percentEncoded: false)))
+        }.sorted { first, second in
+            let firstIsDefault = first.url == defaultApp
+            let secondIsDefault = second.url == defaultApp
+            if firstIsDefault != secondIsDefault { return firstIsDefault }
+            return first.name.localizedStandardCompare(second.name) == .orderedAscending
+        }
+        guard !editors.isEmpty else { return nil }
+
+        let popup = NSPopUpButton(frame: .zero, pullsDown: false)
+        for editor in editors {
+            popup.addItem(withTitle: editor.url == defaultApp ? "\(editor.name) (Default)" : editor.name)
+        }
+        popup.selectItem(at: 0)
+        popup.setAccessibilityLabel("App to open the working copy")
+        let label = NSTextField(labelWithString: "Open in")
+        let stack = NSStackView(views: [label, popup])
+        stack.orientation = .horizontal
+        stack.alignment = .centerY
+        stack.spacing = 9
+        stack.edgeInsets = NSEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
+        stack.frame.size = stack.fittingSize
+
+        self.editors = editors
+        self.popup = popup
+        accessoryView = stack
     }
 }
 

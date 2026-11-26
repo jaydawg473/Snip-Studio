@@ -4,17 +4,49 @@ import SwiftUI
 
 enum StudioDesktopIntegration {
     static let showInMenuBar = "showSnipStudioInMenuBar"
+
+    @MainActor
+    static func captureRegion(applicationDelegate: StudioApplicationDelegate, open: @escaping (UUID) -> Void) {
+        guard !applicationDelegate.captureInProgress else { return }
+        applicationDelegate.captureInProgress = true
+        Task { @MainActor in
+            defer { applicationDelegate.captureInProgress = false }
+            do {
+                guard let image = try await CaptureService.capture(.region) else { return }
+                let id = applicationDelegate.storePendingSnip(image)
+                NSApp.unhide(nil)
+                NSApp.activate()
+                open(id)
+            } catch is CancellationError {
+                return
+            } catch {
+                NSApp.unhide(nil)
+                NSApp.activate()
+                let alert = NSAlert()
+                alert.messageText = "Couldn’t capture the region"
+                alert.informativeText = error.localizedDescription
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
+        }
+    }
 }
 
 @MainActor
 struct StudioDesktopSettingsView: View {
+    @ObservedObject var shortcut: StudioGlobalShortcut
     @AppStorage(StudioDesktopIntegration.showInMenuBar) private var showInMenuBar = false
+    @AppStorage(StudioGlobalShortcut.preferenceKey) private var shortcutEnabled = false
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
 
     var body: some View {
         Section("Desktop") {
             Toggle("Show Snip Studio in the menu bar", isOn: $showInMenuBar)
+            Toggle("Capture a region with \(StudioGlobalShortcut.displayName)", isOn: $shortcutEnabled)
+            if shortcutEnabled, let error = shortcut.errorMessage {
+                Text(error).font(.footnote).foregroundStyle(.secondary)
+            }
             Toggle("Open Snip Studio at login", isOn: Binding(
                 get: { loginStatus == .enabled || loginStatus == .requiresApproval },
                 set: setLaunchAtLogin
@@ -81,26 +113,28 @@ struct StudioMenuBarContent: View {
     }
 
     private func captureRegion() {
-        guard !applicationDelegate.captureInProgress else { return }
-        applicationDelegate.captureInProgress = true
-        Task { @MainActor in
-            defer { applicationDelegate.captureInProgress = false }
-            do {
-                guard let image = try await CaptureService.capture(.region) else { return }
-                let id = applicationDelegate.storePendingSnip(image)
-                NSApp.unhide(nil)
-                NSApp.activate()
-                openWindow(id: "studio", value: id)
-            } catch is CancellationError {
-                return
-            } catch {
-                NSApp.unhide(nil)
-                NSApp.activate()
-                let alert = NSAlert()
-                alert.messageText = "Couldn’t capture the region"
-                alert.informativeText = error.localizedDescription
-                alert.addButton(withTitle: "OK")
-                alert.runModal()
+        StudioDesktopIntegration.captureRegion(applicationDelegate: applicationDelegate) { id in
+            openWindow(id: "studio", value: id)
+        }
+    }
+}
+
+@MainActor
+struct StudioGlobalCaptureRegistration: ViewModifier {
+    let applicationDelegate: StudioApplicationDelegate
+    let shortcut: StudioGlobalShortcut
+    @Environment(\.openWindow) private var openWindow
+    @AppStorage(StudioGlobalShortcut.preferenceKey) private var enabled = false
+
+    func body(content: Content) -> some View {
+        content.onChange(of: enabled, initial: true) { _, value in
+            let delegate = applicationDelegate
+            let open = openWindow
+            shortcut.update(enabled: value) { [weak delegate] in
+                guard let delegate else { return }
+                StudioDesktopIntegration.captureRegion(applicationDelegate: delegate) { id in
+                    open(id: "studio", value: id)
+                }
             }
         }
     }

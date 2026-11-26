@@ -10,10 +10,20 @@ enum TrialSelfCheck {
         do {
             try await checkEditor()
             try StudioTextAnnotationSelfCheck.run()
+            try StudioEmojiRasterSelfCheck.run()
             try StudioScrollStitcher.selfCheck()
             try StudioFreeformMask.selfCheck()
             try StudioOCRReplacement.selfCheck()
-            if #available(macOS 15.0, *) { try StudioTranslationReviewSelfCheck.run() }
+            if #available(macOS 15.0, *) {
+                try StudioTranslationReviewSelfCheck.run()
+                let crop = StudioScreenRecorder.displayRect(
+                    for: CGRect(x: 40, y: 30, width: 200, height: 100),
+                    windowFrame: CGRect(x: -1360, y: 70, width: 800, height: 500),
+                    displayFrame: CGRect(x: -1440, y: -160, width: 1440, height: 900)
+                )
+                try require(crop == CGRect(x: 120, y: 260, width: 200, height: 100),
+                            "recording a selected window region accounts for its secondary display origin")
+            }
             try await StudioProjectFile.selfCheck()
             try await checkRasterPatches()
             try await checkShapesAndEraser()

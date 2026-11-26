@@ -10,6 +10,7 @@ struct SnipCanvas: View {
     let allowsDrawing: Bool
     let activeShape: SnipShape?
     let lineStyle: SnipLineStyle
+    let shapeFill: Color?
     let erasesAnnotations: Bool
     let cropSelection: Binding<CGRect>?
     let annotationSelection: Binding<UUID?>?
@@ -27,7 +28,7 @@ struct SnipCanvas: View {
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
-         allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid,
+         allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid, shapeFill: Color? = nil,
          erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
          annotationSelection: Binding<UUID?>? = nil, textDraft: Binding<StudioTextDraft?>? = nil,
          onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [], ocrSelection: Binding<Set<Int>>? = nil,
@@ -39,6 +40,7 @@ struct SnipCanvas: View {
         self.allowsDrawing = allowsDrawing
         self.activeShape = activeShape
         self.lineStyle = lineStyle
+        self.shapeFill = shapeFill
         self.erasesAnnotations = erasesAnnotations
         self.cropSelection = cropSelection
         self.annotationSelection = annotationSelection
@@ -133,7 +135,7 @@ struct SnipCanvas: View {
                     let offset = drag?.id == stroke.id ? drag?.translation ?? .zero : .zero
                     var layer = ink
                     layer.translateBy(x: offset.width, y: offset.height)
-                    layer.fill(Path(stroke.outline), with: .color(Color(cgColor: stroke.color)))
+                    draw(stroke, in: layer)
                     if selected == stroke.id {
                         let padding = 4 / layout.scale
                         let bounds = Path(stroke.bounds.insetBy(dx: -padding, dy: -padding))
@@ -144,7 +146,7 @@ struct SnipCanvas: View {
                     }
                 }
                 if let draft {
-                    ink.fill(Path(draft.outline), with: .color(Color(cgColor: draft.color)))
+                    draw(draft, in: ink)
                 }
 
                 let borderWidth = layout.usesNativePixels ? 1 / displayScale : 1
@@ -214,6 +216,19 @@ struct SnipCanvas: View {
         }
     }
 
+    private func draw(_ stroke: InkStroke, in ink: GraphicsContext) {
+        if let bitmap = stroke.bitmap {
+            var layer = ink
+            layer.concatenate(stroke.bitmapTransform)
+            layer.draw(Image(decorative: bitmap, scale: 1), in: stroke.bitmapFrame)
+            return
+        }
+        if let fill = stroke.fillColor, let area = stroke.fillOutline {
+            ink.fill(Path(area), with: .color(Color(cgColor: fill)))
+        }
+        ink.fill(Path(stroke.outline), with: .color(Color(cgColor: stroke.color)))
+    }
+
     private func inkGesture(in frame: CGRect, layout: SnipViewportLayout) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .updating($dragActive) { _, active, _ in active = true }
@@ -250,7 +265,8 @@ struct SnipCanvas: View {
             let color = NSColor(inkColor).usingColorSpace(.sRGB)?.cgColor ?? NSColor.systemRed.cgColor
             let start = layout.imagePoint(event.startLocation, in: frame)
             if let activeShape {
-                document.beginShape(at: start, color: color, width: inkWidth, shape: activeShape, lineStyle: lineStyle)
+                let fill = shapeFill.flatMap { NSColor($0).usingColorSpace(.sRGB)?.cgColor }
+                document.beginShape(at: start, color: color, width: inkWidth, shape: activeShape, lineStyle: lineStyle, fill: fill)
             } else {
                 document.beginStroke(at: start, color: color, width: inkWidth)
             }

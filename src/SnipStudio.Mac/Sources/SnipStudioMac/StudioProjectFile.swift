@@ -16,6 +16,8 @@ struct StudioProjectAnnotation: Codable, Sendable, Equatable {
     let lineStyle: String
     let quarterTurns: Int
     let text: StudioTextAnnotation?
+    var fill: [CGFloat]? = nil
+    var emoji: String? = nil
 }
 
 struct StudioProjectContents: Sendable {
@@ -27,7 +29,8 @@ enum StudioProjectFile {
     static let filenameExtension = "snipstudiomac"
 
     private static let magic = Data("SNIPMAC\0".utf8)
-    private static let version: UInt64 = 1
+    private static let baseVersion: UInt64 = 1
+    private static let decoratedVersion: UInt64 = 2
     private static let digestLength = 32
     private static let pixelDigestOffset = 64
     private static let headerSize = 96
@@ -59,7 +62,7 @@ enum StudioProjectFile {
             let output = try openPrivateOutput(staged)
             do {
                 var header = magic
-                header.appendBigEndian(version)
+                header.appendBigEndian(annotations.contains { $0.fill != nil || $0.emoji != nil } ? decoratedVersion : baseVersion)
                 header.appendBigEndian(UInt64(annotationData.count))
                 header.appendBigEndian(pngBytes)
                 header.append(Data(SHA256.hash(data: annotationData)))
@@ -91,7 +94,8 @@ enum StudioProjectFile {
             }
             let header = try readExactly(headerSize, from: input)
             guard header.prefix(magic.count).elementsEqual(magic) else { throw Failure.wrongFormat }
-            guard header.bigEndian(at: 8) == version else { throw Failure.unsupportedVersion }
+            let version = header.bigEndian(at: 8)
+            guard version == baseVersion || version == decoratedVersion else { throw Failure.unsupportedVersion }
             let annotationBytes = header.bigEndian(at: 16)
             let pngBytes = header.bigEndian(at: 24)
             guard annotationBytes > 0, annotationBytes <= UInt64(maximumMetadataBytes),
@@ -106,6 +110,9 @@ enum StudioProjectFile {
             do { annotations = try JSONDecoder().decode([StudioProjectAnnotation].self, from: annotationData) }
             catch { throw Failure.corrupt }
             try validateAnnotations(annotations)
+            if version == baseVersion && annotations.contains(where: { $0.fill != nil || $0.emoji != nil }) {
+                throw Failure.corrupt
+            }
 
             let directory = try privateDirectory(in: FileManager.default.temporaryDirectory)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -222,16 +229,23 @@ enum StudioProjectFile {
                 throw Failure.invalidAnnotations
             }
             if let shape = annotation.shape {
-                guard shapes.contains(shape), annotation.text == nil, annotation.points.count == 2 else {
+                guard shapes.contains(shape), annotation.text == nil, annotation.emoji == nil, annotation.points.count == 2 else {
                     throw Failure.invalidAnnotations
                 }
             } else if let note = annotation.text {
-                guard annotation.points.count == 1,
+                guard annotation.emoji == nil, annotation.points.count == 1,
                       (1...StudioTextAnnotation.maximumUTF16Length).contains(note.text.utf16.count),
                       (1...256).contains(note.fontName.utf16.count), !note.fontName.contains("\0"),
                       StudioTextAnnotation.pixelSizeRange.contains(note.pixelSize) else {
                     throw Failure.invalidAnnotations
                 }
+            }
+            if let fill = annotation.fill {
+                guard (annotation.shape == "rectangle" || annotation.shape == "ellipse"), fill.count == 4,
+                      fill.allSatisfy({ (0...1).contains($0) }) else { throw Failure.invalidAnnotations }
+            }
+            if let glyph = annotation.emoji {
+                guard annotation.points.count == 1, StudioEmojiRaster.stickers.contains(glyph) else { throw Failure.invalidAnnotations }
             }
         }
     }

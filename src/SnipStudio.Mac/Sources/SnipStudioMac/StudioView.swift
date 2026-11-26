@@ -24,6 +24,11 @@ struct StudioView: View {
     @State private var lineStyle = SnipLineStyle.solid
     @State private var shapeColor = Color.red
     @State private var shapeWidth: CGFloat = 3
+    @State private var fillsShape = false
+    @State private var shapeFillColor = Color.red.opacity(0.32)
+    @State private var showsEmojiPicker = false
+    @State private var selectedEmoji = "🙂"
+    @State private var emojiSize: CGFloat = 44
     @State private var cropBounds = CGRect.null
     @State private var selectedAnnotationID: UUID?
     @State private var textDraft: StudioTextDraft?
@@ -176,7 +181,12 @@ struct StudioView: View {
     }
 
     private var editorCanvas: SnipCanvas {
-        let textTap: ((CGPoint) -> Void)? = tool == .text ? { beginText(at: $0) } : nil
+        let canvasTap: ((CGPoint) -> Void)?
+        switch tool {
+        case .text: canvasTap = { beginText(at: $0) }
+        case .emoji: canvasTap = { insertEmoji(at: $0) }
+        default: canvasTap = nil
+        }
         let zoom = zoomPercent.map { CGFloat($0) / 100 }
         let inkEnabled = tool == .pen || tool == .highlight || tool == .shape || tool == .eraser
         let ocrLines: [RecognizedLine] = tool == .textActions ? recognizedLines ?? [] : []
@@ -188,11 +198,12 @@ struct StudioView: View {
             allowsDrawing: inkEnabled,
             activeShape: tool == .shape ? shape : nil,
             lineStyle: lineStyle,
+            shapeFill: tool == .shape && fillsShape && (shape == .rectangle || shape == .ellipse) ? shapeFillColor : nil,
             erasesAnnotations: tool == .eraser,
             cropSelection: tool == .crop || tool == .removeArea ? $cropBounds : nil,
             annotationSelection: tool == .move ? $selectedAnnotationID : nil,
             textDraft: tool == .text ? $textDraft : nil,
-            onTextTap: textTap,
+            onTextTap: canvasTap,
             recognizedLines: ocrLines,
             ocrSelection: tool == .textActions ? $selectedOCRIndices : nil,
             onZoomChanged: { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
@@ -352,6 +363,8 @@ struct StudioView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Shapes")
+            iconButton("Emoji stickers", symbol: "face.smiling", selected: tool == .emoji) { showsEmojiPicker.toggle() }
+                .popover(isPresented: $showsEmojiPicker) { emojiPicker }
             toolButton(.text, label: "Add or edit text", symbol: "textformat")
             toolButton(.eraser, label: "Eraser", symbol: "eraser")
             toolButton(.crop, label: "Crop", symbol: "crop").disabled(busy)
@@ -391,7 +404,7 @@ struct StudioView: View {
             }
         case .pen, .highlight, .shape:
             HStack(spacing: 10) {
-                ColorPicker("Ink color", selection: tool == .shape ? $shapeColor : (tool == .highlight ? $highlightColor : $inkColor), supportsOpacity: false)
+                ColorPicker("Ink color", selection: tool == .shape ? $shapeColor : (tool == .highlight ? $highlightColor : $inkColor), supportsOpacity: tool == .shape)
                     .labelsHidden()
                     .help("Ink color")
                 Stepper(value: tool == .shape ? $shapeWidth : (tool == .highlight ? $highlightWidth : $inkWidth), in: 1...30, step: 1) {
@@ -409,6 +422,12 @@ struct StudioView: View {
                     .labelsHidden()
                     .fixedSize()
                     .help("Line style")
+                    if shape == .rectangle || shape == .ellipse {
+                        Toggle("Fill", isOn: $fillsShape).toggleStyle(.checkbox)
+                        if fillsShape {
+                            ColorPicker("Fill color", selection: $shapeFillColor).labelsHidden().help("Fill color")
+                        }
+                    }
                 }
                 Spacer(minLength: 0)
                 iconButton("Hide options", symbol: "xmark") { showOptions = false }
@@ -455,7 +474,38 @@ struct StudioView: View {
             .background(StudioColors.options)
         case .text:
             textOptions
+        case .emoji:
+            HStack(spacing: 10) {
+                Text(selectedEmoji).font(.system(size: 22)).accessibilityLabel("Selected sticker")
+                Stepper(value: $emojiSize, in: 16...144, step: 4) {
+                    Text("\(Int(emojiSize)) px").monospacedDigit()
+                }
+                .fixedSize()
+                .accessibilityLabel("Sticker size")
+                Text("Click the snip to place a sticker.").font(.system(size: 12))
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(StudioColors.options)
         }
+    }
+
+    private var emojiPicker: some View {
+        LazyVGrid(columns: Array(repeating: GridItem(.fixed(36), spacing: 4), count: 6), spacing: 4) {
+            ForEach(StudioEmojiRaster.stickers, id: \.self) { emoji in
+                Button {
+                    selectedEmoji = emoji
+                    selectTool(.emoji)
+                    showsEmojiPicker = false
+                } label: {
+                    Text(emoji).font(.system(size: 22)).frame(width: 24)
+                }
+                .buttonStyle(StudioButtonStyle(selected: selectedEmoji == emoji && tool == .emoji))
+                .accessibilityLabel(StudioEmojiRaster.name(for: emoji))
+            }
+        }
+        .padding(10)
     }
 
     private var statusBar: some View {
@@ -601,13 +651,15 @@ struct StudioView: View {
                 document.rotateAnnotation(id: annotation.id, clockwise: true)
             }
             Divider().frame(height: 20)
-            ColorPicker("Annotation color", selection: Binding(get: { Color(cgColor: annotation.color) }, set: { color in
-                guard let cgColor = NSColor(color).usingColorSpace(.sRGB)?.cgColor else { return }
-                document.updateAnnotation(id: annotation.id, color: cgColor)
-            }), supportsOpacity: true)
-            .labelsHidden()
-            .help("Annotation color and opacity")
-            if annotation.textNote == nil {
+            if annotation.emoji == nil {
+                ColorPicker("Annotation color", selection: Binding(get: { Color(cgColor: annotation.color) }, set: { color in
+                    guard let cgColor = NSColor(color).usingColorSpace(.sRGB)?.cgColor else { return }
+                    document.updateAnnotation(id: annotation.id, color: cgColor)
+                }), supportsOpacity: true)
+                .labelsHidden()
+                .help("Annotation color and opacity")
+            }
+            if annotation.textNote == nil && annotation.emoji == nil {
                 Stepper(value: Binding(get: { annotation.width }, set: { width in
                     document.updateAnnotation(id: annotation.id, width: width)
                 }), in: 1...30, step: 1) {
@@ -627,6 +679,26 @@ struct StudioView: View {
                 .labelsHidden()
                 .fixedSize()
             }
+            Menu {
+                ForEach([50, 75, 125, 150, 200], id: \.self) { percent in
+                    Button("Resize to \(percent)%") {
+                        do { try document.resizeAnnotation(id: annotation.id, factor: CGFloat(percent) / 100) }
+                        catch { report(error) }
+                    }
+                }
+                if annotation.shape == .rectangle || annotation.shape == .ellipse {
+                    Divider()
+                    Button(annotation.fillColor == nil ? "Add fill" : "Remove fill") {
+                        let fill = annotation.fillColor == nil ? annotation.color.copy(alpha: 0.32) : nil
+                        document.setFill(id: annotation.id, color: fill)
+                    }
+                }
+            } label: {
+                Image(systemName: "arrow.up.left.and.down.right.magnifyingglass").accessibilityLabel("Resize and fill")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Resize and fill")
             Spacer(minLength: 0)
             iconButton("Delete annotation", symbol: "trash") {
                 document.deleteAnnotation(id: annotation.id)
@@ -690,6 +762,7 @@ struct StudioView: View {
         case .pen: status = "Draw on the screenshot."
         case .highlight: status = "Drag to highlight an area."
         case .shape: status = "Drag to draw a \(shape.rawValue)."
+        case .emoji: status = "Click the screenshot to place the selected sticker."
         case .text: status = "Click the screenshot to add or edit text."
         case .eraser: status = "Erase annotations. Use Undo to restore them."
         case .crop:
@@ -714,6 +787,11 @@ struct StudioView: View {
         }
         document.hasPendingTextChanges = true
         status = "Use the checkmark to apply text or X to cancel."
+    }
+
+    private func insertEmoji(at origin: CGPoint) {
+        do { try document.addEmoji(selectedEmoji, at: origin, size: emojiSize) }
+        catch { report(error) }
     }
 
     private func changeTextStyle(_ change: (inout StudioTextAnnotation) -> Void) {

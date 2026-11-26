@@ -16,16 +16,14 @@ struct StudioRecordingView: View {
     @State private var showsOptions = false
     @State private var systemAudio = true
     @State private var microphone = false
+    @State private var microphones: [StudioMicrophone] = []
+    @State private var microphoneDeviceID: String?
     @State private var showsPointer = true
     @State private var startedAt: Date?
     @State private var errorMessage: String?
 
     private var source: StudioRecordingSource? { sources.first { $0.id == selectedID } }
-    private var canAdjustArea: Bool {
-        guard let source else { return false }
-        if case .display = source.kind { return true }
-        return false
-    }
+    private var canAdjustArea: Bool { source?.canAdjustArea == true }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
@@ -59,7 +57,16 @@ struct StudioRecordingView: View {
                     .help("Recording options")
                     .disabled(isActive)
                     .popover(isPresented: $showsOptions) {
-                        Toggle("Show pointer", isOn: $showsPointer).padding(16)
+                        VStack(alignment: .leading, spacing: 12) {
+                            Toggle("Show pointer", isOn: $showsPointer)
+                            Picker("Microphone device", selection: $microphoneDeviceID) {
+                                Text("System default").tag(nil as String?)
+                                ForEach(microphones, id: \.id) { device in
+                                    Text(device.title).tag(Optional(device.id))
+                                }
+                            }
+                        }
+                        .padding(16)
                     }
             }
 
@@ -74,7 +81,7 @@ struct StudioRecordingView: View {
                 .accessibilityLabel("Recording source")
                 Button { showsAreaPicker = true } label: { Text("Adjust area") }
                     .disabled(!canAdjustArea || isActive)
-                    .help(canAdjustArea ? "Choose part of the display" : "Selected windows record their full bounds")
+                    .help(canAdjustArea ? "Choose the area to record" : "This selection can only record its full bounds")
                 Button { Task { await reloadSources() } } label: {
                     Image(systemName: "arrow.clockwise")
                 }
@@ -159,6 +166,7 @@ struct StudioRecordingView: View {
         defer { loadsSources = false }
         do {
             sources = try await StudioScreenRecorder.sources()
+            microphones = StudioScreenRecorder.microphones()
             if !sources.contains(where: { $0.id == selectedID }) { selectedID = sources.first?.id }
         } catch is CancellationError {
             return
@@ -173,7 +181,8 @@ struct StudioRecordingView: View {
         Task { @MainActor in
             do {
                 try await recorder.start(source: source, area: area, systemAudio: systemAudio,
-                                         microphone: microphone, showsPointer: showsPointer)
+                                         microphone: microphone, showsPointer: showsPointer,
+                                         microphoneDeviceID: microphoneDeviceID)
                 startedAt = Date()
             } catch is CancellationError {
                 return
@@ -231,12 +240,12 @@ private struct StudioRecordingAreaView: View {
                 } else if let errorMessage {
                     Text(errorMessage).frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
-                    ProgressView("Preparing the display preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                    ProgressView("Preparing the recording preview…").frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .background(StudioColors.canvas)
             HStack {
-                Button("Entire display") { bounds = CGRect(origin: .zero, size: source.size) }
+                Button("Entire source") { bounds = CGRect(origin: .zero, size: source.size) }
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
                 Button("Use area") {

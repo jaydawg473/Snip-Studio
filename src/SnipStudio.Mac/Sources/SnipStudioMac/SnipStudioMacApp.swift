@@ -14,17 +14,22 @@ enum SnipStudioMacEntry {
 
 struct SnipStudioMacApp: App {
     @NSApplicationDelegateAdaptor private var applicationDelegate: StudioApplicationDelegate
+    @StateObject private var shortcut = StudioGlobalShortcut()
     @AppStorage(StudioDesktopIntegration.showInMenuBar) private var showInMenuBar = false
 
     var body: some Scene {
         WindowGroup("Snip Studio", id: "studio", for: UUID.self) { $sessionID in
             StudioView(applicationDelegate: applicationDelegate, sessionID: sessionID)
+                .modifier(StudioGlobalCaptureRegistration(applicationDelegate: applicationDelegate, shortcut: shortcut))
         }
         .defaultSize(width: 540, height: 310)
         .windowResizability(.contentMinSize)
         .commands { StudioCommands(applicationDelegate: applicationDelegate) }
 
-        Settings { StudioSettingsView() }
+        Settings {
+            StudioSettingsView(shortcut: shortcut)
+                .modifier(StudioGlobalCaptureRegistration(applicationDelegate: applicationDelegate, shortcut: shortcut))
+        }
 
         WindowGroup("Review video", id: "video-review", for: URL.self) { $videoURL in
             if let videoURL { StudioVideoReview(url: videoURL) }

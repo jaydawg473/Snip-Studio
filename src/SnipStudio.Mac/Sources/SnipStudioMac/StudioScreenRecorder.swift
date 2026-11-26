@@ -13,10 +13,19 @@ struct StudioRecordingSource: Identifiable, Hashable {
     let size: CGSize
     let kind: Kind
     fileprivate let captureID: UInt32
+    fileprivate let ownerPID: pid_t?
+    fileprivate let adjustmentDisplayID: CGDirectDisplayID?
+
+    var canAdjustArea: Bool { kind == .display || adjustmentDisplayID != nil }
 
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
 
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+struct StudioMicrophone: Identifiable, Hashable {
+    let id: String
+    let title: String
 }
 
 @available(macOS 15.0, *)
@@ -32,16 +41,20 @@ final class StudioScreenRecorder: ObservableObject {
     static func sources() async throws -> [StudioRecordingSource] {
         try checkScreenAccess()
         let content = try await shareableContent()
-        let displays = content.displays.sorted { lhs, rhs in
+        let displayCandidates = content.displays.filter {
+            CGDisplayIsActive($0.displayID) != 0 && CGDisplayMirrorsDisplay($0.displayID) == kCGNullDirectDisplay
+        }
+        let displays = displayCandidates.sorted { lhs, rhs in
             if lhs.displayID == CGMainDisplayID() { return rhs.displayID != CGMainDisplayID() }
             if rhs.displayID == CGMainDisplayID() { return false }
             return lhs.displayID < rhs.displayID
         }.enumerated().compactMap { index, display -> StudioRecordingSource? in
-            let size = CGDisplayBounds(display.displayID).size
+            let size = display.frame.size
             guard hasArea(size) else { return nil }
             let title = display.displayID == CGMainDisplayID() ? "Main Display" : "Display \(index + 1)"
             return StudioRecordingSource(id: "display-\(display.displayID)", title: title,
-                                         size: size, kind: .display, captureID: display.displayID)
+                                         size: size, kind: .display, captureID: display.displayID,
+                                         ownerPID: nil, adjustmentDisplayID: display.displayID)
         }
         let ourPID = ProcessInfo.processInfo.processIdentifier
         let windows = content.windows.compactMap { window -> StudioRecordingSource? in
@@ -49,25 +62,38 @@ final class StudioScreenRecorder: ObservableObject {
                   application.processID != ourPID, hasArea(window.frame.size) else { return nil }
             let name = window.title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let title = name.isEmpty ? application.applicationName : "\(application.applicationName) — \(name)"
+            let adjustmentDisplay = displayCandidates.first { display in
+                adjustedWindowFilter(window, on: display) != nil
+            }
             return StudioRecordingSource(id: "window-\(window.windowID)", title: title,
-                                         size: window.frame.size, kind: .window, captureID: window.windowID)
+                                         size: window.frame.size, kind: .window, captureID: window.windowID,
+                                         ownerPID: application.processID, adjustmentDisplayID: adjustmentDisplay?.displayID)
         }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
         return displays + windows
     }
 
+    static func microphones() -> [StudioMicrophone] {
+        AVCaptureDevice.DiscoverySession(deviceTypes: [.microphone], mediaType: .audio, position: .unspecified)
+            .devices.filter(\.isConnected)
+            .map { StudioMicrophone(id: $0.uniqueID, title: $0.localizedName) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
     static func preview(source: StudioRecordingSource) async throws -> CGImage {
         try checkScreenAccess()
-        let filter = try await filter(for: source)
+        let sourceRect = source.canAdjustArea ? CGRect(origin: .zero, size: source.size) : nil
+        let target = try await target(for: source, area: sourceRect)
         let config = SCStreamConfiguration()
-        let size = filter.contentRect.size
+        let size = target.size
         let factor = min(1, 1200 / max(size.width, size.height))
         config.width = max(2, Int((size.width * factor).rounded()))
         config.height = max(2, Int((size.height * factor).rounded()))
         config.showsCursor = false
+        target.configureGeometry(config)
         let result = RecordingSignal<CGImage>()
         let work = Task { @MainActor in
             do {
-                result.resolve(.success(try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)))
+                result.resolve(.success(try await SCScreenshotManager.captureImage(contentFilter: target.filter, configuration: config)))
             } catch { result.resolve(.failure(error)) }
         }
         defer { work.cancel() }
@@ -75,7 +101,7 @@ final class StudioScreenRecorder: ObservableObject {
     }
 
     func start(source: StudioRecordingSource, area: CGRect? = nil, systemAudio: Bool = true,
-               microphone: Bool = false, showsPointer: Bool = true) async throws {
+               microphone: Bool = false, showsPointer: Bool = true, microphoneDeviceID: String? = nil) async throws {
         guard state == .idle else { throw RecordingFailure.busy }
         let id = UUID()
         attempt = id
@@ -88,24 +114,30 @@ final class StudioScreenRecorder: ObservableObject {
                     throw RecordingFailure.microphoneAccess
                 }
                 try checkAttempt(id)
+                if let microphoneDeviceID {
+                    guard Self.microphones().contains(where: { $0.id == microphoneDeviceID }) else {
+                        throw RecordingFailure.microphoneUnavailable
+                    }
+                } else if AVCaptureDevice.default(for: .audio) == nil {
+                    throw RecordingFailure.microphoneUnavailable
+                }
             }
-            let filter = try await Self.filter(for: source)
+            let target = try await Self.target(for: source, area: area)
             try checkAttempt(id)
-            let bounds = CGRect(origin: .zero, size: filter.contentRect.size)
-            let selected = try Self.recordingRect(area, within: bounds, kind: source.kind)
             let config = SCStreamConfiguration()
-            let nativeScale = CGFloat(filter.pointPixelScale)
+            let nativeScale = CGFloat(target.filter.pointPixelScale)
             guard nativeScale.isFinite, nativeScale > 0 else { throw RecordingFailure.sourceUnavailable }
-            let scale = min(nativeScale, 3840 / max(selected.width, selected.height))
-            config.width = Self.evenDimension(selected.width * scale)
-            config.height = Self.evenDimension(selected.height * scale)
+            let scale = min(nativeScale, 3840 / max(target.size.width, target.size.height))
+            config.width = Self.evenDimension(target.size.width * scale)
+            config.height = Self.evenDimension(target.size.height * scale)
             config.minimumFrameInterval = CMTime(value: 1, timescale: 30)
             config.queueDepth = 3
             config.showsCursor = showsPointer
             config.capturesAudio = systemAudio
             config.excludesCurrentProcessAudio = true
             config.captureMicrophone = microphone
-            if area != nil { config.sourceRect = selected }
+            if microphone { config.microphoneCaptureDeviceID = microphoneDeviceID }
+            target.configureGeometry(config)
 
             let output = SCRecordingOutputConfiguration()
             guard output.availableOutputFileTypes.contains(.mp4), output.availableVideoCodecTypes.contains(.h264) else {
@@ -115,7 +147,7 @@ final class StudioScreenRecorder: ObservableObject {
             output.outputURL = paths.draft
             output.outputFileType = .mp4
             output.videoCodecType = .h264
-            let recording = RecordingSession(paths: paths, filter: filter, config: config, output: output)
+            let recording = RecordingSession(paths: paths, filter: target.filter, config: config, output: output)
             recording.delegate.failed = { [weak self, weak recording] error in
                 guard let self, let recording, self.session === recording else { return }
                 recording.fail(error)
@@ -191,15 +223,14 @@ final class StudioScreenRecorder: ObservableObject {
         return try await result.wait(seconds: 12, onTimeout: .sourcesTimedOut)
     }
 
-    private static func filter(for source: StudioRecordingSource) async throws -> SCContentFilter {
+    private static func target(for source: StudioRecordingSource, area: CGRect?) async throws -> ScreenTarget {
         let content = try await shareableContent()
         let ourPID = ProcessInfo.processInfo.processIdentifier
-        let filter: SCContentFilter
         switch source.kind {
         case .display:
-            guard let display = content.displays.first(where: { $0.displayID == source.captureID }) else {
-                throw RecordingFailure.sourceUnavailable
-            }
+            guard let display = content.displays.first(where: { $0.displayID == source.captureID }),
+                  hasArea(display.frame.size) else { throw RecordingFailure.sourceUnavailable }
+            let filter: SCContentFilter
             let excluded = content.applications.filter { $0.processID == ourPID }
             if excluded.isEmpty {
                 let windows = content.windows.filter { $0.owningApplication?.processID == ourPID }
@@ -207,21 +238,52 @@ final class StudioScreenRecorder: ObservableObject {
             } else {
                 filter = SCContentFilter(display: display, excludingApplications: excluded, exceptingWindows: [])
             }
+            if area != nil && display.frame.size != source.size { throw RecordingFailure.selectionChanged }
+            let selected = try recordingRect(area, within: display.frame.size)
+            return ScreenTarget(filter: filter, size: selected.size, sourceRect: area == nil ? nil : selected,
+                                isolatesWindow: false)
         case .window:
             guard let window = content.windows.first(where: {
-                $0.windowID == source.captureID && $0.owningApplication?.processID != ourPID
-            }) else { throw RecordingFailure.sourceUnavailable }
-            filter = SCContentFilter(desktopIndependentWindow: window)
+                $0.windowID == source.captureID && $0.isOnScreen && $0.windowLayer == 0 &&
+                    $0.owningApplication?.processID == source.ownerPID && source.ownerPID != ourPID
+            }), hasArea(window.frame.size) else { throw RecordingFailure.sourceUnavailable }
+            guard let area else {
+                let filter = SCContentFilter(desktopIndependentWindow: window)
+                return ScreenTarget(filter: filter, size: window.frame.size, sourceRect: nil, isolatesWindow: true)
+            }
+            guard let displayID = source.adjustmentDisplayID else { throw RecordingFailure.windowAdjustment }
+            guard let display = content.displays.first(where: { $0.displayID == displayID }),
+                  CGDisplayIsActive(displayID) != 0 && CGDisplayMirrorsDisplay(displayID) == kCGNullDirectDisplay,
+                  window.frame.size == source.size && display.frame.contains(window.frame) else {
+                throw RecordingFailure.selectionChanged
+            }
+            guard let filter = adjustedWindowFilter(window, on: display) else { throw RecordingFailure.windowAdjustment }
+            let displayRect = try displayRect(for: area, windowFrame: window.frame, displayFrame: display.frame)
+            return ScreenTarget(filter: filter, size: displayRect.size, sourceRect: displayRect, isolatesWindow: true)
         }
-        guard hasArea(filter.contentRect.size) else { throw RecordingFailure.sourceUnavailable }
+    }
+
+    private static func adjustedWindowFilter(_ window: SCWindow, on display: SCDisplay) -> SCContentFilter? {
+        guard display.frame.contains(window.frame) else { return nil }
+        // A display-dependent filter keeps other windows out while exposing display-local geometry.
+        // A window-style filter can ignore sourceRect, so require display-sized content explicitly.
+        let filter = SCContentFilter(display: display, including: [window])
+        guard filter.style == .display, filter.contentRect.size == display.frame.size else { return nil }
         return filter
     }
 
-    private static func recordingRect(_ area: CGRect?, within bounds: CGRect,
-                                      kind: StudioRecordingSource.Kind) throws -> CGRect {
+    static func displayRect(for area: CGRect, windowFrame: CGRect, displayFrame: CGRect) throws -> CGRect {
+        guard hasArea(displayFrame.size), hasArea(windowFrame.size), displayFrame.contains(windowFrame) else {
+            throw RecordingFailure.windowAdjustment
+        }
+        let selected = try recordingRect(area, within: windowFrame.size)
+        return selected.offsetBy(dx: windowFrame.minX - displayFrame.minX,
+                                 dy: windowFrame.minY - displayFrame.minY)
+    }
+
+    private static func recordingRect(_ area: CGRect?, within size: CGSize) throws -> CGRect {
+        let bounds = CGRect(origin: .zero, size: size)
         guard let area else { return bounds }
-        // ScreenCaptureKit uses the full bounds of single-window filters, regardless of sourceRect.
-        guard kind == .display else { throw RecordingFailure.windowAdjustment }
         guard area.origin.x.isFinite, area.origin.y.isFinite, hasArea(area.size),
               bounds.contains(area) else { throw RecordingFailure.invalidArea }
         return area
@@ -232,6 +294,21 @@ final class StudioScreenRecorder: ObservableObject {
     }
 
     private static func evenDimension(_ pixels: CGFloat) -> Int { max(2, Int(pixels.rounded(.down)) & ~1) }
+
+    private struct ScreenTarget {
+        let filter: SCContentFilter
+        let size: CGSize
+        let sourceRect: CGRect?
+        let isolatesWindow: Bool
+
+        func configureGeometry(_ config: SCStreamConfiguration) {
+            if isolatesWindow {
+                config.ignoreShadowsDisplay = true
+                config.ignoreShadowsSingleWindow = true
+            }
+            if let sourceRect { config.sourceRect = sourceRect }
+        }
+    }
 }
 
 @available(macOS 15.0, *)
@@ -391,7 +468,8 @@ private struct RecordingPaths {
 }
 
 private enum RecordingFailure: LocalizedError {
-    case screenAccess, microphoneAccess, sourceUnavailable, invalidArea, windowAdjustment, unsupportedFormat
+    case screenAccess, microphoneAccess, microphoneUnavailable
+    case sourceUnavailable, invalidArea, selectionChanged, windowAdjustment, unsupportedFormat
     case busy, notRecording, sourcesTimedOut, previewTimedOut, startTimedOut, stopTimedOut, noVideo
     case publishFailed(URL, Error)
 
@@ -399,9 +477,11 @@ private enum RecordingFailure: LocalizedError {
         switch self {
         case .screenAccess: "Allow Snip Studio in System Settings under Privacy & Security → Screen & System Audio Recording. Then reopen it and try again."
         case .microphoneAccess: "Allow Snip Studio to use the microphone in System Settings, or turn off Microphone and try again."
+        case .microphoneUnavailable: "The microphone is unavailable. Choose an available input or turn off Microphone."
         case .sourceUnavailable: "The selected screen or window is unavailable. Refresh the list and choose it again."
-        case .invalidArea: "Choose an area at least two points wide and high within the display."
-        case .windowAdjustment: "Window recording includes the whole window. Choose a display to adjust the area."
+        case .invalidArea: "Choose an area at least two points wide and high within the selected source."
+        case .selectionChanged: "The selected window or display changed size or moved to another display. Refresh the list and adjust the area again."
+        case .windowAdjustment: "This window is only available as a whole-window recording. Move it entirely onto one display and refresh the list, or choose a display region."
         case .unsupportedFormat: "The system recorder could not provide MP4 with H.264."
         case .busy: "A recording is already starting, running, or finishing."
         case .notRecording: "There is no recording to stop."
