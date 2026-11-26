@@ -84,7 +84,7 @@ struct InkStroke: Identifiable, Sendable {
 
     fileprivate func projectRecord() throws -> StudioProjectAnnotation {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { throw EditorDocumentError.invalidProjectAnnotation }
-        func components(inSRGB ink: CGColor) throws -> [CGFloat] {
+        func sRGBComponents(of ink: CGColor) throws -> [CGFloat] {
             let values: [CGFloat]?
             if let current = ink.colorSpace, CFEqual(current, space) {
                 values = ink.components
@@ -94,8 +94,8 @@ struct InkStroke: Identifiable, Sendable {
             guard let values, values.count == 4 else { throw EditorDocumentError.invalidProjectAnnotation }
             return values
         }
-        let components = try components(inSRGB: color)
-        let fill = try fillColor.map { try components(inSRGB: $0) }
+        let components = try sRGBComponents(of: color)
+        let fill = try fillColor.map { try sRGBComponents(of: $0) }
         return StudioProjectAnnotation(points: points, red: components[0], green: components[1],
                                        blue: components[2], alpha: components[3], width: width,
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
