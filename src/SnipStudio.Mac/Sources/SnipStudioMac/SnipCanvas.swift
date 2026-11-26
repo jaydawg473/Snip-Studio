@@ -11,17 +11,21 @@ struct SnipCanvas: View {
     let activeShape: SnipShape?
     let lineStyle: SnipLineStyle
     let erasesAnnotations: Bool
+    let cropSelection: Binding<CGRect>?
+    let annotationSelection: Binding<UUID?>?
     let recognizedLines: [RecognizedLine]
     let onZoomChanged: (CGFloat) -> Void
 
     @Environment(\.displayScale) private var displayScale
     @GestureState private var dragActive = false
     @State private var lastEraseLocation: CGPoint?
+    @State private var annotationDrag: AnnotationDrag?
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
          allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid,
-         erasesAnnotations: Bool = false, recognizedLines: [RecognizedLine] = [],
+         erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
+         annotationSelection: Binding<UUID?>? = nil, recognizedLines: [RecognizedLine] = [],
          onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
@@ -31,6 +35,8 @@ struct SnipCanvas: View {
         self.activeShape = activeShape
         self.lineStyle = lineStyle
         self.erasesAnnotations = erasesAnnotations
+        self.cropSelection = cropSelection
+        self.annotationSelection = annotationSelection
         self.recognizedLines = recognizedLines
         self.onZoomChanged = onZoomChanged
     }
@@ -71,11 +77,24 @@ struct SnipCanvas: View {
                 if !dragActive {
                     document.cancelStroke()
                     lastEraseLocation = nil
+                    annotationDrag = nil
                 }
             }
         }
-        .onDisappear { document.cancelStroke() }
-        .onChange(of: zoom) { _, _ in document.cancelStroke() }
+        .onDisappear {
+            document.cancelStroke()
+            if annotationSelection != nil { NSCursor.arrow.set() }
+        }
+        .onChange(of: zoom) { _, _ in
+            document.cancelStroke()
+            annotationDrag = nil
+        }
+        .onChange(of: annotationSelection != nil) { _, selecting in
+            if !selecting {
+                annotationDrag = nil
+                NSCursor.arrow.set()
+            }
+        }
         .onChange(of: allowsDrawing) { _, enabled in
             if !enabled { document.cancelStroke() }
         }
@@ -84,6 +103,8 @@ struct SnipCanvas: View {
     private func raster(_ image: CGImage, frame: CGRect, layout: SnipViewportLayout) -> some View {
         let strokes = document.strokes
         let draft = document.draftStroke
+        let selected = annotationSelection?.wrappedValue
+        let drag = annotationDrag
         let border = Color(nsColor: .separatorColor)
         return ZStack {
             Canvas { context, _ in
@@ -99,7 +120,18 @@ struct SnipCanvas: View {
                 ink.translateBy(x: frame.minX, y: frame.minY)
                 ink.scaleBy(x: layout.scale, y: layout.scale)
                 for stroke in strokes {
-                    ink.fill(Path(stroke.outline), with: .color(Color(cgColor: stroke.color)))
+                    let offset = drag?.id == stroke.id ? drag?.translation ?? .zero : .zero
+                    var layer = ink
+                    layer.translateBy(x: offset.width, y: offset.height)
+                    layer.fill(Path(stroke.outline), with: .color(Color(cgColor: stroke.color)))
+                    if selected == stroke.id {
+                        let padding = 4 / layout.scale
+                        let bounds = Path(stroke.bounds.insetBy(dx: -padding, dy: -padding))
+                        layer.stroke(bounds, with: .color(.white), lineWidth: 2 / layout.scale)
+                        layer.stroke(bounds, with: .color(StudioColors.primary), style: StrokeStyle(
+                            lineWidth: 1 / layout.scale, dash: [4 / layout.scale, 3 / layout.scale]
+                        ))
+                    }
                 }
                 if let draft {
                     ink.fill(Path(draft.outline), with: .color(Color(cgColor: draft.color)))
@@ -111,12 +143,27 @@ struct SnipCanvas: View {
             }
             .contentShape(Rectangle())
             .accessibilityLabel("Snip editor canvas")
-            .gesture(inkGesture(in: frame, layout: layout), including: allowsDrawing ? .all : .none)
+            .gesture(inkGesture(in: frame, layout: layout), including: allowsDrawing || annotationSelection != nil ? .all : .none)
+            .onContinuousHover { phase in
+                guard annotationSelection != nil else { return }
+                switch phase {
+                case let .active(location):
+                    let hit = frame.contains(location) && document.annotation(
+                        at: layout.imagePoint(location, in: frame), tolerance: 5 / layout.scale
+                    ) != nil
+                    if hit || annotationDrag != nil { Self.moveCursor.set() } else { NSCursor.arrow.set() }
+                case .ended: NSCursor.arrow.set()
+                }
+            }
 
             if !recognizedLines.isEmpty {
                 OCRRegionOverlay(lines: recognizedLines, imageFrame: frame)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+            }
+            if let cropSelection {
+                StudioCropOverlay(bounds: cropSelection, imageFrame: frame,
+                                  pixelSize: CGSize(width: image.width, height: image.height))
             }
         }
     }
@@ -125,7 +172,9 @@ struct SnipCanvas: View {
         DragGesture(minimumDistance: 0)
             .updating($dragActive) { _, active, _ in active = true }
             .onChanged { event in
-                if erasesAnnotations {
+                if let annotationSelection {
+                    moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
+                } else if erasesAnnotations {
                     eraseAnnotations(for: event, in: frame, layout: layout)
                 } else {
                     addInk(for: event, in: frame, layout: layout)
@@ -133,7 +182,13 @@ struct SnipCanvas: View {
             }
             .onEnded { event in
                 // A click can complete without a distinct drag update.
-                if erasesAnnotations {
+                if let annotationSelection {
+                    moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
+                    if let annotationDrag, annotationDrag.revision == document.contentRevision {
+                        document.translateAnnotation(id: annotationDrag.id, by: annotationDrag.translation)
+                    }
+                    annotationDrag = nil
+                } else if erasesAnnotations {
                     eraseAnnotations(for: event, in: frame, layout: layout)
                     lastEraseLocation = nil
                 } else {
@@ -165,6 +220,34 @@ struct SnipCanvas: View {
         lastEraseLocation = event.location
         document.eraseAnnotation(at: layout.imagePoint(event.location, in: frame), tolerance: 4 / layout.scale)
     }
+
+    private func moveAnnotation(for event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout,
+                                selected: Binding<UUID?>) {
+        if annotationDrag == nil {
+            guard frame.contains(event.startLocation), let stroke = document.annotation(
+                at: layout.imagePoint(event.startLocation, in: frame), tolerance: 5 / layout.scale
+            ) else {
+                selected.wrappedValue = nil
+                return
+            }
+            selected.wrappedValue = stroke.id
+            annotationDrag = AnnotationDrag(id: stroke.id, revision: document.contentRevision)
+        }
+        annotationDrag?.translation = CGSize(width: event.translation.width / layout.scale,
+                                             height: event.translation.height / layout.scale)
+    }
+
+    private struct AnnotationDrag {
+        let id: UUID
+        let revision: UUID
+        var translation = CGSize.zero
+    }
+
+    private static let moveCursor: NSCursor = {
+        guard let image = NSImage(systemSymbolName: "arrow.up.and.down.and.arrow.left.and.right",
+                                  accessibilityDescription: nil) else { return .openHand }
+        return NSCursor(image: image, hotSpot: CGPoint(x: image.size.width / 2, y: image.size.height / 2))
+    }()
 }
 
 struct SnipViewportLayout {

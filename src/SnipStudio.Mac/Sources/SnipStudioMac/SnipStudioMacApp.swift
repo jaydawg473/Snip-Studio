@@ -23,5 +23,11 @@ struct SnipStudioMacApp: App {
         .windowResizability(.contentMinSize)
 
         Settings { StudioSettingsView() }
+
+        WindowGroup("Review video", id: "video-review", for: URL.self) { $videoURL in
+            if let videoURL { StudioVideoReview(url: videoURL) }
+        }
+        .defaultSize(width: 900, height: 640)
+        .windowResizability(.contentMinSize)
     }
 }

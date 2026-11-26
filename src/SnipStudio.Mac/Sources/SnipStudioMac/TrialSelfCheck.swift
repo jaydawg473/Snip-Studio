@@ -10,6 +10,8 @@ enum TrialSelfCheck {
         do {
             try await checkEditor()
             try await checkShapesAndEraser()
+            try await checkCrop()
+            try await checkObjectEditing()
             try checkViewport()
             try checkRowOrder()
             try checkOCRTable()
@@ -20,6 +22,139 @@ enum TrialSelfCheck {
             FileHandle.standardError.write(Data("Mac trial check failed: \(error)\n".utf8))
             return 1
         }
+    }
+
+    private static func checkObjectEditing() async throws {
+        let bitmap = try whiteBitmap(width: 120, height: 100)
+        guard let raster = bitmap.makeImage() else { throw CheckFailure("create object-editing fixture") }
+        let document = EditorDocument()
+        try document.replaceImage(NSImage(cgImage: raster, size: NSSize(width: 120, height: 100)), alreadySaved: true)
+        let originalRaster = document.rasterRevision
+        let red = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
+
+        document.beginShape(at: CGPoint(x: 20, y: 20), color: red, width: 4, shape: .arrow, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 80, y: 20))
+        document.finishStroke()
+        let originalPoint = CGPoint(x: 35, y: 20)
+        guard let selected = document.annotation(at: originalPoint, tolerance: 0) else {
+            throw CheckFailure("select an arrow by its visible outline")
+        }
+        let id = selected.id
+        let originalRevision = document.contentRevision
+        try require(document.annotation(withID: id)?.shape == .arrow, "selection resolves the stable identifier")
+        try require(!document.translateAnnotation(id: id, by: .zero) && !document.updateAnnotation(id: id, width: 0),
+                    "invalid or unchanged object edits are ignored")
+        try require(document.contentRevision == originalRevision, "no-op object updates leave the history intact")
+
+        let offset = CGSize(width: 20, height: 22)
+        let preview = selected.offset(by: offset)
+        try require(preview.bounds == selected.bounds.offsetBy(dx: 20, dy: 22) && document.contentRevision == originalRevision,
+                    "drag preview moves the outline without changing the document")
+        try require(document.translateAnnotation(id: id, by: offset), "moving the selected shape succeeds")
+        let moved = CGPoint(x: 55, y: 42)
+        try require(document.annotation(at: moved, tolerance: 0)?.id == id && document.annotation(at: originalPoint, tolerance: 0) == nil,
+                    "hit testing follows an object after a move")
+        let translatedRevision = document.contentRevision
+
+        try require(document.rotateAnnotation(id: id, clockwise: true), "clockwise rotation succeeds")
+        let downwardsTip = CGPoint(x: 64, y: 54)
+        try require(document.annotation(at: downwardsTip, tolerance: 0)?.id == id,
+                    "clockwise rotation points the arrow down in image coordinates")
+        let rotationResult = try await decodedPNG(from: document)
+        let movedPixel = try pixel(in: rotationResult, x: 55, y: 42)
+        let rotatedPixel = try pixel(in: rotationResult, x: 64, y: 54)
+        try require(isWhite(movedPixel) && isRed(rotatedPixel), "the rendered arrow rotates around its center")
+        let rotatedRevision = document.contentRevision
+
+        try require(document.updateAnnotation(id: id, color: blue, width: 3, lineStyle: .dashed),
+                    "shape properties can be changed after insertion")
+        let styledResult = try await decodedPNG(from: document)
+        let styledInk = try pixel(in: styledResult, x: 70, y: 14)
+        let styledGap = try pixel(in: styledResult, x: 70, y: 24)
+        try require(styledInk[0] < 20 && styledInk[1] < 20 && styledInk[2] > 235 && isWhite(styledGap),
+                    "the new color and dash pattern follow the rotated shape in the PNG")
+        let styledRevision = document.contentRevision
+        document.markSaved(try document.pngSnapshot())
+        try require(document.deleteAnnotation(id: id) && document.annotation(withID: id) == nil,
+                    "deleting the selected object removes its stable ID")
+        document.undo()
+        try require(document.contentRevision == styledRevision && !document.hasUnsavedChanges && document.annotation(withID: id)?.width == 3,
+                    "Undo of deletion restores the saved styling and ID")
+        document.undo()
+        try require(document.contentRevision == rotatedRevision && document.annotation(withID: id)?.lineStyle == .solid,
+                    "Undo of styling restores the rotated object properties")
+        document.undo()
+        try require(document.contentRevision == translatedRevision && document.annotation(at: moved, tolerance: 0)?.id == id,
+                    "Undo of rotation restores the translated horizontal arrow")
+        document.redo()
+        document.redo()
+        try require(document.contentRevision == styledRevision && !document.hasUnsavedChanges && document.rasterRevision == originalRaster,
+                    "redoing annotation transforms returns to the saved revision without replacing the source")
+        try require(document.rotateAnnotation(id: id, clockwise: false) && document.annotation(at: moved, tolerance: 4)?.id == id,
+                    "counterclockwise rotation restores the original direction")
+        print("PASS: object hit testing, movement, rotation, style, stable IDs, and edit history")
+    }
+
+    private static func checkCrop() async throws {
+        let bitmap = try whiteBitmap(width: 120, height: 100)
+        bitmap.setFillColor(CGColor(red: 0, green: 1, blue: 0, alpha: 1))
+        bitmap.fill(CGRect(x: 26, y: 72, width: 8, height: 8))
+        guard let raster = bitmap.makeImage() else { throw CheckFailure("create crop fixture") }
+        let document = EditorDocument()
+        try document.replaceImage(NSImage(cgImage: raster, size: NSSize(width: 60, height: 50)), alreadySaved: true)
+        let originalRaster = document.rasterRevision
+        let red = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
+        document.beginShape(at: CGPoint(x: 10, y: 40), color: red, width: 4, shape: .line, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 110, y: 40))
+        document.finishStroke()
+        document.beginStroke(at: CGPoint(x: 12, y: 10), color: blue, width: 4)
+        document.finishStroke()
+        let originalContent = document.contentRevision
+        let originalAnnotations = document.strokes.map(\.id)
+        let oldSave = try document.pngSnapshot()
+
+        let fullCrop = try document.crop(to: CGRect(x: -5, y: -5, width: 200, height: 200))
+        let emptyCrop = try document.crop(to: CGRect(x: 5.2, y: 8.4, width: 0, height: 6))
+        try require(!fullCrop && !emptyCrop && document.contentRevision == originalContent,
+                    "full-image and empty crops leave the edit history intact")
+
+        let didCrop = try document.crop(to: CGRect(x: 20.2, y: 15.7, width: 60.1, height: 40.1))
+        try require(didCrop, "crop applies to a partial image selection")
+        let croppedRaster = document.rasterRevision
+        let croppedContent = document.contentRevision
+        try require(croppedRaster != originalRaster && croppedContent != originalContent,
+                    "crop changes both source and document revisions")
+        try require(document.strokes.map(\.id) == Array(originalAnnotations.prefix(1)),
+                    "crop retains the stable identifier of the crossing line and removes invisible marks")
+        try require(document.strokes.first?.points == [CGPoint(x: -10, y: 25), CGPoint(x: 90, y: 25)],
+                    "the remaining object is translated and still editable")
+        let output = try await decodedPNG(from: document)
+        try require(output.width == 61 && output.height == 41, "fractional crop includes each touched source pixel")
+        let shiftedMarker = try pixel(in: output, x: 10, y: 8)
+        try require(shiftedMarker[0] < 20 && shiftedMarker[1] > 235 && shiftedMarker[2] < 20,
+                    "cropped image retains the exact selected top-left source coordinates")
+        let leftInk = try pixel(in: output, x: 0, y: 25)
+        let rightInk = try pixel(in: output, x: 60, y: 25)
+        try require(isRed(leftInk) && isRed(rightInk), "crossing line is translated and clipped to both crop edges")
+
+        document.markSaved(oldSave)
+        try require(document.hasUnsavedChanges, "completion of an older save does not mark the crop saved")
+        document.undo()
+        try require(!document.hasUnsavedChanges && document.contentRevision == originalContent && document.rasterRevision == originalRaster,
+                    "Undo restores source and content revisions and the saved state")
+        try require(document.image?.width == 120 && document.strokes.map(\.id) == originalAnnotations,
+                    "Undo restores the full raster and every editable object")
+        document.redo()
+        try require(document.hasUnsavedChanges && document.contentRevision == croppedContent && document.rasterRevision == croppedRaster,
+                    "Redo restores the exact cropped state and revision")
+        try require(document.eraseAnnotation(at: CGPoint(x: 8, y: 25), tolerance: 0),
+                    "cropped annotations still participate in normal editing")
+        let withoutLine = try await decodedPNG(from: document)
+        let restoredCanvas = try pixel(in: withoutLine, x: 8, y: 25)
+        try require(isWhite(restoredCanvas), "annotation pixels were not flattened into the crop")
+        print("PASS: editable crop, exact source pixels, history, and save revisions")
     }
 
     private static func checkShapesAndEraser() async throws {

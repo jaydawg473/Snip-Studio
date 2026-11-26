@@ -13,13 +13,17 @@ enum SnipLineStyle: String, CaseIterable, Sendable {
     case solid, dashed, dotted
 }
 
-struct InkStroke: Sendable {
-    let color: CGColor
-    let width: CGFloat
+struct InkStroke: Identifiable, Sendable {
+    let id = UUID()
+    private(set) var color: CGColor
+    private(set) var width: CGFloat
     private(set) var points: [CGPoint]
-    private let shape: SnipShape?
-    private let lineStyle: SnipLineStyle
+    let shape: SnipShape?
+    private(set) var lineStyle: SnipLineStyle
+    private var quarterTurns = 0
     private var committedOutline: CommittedOutline?
+
+    var bounds: CGRect { committedOutline?.bounds ?? outline.boundingBoxOfPath }
 
     init(color: CGColor, width: CGFloat, at point: CGPoint,
          shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid) {
@@ -41,15 +45,57 @@ struct InkStroke: Sendable {
     }
 
     mutating func prepareForCommit() -> Bool {
+        if committedOutline != nil { return true }
         let rendered = outline
         guard !rendered.isEmpty, let immutable = rendered.copy() else { return false }
         committedOutline = CommittedOutline(path: immutable, bounds: immutable.boundingBoxOfPath)
         return true
     }
 
+    func offset(by delta: CGSize) -> InkStroke {
+        var copy = self
+        copy.points = points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+        copy.committedOutline = nil
+        if let committedOutline {
+            var translation = CGAffineTransform(translationX: delta.width, y: delta.height)
+            if let path = committedOutline.path.copy(using: &translation) {
+                copy.committedOutline = CommittedOutline(path: path, bounds: committedOutline.bounds.offsetBy(dx: delta.width, dy: delta.height))
+            }
+        }
+        return copy
+    }
+
+    fileprivate func rotated(clockwise: Bool) -> InkStroke {
+        var copy = self
+        copy.quarterTurns = (quarterTurns + (clockwise ? 1 : 3)) % 4
+        copy.committedOutline = nil
+        return copy
+    }
+
+    fileprivate func restyled(color: CGColor?, width: CGFloat?, lineStyle: SnipLineStyle?) -> InkStroke? {
+        let newColor = color ?? self.color
+        let newWidth = width ?? self.width
+        let newLineStyle = lineStyle ?? self.lineStyle
+        guard newWidth.isFinite, newWidth > 0,
+              !CFEqual(newColor, self.color) || newWidth != self.width || newLineStyle != self.lineStyle else { return nil }
+        var copy = self
+        copy.color = newColor
+        copy.width = newWidth
+        copy.lineStyle = newLineStyle
+        copy.committedOutline = nil
+        return copy
+    }
+
     // Both renderers consume the same image-space outline.
     var outline: CGPath {
         if let committedOutline { return committedOutline.path }
+        let path = unrotatedOutline
+        guard quarterTurns != 0 else { return path }
+        var rotation = quarterTurnTransform
+        return path.copy(using: &rotation) ?? path
+    }
+
+    private var unrotatedOutline: CGPath {
         let path = CGMutablePath()
         let first = points[0]
         if let shape { return shapeOutline(shape, from: first, to: points[points.count - 1]) }
@@ -65,10 +111,29 @@ struct InkStroke: Sendable {
         return stroked(path, cap: .round)
     }
 
+    private var quarterTurnTransform: CGAffineTransform {
+        let start = points[0]
+        var minimum = start
+        var maximum = start
+        for point in points.dropFirst() {
+            minimum.x = min(minimum.x, point.x)
+            minimum.y = min(minimum.y, point.y)
+            maximum.x = max(maximum.x, point.x)
+            maximum.y = max(maximum.y, point.y)
+        }
+        let x = minimum.x + (maximum.x - minimum.x) / 2
+        let y = minimum.y + (maximum.y - minimum.y) / 2
+        switch quarterTurns {
+        case 1: return CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: x + y, ty: y - x)
+        case 2: return CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: 2 * x, ty: 2 * y)
+        case 3: return CGAffineTransform(a: 0, b: -1, c: 1, d: 0, tx: x - y, ty: x + y)
+        default: return .identity
+        }
+    }
+
     func contains(_ point: CGPoint, tolerance: CGFloat) -> Bool {
-        let path = outline
-        let bounds = committedOutline?.bounds ?? path.boundingBoxOfPath
         guard bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
+        let path = outline
         if path.contains(point) { return true }
         guard tolerance > 0 else { return false }
         let border = path.copy(strokingWithWidth: 2 * tolerance, lineCap: .round, lineJoin: .round, miterLimit: 1)
@@ -147,6 +212,7 @@ enum EditorDocumentError: LocalizedError {
     case noImage
     case unreadableImage
     case imageTooLarge
+    case cropFailed
     case renderFailed
     case encodeFailed
 
@@ -155,6 +221,7 @@ enum EditorDocumentError: LocalizedError {
         case .noImage: "Capture or open a snip first."
         case .unreadableImage: "The image could not be opened."
         case .imageTooLarge: "This image is too large to edit. Choose an image up to 64 million pixels."
+        case .cropFailed: "The selected area could not be cropped."
         case .renderFailed: "The edited snip could not be rendered."
         case .encodeFailed: "The snip could not be encoded as a PNG."
         }
@@ -166,6 +233,7 @@ final class EditorDocument: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var strokes: [InkStroke] = []
     @Published private(set) var draftStroke: InkStroke?
+    private(set) var rasterRevision = UUID()
     private var undoHistory: [AnnotationEdit] = []
     private var redoHistory: [AnnotationEdit] = []
     private var imageRevision = UUID()
@@ -194,9 +262,33 @@ final class EditorDocument: ObservableObject {
         undoHistory.removeAll()
         redoHistory.removeAll()
         imageRevision = UUID()
+        rasterRevision = imageRevision
         savedRevision = alreadySaved ? imageRevision : nil
         strokes.removeAll()
         image = raster
+    }
+
+    @discardableResult
+    func crop(to imageRect: CGRect) throws -> Bool {
+        guard let image else { throw EditorDocumentError.noImage }
+        let requested = imageRect.standardized
+        guard !isDrawing, !requested.isEmpty, requested.minX.isFinite, requested.maxX.isFinite,
+              requested.minY.isFinite, requested.maxY.isFinite else { return false }
+        let imageBounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let selected = requested.intersection(imageBounds)
+        guard !selected.isEmpty else { return false }
+        // Core Graphics image crops use top-left pixels and include any touched pixel.
+        let pixels = selected.integral
+        guard pixels != imageBounds else { return false }
+        guard let cropped = image.cropping(to: pixels) else { throw EditorDocumentError.cropFailed }
+
+        let offset = CGSize(width: -pixels.minX, height: -pixels.minY)
+        let remaining = strokes.filter { $0.bounds.intersects(pixels) }.map { $0.offset(by: offset) }
+        // The canvas and exporter clip surviving objects to the cropped raster's bounds.
+        let original = RasterState(image: image, revision: rasterRevision, strokes: strokes)
+        let result = RasterState(image: cropped, revision: UUID(), strokes: remaining)
+        commit(.crop(before: original, after: result))
+        return true
     }
 
     func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
@@ -231,9 +323,54 @@ final class EditorDocument: ObservableObject {
 
     @discardableResult
     func eraseAnnotation(at point: CGPoint, tolerance: CGFloat) -> Bool {
-        guard !isDrawing, tolerance.isFinite, tolerance >= 0, point.x.isFinite, point.y.isFinite,
-              let index = strokes.lastIndex(where: { $0.contains(point, tolerance: tolerance) }) else { return false }
+        guard !isDrawing, let index = annotationIndex(at: point, tolerance: tolerance) else { return false }
         commit(.erase(index: index, stroke: strokes[index]))
+        return true
+    }
+
+    func annotation(at point: CGPoint, tolerance: CGFloat) -> InkStroke? {
+        annotationIndex(at: point, tolerance: tolerance).map { strokes[$0] }
+    }
+
+    func annotation(withID id: UUID) -> InkStroke? {
+        strokes.first { $0.id == id }
+    }
+
+    private func annotationIndex(at point: CGPoint, tolerance: CGFloat) -> Int? {
+        guard tolerance.isFinite, tolerance >= 0, point.x.isFinite, point.y.isFinite else { return nil }
+        return strokes.lastIndex { $0.contains(point, tolerance: tolerance) }
+    }
+
+    @discardableResult
+    func translateAnnotation(id: UUID, by delta: CGSize) -> Bool {
+        guard delta != .zero, delta.width.isFinite, delta.height.isFinite else { return false }
+        return updateAnnotation(id: id) { $0.offset(by: delta) }
+    }
+
+    @discardableResult
+    func rotateAnnotation(id: UUID, clockwise: Bool) -> Bool {
+        updateAnnotation(id: id) { $0.rotated(clockwise: clockwise) }
+    }
+
+    @discardableResult
+    func updateAnnotation(id: UUID, color: CGColor? = nil, width: CGFloat? = nil, lineStyle: SnipLineStyle? = nil) -> Bool {
+        updateAnnotation(id: id) { $0.restyled(color: color, width: width, lineStyle: lineStyle) }
+    }
+
+    @discardableResult
+    func deleteAnnotation(id: UUID) -> Bool {
+        guard !isDrawing, let index = strokes.firstIndex(where: { $0.id == id }) else { return false }
+        commit(.erase(index: index, stroke: strokes[index]))
+        return true
+    }
+
+    private func updateAnnotation(id: UUID, transform: (InkStroke) -> InkStroke?) -> Bool {
+        guard !isDrawing, let index = strokes.firstIndex(where: { $0.id == id }) else { return false }
+        let original = strokes[index]
+        guard var changed = transform(original),
+              changed.points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+              changed.prepareForCommit() else { return false }
+        commit(.replace(index: index, before: original, after: changed))
         return true
     }
 
@@ -247,7 +384,15 @@ final class EditorDocument: ObservableObject {
         switch operation {
         case let .insert(stroke): strokes.append(stroke)
         case let .erase(index, _): strokes.remove(at: index)
+        case let .replace(index, _, after): strokes[index] = after
+        case let .crop(_, after): setRaster(after)
         }
+    }
+
+    private func setRaster(_ state: RasterState) {
+        rasterRevision = state.revision
+        strokes = state.strokes
+        image = state.image
     }
 
     func undo() {
@@ -257,6 +402,8 @@ final class EditorDocument: ObservableObject {
         switch edit.operation {
         case .insert: strokes.removeLast()
         case let .erase(index, stroke): strokes.insert(stroke, at: index)
+        case let .replace(index, before, _): strokes[index] = before
+        case let .crop(before, _): setRaster(before)
         }
     }
 
@@ -284,6 +431,14 @@ final class EditorDocument: ObservableObject {
     private enum AnnotationOperation {
         case insert(InkStroke)
         case erase(index: Int, stroke: InkStroke)
+        case replace(index: Int, before: InkStroke, after: InkStroke)
+        case crop(before: RasterState, after: RasterState)
+    }
+
+    private struct RasterState {
+        let image: CGImage
+        let revision: UUID
+        let strokes: [InkStroke]
     }
 
     private struct AnnotationEdit {

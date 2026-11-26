@@ -13,7 +13,7 @@ From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certifi
 - Draw near the top-left, add and erase a shape, then undo and redo. Check Fit and 100% at Retina scale, copy the image, and reopen each export format. Check Print Preview without submitting a physical job.
 - Run Text Actions on multiple lines including a filename with leading zeros. Check the overlay and paste copied text and a table into their intended apps. Test automatic copy and original saving with each option enabled and disabled.
 
-Screen and audio recording, scrolling capture, and editable Windows projects are outside this trial.
+The trial also includes crop, object movement and rotation, video review with a filmstrip, MP4 trim, and size-limited export for email. Screen and audio recording, scrolling capture, and editable Windows projects are still pending. The file menu checks the original Snip Studio repository for an Apple Silicon download.
 
 ## Signing on GitHub Actions
 

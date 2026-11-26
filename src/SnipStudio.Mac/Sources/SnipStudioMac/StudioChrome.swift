@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum StudioTool {
-    case move, pen, highlight, shape, eraser, textActions
+    case move, pen, highlight, shape, eraser, crop, textActions
 }
 
 extension SnipShape {

@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct StudioView: View {
     let applicationDelegate: StudioApplicationDelegate
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var document = EditorDocument()
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
     @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
@@ -21,6 +22,8 @@ struct StudioView: View {
     @State private var lineStyle = SnipLineStyle.solid
     @State private var shapeColor = Color.red
     @State private var shapeWidth: CGFloat = 3
+    @State private var cropBounds = CGRect.null
+    @State private var selectedAnnotationID: UUID?
     @State private var showOptions = true
     @State private var zoomPercent: Int?
     @State private var displayedZoom = 100
@@ -32,6 +35,9 @@ struct StudioView: View {
     @State private var reviewText = false
     @State private var status = "Ready."
     @State private var errorMessage: String?
+    @State private var updateTask: Task<Void, Never>?
+    @State private var updateMessage: String?
+    @State private var updateURL: URL?
 
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
@@ -63,10 +69,12 @@ struct StudioView: View {
                     inkColor: drawingColor,
                     inkWidth: drawingWidth,
                     zoom: zoomPercent.map { CGFloat($0) / 100 },
-                    allowsDrawing: tool != .move && tool != .textActions,
+                    allowsDrawing: tool != .move && tool != .textActions && tool != .crop,
                     activeShape: tool == .shape ? shape : nil,
                     lineStyle: lineStyle,
                     erasesAnnotations: tool == .eraser,
+                    cropSelection: tool == .crop ? $cropBounds : nil,
+                    annotationSelection: tool == .move ? $selectedAnnotationID : nil,
                     recognizedLines: tool == .textActions ? recognizedLines ?? [] : []
                 ) { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
             } else {
@@ -91,6 +99,15 @@ struct StudioView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .alert(
+            "Snip Studio Updates",
+            isPresented: Binding(get: { updateMessage != nil }, set: { if !$0 { updateMessage = nil } })
+        ) {
+            if let updateURL { Button("View release") { NSWorkspace.shared.open(updateURL) } }
+            Button(updateURL == nil ? "OK" : "Close", role: .cancel) { updateMessage = nil }
+        } message: {
+            Text(updateMessage ?? "")
+        }
         .sheet(isPresented: $reviewText) {
             textReview
         }
@@ -98,12 +115,24 @@ struct StudioView: View {
             captureTask?.cancel()
             exportTask?.cancel()
             automaticClipboardTask?.cancel()
+            updateTask?.cancel()
         }
         .onChange(of: document.contentRevision) { _, revision in
             scheduleAutomaticCopy(revision)
+            if let selectedAnnotationID, document.annotation(withID: selectedAnnotationID) == nil {
+                self.selectedAnnotationID = nil
+            }
         }
         .onChange(of: autoCopy) { _, enabled in
             if !enabled { automaticClipboardTask?.cancel() }
+        }
+        .onChange(of: document.rasterRevision) { _, _ in
+            recognizedLines = nil
+            if tool == .crop {
+                cropBounds = fullImageBounds
+            } else if tool == .textActions {
+                selectTool(.pen)
+            }
         }
     }
 
@@ -163,6 +192,7 @@ struct StudioView: View {
             iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
                 .disabled(busy || !document.hasImage)
             Menu {
+                Button("Open video…") { openVideo() }
                 Menu("Save image as…") {
                     ForEach(StudioFileFormat.allCases, id: \.self) { format in
                         Button(format.title) { saveImage(as: format) }
@@ -172,6 +202,8 @@ struct StudioView: View {
                 Button("Print image…") { printImage() }.disabled(busy || !document.hasImage)
                 Divider()
                 SettingsLink { Text("Settings…") }
+                Button("Check for Updates…") { checkForUpdates() }.disabled(updateTask != nil)
+                Button("Snip Studio Help") { openHelp() }
             } label: {
                 Image(systemName: "ellipsis").font(.system(size: 17))
                     .accessibilityLabel("More file actions")
@@ -210,6 +242,7 @@ struct StudioView: View {
             .fixedSize()
             .help("Shapes")
             toolButton(.eraser, label: "Eraser", symbol: "eraser")
+            toolButton(.crop, label: "Crop", symbol: "crop").disabled(busy)
             Divider().frame(height: 20).padding(.horizontal, 4)
             iconButton("Undo annotation", symbol: "arrow.uturn.backward", action: document.undo)
                 .disabled(!document.canUndo)
@@ -228,7 +261,16 @@ struct StudioView: View {
     private var optionsBar: some View {
         switch tool {
         case .move:
-            EmptyView()
+            if let selectedAnnotationID, let annotation = document.annotation(withID: selectedAnnotationID) {
+                selectionOptions(annotation)
+            } else {
+                Text("Select or drag an annotation.")
+                    .font(.system(size: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 12)
+                    .frame(height: 40)
+                    .background(StudioColors.options)
+            }
         case .pen, .highlight, .shape:
             HStack(spacing: 10) {
                 ColorPicker("Ink color", selection: tool == .shape ? $shapeColor : (tool == .highlight ? $highlightColor : $inkColor), supportsOpacity: false)
@@ -289,6 +331,24 @@ struct StudioView: View {
             .padding(.horizontal, 12)
             .frame(height: 40)
             .background(StudioColors.options)
+        case .crop:
+            HStack(spacing: 6) {
+                Button { applyCrop() } label: {
+                    Label("Apply crop", systemImage: "checkmark")
+                }
+                .buttonStyle(StudioButtonStyle())
+                .keyboardShortcut(.defaultAction)
+                .disabled(cropBounds.isEmpty || cropBounds == fullImageBounds || busy)
+                Button { selectTool(.pen) } label: {
+                    Label("Cancel", systemImage: "xmark")
+                }
+                .buttonStyle(StudioButtonStyle())
+                .keyboardShortcut(.cancelAction)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(StudioColors.options)
         }
     }
 
@@ -330,6 +390,51 @@ struct StudioView: View {
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(StudioColors.toolbar)
+    }
+
+    private func selectionOptions(_ annotation: InkStroke) -> some View {
+        HStack(spacing: 7) {
+            iconButton("Rotate left", symbol: "rotate.left") {
+                document.rotateAnnotation(id: annotation.id, clockwise: false)
+            }
+            iconButton("Rotate right", symbol: "rotate.right") {
+                document.rotateAnnotation(id: annotation.id, clockwise: true)
+            }
+            Divider().frame(height: 20)
+            ColorPicker("Annotation color", selection: Binding(get: { Color(cgColor: annotation.color) }, set: { color in
+                guard let cgColor = NSColor(color).usingColorSpace(.sRGB)?.cgColor else { return }
+                document.updateAnnotation(id: annotation.id, color: cgColor)
+            }), supportsOpacity: true)
+            .labelsHidden()
+            .help("Annotation color and opacity")
+            Stepper(value: Binding(get: { annotation.width }, set: { width in
+                document.updateAnnotation(id: annotation.id, width: width)
+            }), in: 1...30, step: 1) {
+                Text("\(Int(annotation.width)) px").monospacedDigit()
+            }
+            .fixedSize()
+            .accessibilityLabel("Annotation width")
+            if annotation.shape != nil {
+                Picker("Line style", selection: Binding(get: { annotation.lineStyle }, set: { style in
+                    document.updateAnnotation(id: annotation.id, lineStyle: style)
+                })) {
+                    ForEach(SnipLineStyle.allCases, id: \.self) { style in
+                        Text(style.rawValue.capitalized).tag(style)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+            }
+            Spacer(minLength: 0)
+            iconButton("Delete annotation", symbol: "trash") {
+                document.deleteAnnotation(id: annotation.id)
+            }
+            .keyboardShortcut(.delete, modifiers: [])
+            iconButton("Clear selection", symbol: "xmark") { selectedAnnotationID = nil }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(StudioColors.options)
     }
 
     private func iconButton(
@@ -376,6 +481,7 @@ struct StudioView: View {
     private func selectTool(_ value: StudioTool) {
         document.cancelStroke()
         tool = value
+        if value != .move { selectedAnnotationID = nil }
         showOptions = true
         switch value {
         case .move: status = "Scroll to move around a zoomed screenshot."
@@ -383,8 +489,25 @@ struct StudioView: View {
         case .highlight: status = "Drag to highlight an area."
         case .shape: status = "Drag to draw a \(shape.rawValue)."
         case .eraser: status = "Erase annotations. Use Undo to restore them."
+        case .crop:
+            cropBounds = fullImageBounds
+            zoomPercent = nil
+            status = "Drag the crop edges, then select Apply crop."
         case .textActions: break
         }
+    }
+
+    private var fullImageBounds: CGRect {
+        guard let image = document.image else { return .null }
+        return CGRect(x: 0, y: 0, width: image.width, height: image.height)
+    }
+
+    private func applyCrop() {
+        do {
+            let cropped = try document.crop(to: cropBounds)
+            selectTool(.pen)
+            if cropped { status = "Screenshot cropped. Use Undo to restore it." }
+        } catch { report(error) }
     }
 
     private func stepZoom(increasing: Bool) {
@@ -442,6 +565,14 @@ struct StudioView: View {
         do { try load(clipboardImage, alreadySaved: false) } catch { report(error) }
     }
 
+    private func openVideo() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.movie]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        openWindow(id: "video-review", value: url)
+    }
+
     private func load(_ image: NSImage, alreadySaved: Bool) throws {
         try document.replaceImage(image, alreadySaved: alreadySaved)
         openedImageRevision = alreadySaved ? document.contentRevision : nil
@@ -465,10 +596,12 @@ struct StudioView: View {
 
         recognitionInProgress = true
         status = "Recognizing text on this Mac…"
+        let revision = document.rasterRevision
         Task { @MainActor in
             defer { recognitionInProgress = false }
             do {
                 let lines = try await TextRecognition.recognizeLines(image)
+                guard document.rasterRevision == revision else { return }
                 recognizedLines = lines
                 if tool == .textActions { status = lines.isEmpty ? "No text found." : "Text ready to copy." }
             } catch {
@@ -611,6 +744,34 @@ struct StudioView: View {
     private func report(_ error: Error) {
         status = "Action could not finish."
         errorMessage = error.localizedDescription
+    }
+
+    private func checkForUpdates() {
+        guard updateTask == nil else { return }
+        status = "Checking for Snip Studio updates…"
+        updateTask = Task { @MainActor in
+            defer { updateTask = nil }
+            do {
+                let result = try await MacUpdateChecker.check()
+                try Task.checkCancellation()
+                updateURL = nil
+                switch result {
+                case .noMacRelease: updateMessage = "There is no published Mac release on the Snip Studio repository yet."
+                case .upToDate: updateMessage = "This version of Snip Studio is up to date."
+                case let .available(version, releasePage):
+                    updateURL = releasePage
+                    updateMessage = "Snip Studio \(version) is available for this Mac."
+                }
+                status = "Update check complete."
+            } catch is CancellationError {
+                return
+            } catch { report(error) }
+        }
+    }
+
+    private func openHelp() {
+        guard let url = URL(string: "https://github.com/jaydawg473/Snip-Studio/tree/feature/macos-trial/src/SnipStudio.Mac") else { return }
+        NSWorkspace.shared.open(url)
     }
 }
 
