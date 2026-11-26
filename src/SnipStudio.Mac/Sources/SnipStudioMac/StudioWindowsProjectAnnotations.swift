@@ -71,11 +71,7 @@ enum StudioWindowsProjectAnnotations {
         case 7:
             return try readEmoji(from: &input)
         case 8:
-            let fill = try input.color()
-            let count = try input.elementCount(itemBytes: 16)
-            guard count == 1 else { throw Failure.unsupportedObject("a grouped highlight") }
-            let box = try input.rectangle()
-            return try annotation(points: corners(of: box), ink: .clear, width: 1, shape: .rectangle, fill: fill)
+            return try readHighlight(from: &input)
         case 9:
             _ = try input.elementCount(itemBytes: 20)
             // On Windows these objects permanently track their source-pixel locations and are not selectable.
@@ -115,9 +111,28 @@ enum StudioWindowsProjectAnnotations {
                               rotation: Rotation(degrees), emoji: glyph, emojiFrameSize: box.size)
     }
 
+    private static func readHighlight(from input: inout Reader) throws -> StudioProjectAnnotation {
+        let ink = try input.color()
+        let count = try input.elementCount(itemBytes: 16)
+        guard count <= 16 else { throw Failure.unsupportedObject("a highlight group with more than 16 bands") }
+
+        var bands: [CGRect] = []
+        bands.reserveCapacity(count)
+        var bounds = CGRect.null
+        for _ in 0..<count {
+            let band = try input.rectangle()
+            guard band.maxX > band.minX, band.maxY > band.minY else { throw Failure.invalidMetadata }
+            // Keep input order and distinct bands. Overlaps receive alpha once per band on Windows.
+            bands.append(band)
+            bounds = bounds.union(band)
+        }
+        return try annotation(points: corners(of: bounds), ink: ink, width: 1, highlightBands: bands)
+    }
+
     private static func annotation(points: [CGPoint], ink: Ink, width: CGFloat, shape: SnipShape? = nil,
                                    lineStyle: SnipLineStyle = .solid, rotation: Rotation = Rotation(0),
-                                   fill: Ink? = nil, emoji: String? = nil, emojiFrameSize: CGSize? = nil) throws -> StudioProjectAnnotation {
+                                   fill: Ink? = nil, emoji: String? = nil, emojiFrameSize: CGSize? = nil,
+                                   highlightBands: [CGRect]? = nil) throws -> StudioProjectAnnotation {
         guard width <= 512 else { throw Failure.unsupportedObject("an outline or stroke wider than 512 pixels") }
         if let shape, points[0] == points[1] ||
             ((shape == .rectangle || shape == .ellipse) && (points[0].x == points[1].x || points[0].y == points[1].y)) {
@@ -127,7 +142,8 @@ enum StudioWindowsProjectAnnotations {
                                        blue: Ink.unit(ink.blue), alpha: Ink.unit(ink.alpha), width: width,
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue, quarterTurns: rotation.quarterTurns,
                                        text: nil, fill: fill?.components, emoji: emoji,
-                                       rotationDegrees: rotation.degrees, emojiFrameSize: emojiFrameSize)
+                                       rotationDegrees: rotation.degrees, emojiFrameSize: emojiFrameSize,
+                                       highlightBands: highlightBands)
     }
 
     private static func corners(of rect: CGRect) -> [CGPoint] {
@@ -360,18 +376,39 @@ enum StudioWindowsProjectAnnotations {
         shapes.float(-23)
         shapes.data.append(8)
         shapes.word(0x5011_2233)
-        shapes.word(1)
+        shapes.word(2)
         shapes.rectangle(3, 4, 9, 8)
+        shapes.rectangle(7, 9, 8, 7)
         let decoded = try decode(shapes.data, version: 3)
-        try check(decoded.map(\.shape) == ["ellipse", "line", nil, "rectangle"], "annotation paint order")
+        try check(decoded.map(\.shape) == ["ellipse", "line", nil, nil], "annotation paint order")
         try check(decoded[0].rotationDegrees == -37.5 && decoded[0].quarterTurns == 0, "arbitrary clockwise shape geometry")
         try check(decoded[0].lineStyle == "dotted" && decoded[0].alpha == Ink.unit(2), "dotted outline and ties-to-even alpha")
         try check(decoded[0].fill == [0, 1, Ink.unit(0x66), Ink.unit(128)], "fill opacity and RGB")
         try check(decoded[1].lineStyle == "dashed" && decoded[1].points.first == CGPoint(x: 9, y: 8), "line pattern and endpoints")
         try check(decoded[2].emoji == "✅" && decoded[2].emojiFrameSize == CGSize(width: 40.25, height: 30.75)
                   && decoded[2].rotationDegrees == -23 && decoded[2].width == 41, "non-square sticker frame independently of raster size")
-        try check(decoded[3].fill == [Ink.unit(0x11), Ink.unit(0x22), Ink.unit(0x33), Ink.unit(80)] && decoded[3].alpha == 0,
-                  "single highlight preserves its fill without an outline")
+        let highlight = decoded[3]
+        try check(highlight.highlightBands == [CGRect(x: 3, y: 4, width: 9, height: 8), CGRect(x: 7, y: 9, width: 8, height: 7)] &&
+                  highlight.points == [CGPoint(x: 3, y: 4), CGPoint(x: 15, y: 16)], "overlapping highlight bands stay ordered in one object")
+        try check([highlight.red, highlight.green, highlight.blue, highlight.alpha] ==
+                  [Ink.unit(0x11), Ink.unit(0x22), Ink.unit(0x33), Ink.unit(80)] && highlight.fill == nil &&
+                  highlight.width == 1 && highlight.lineStyle == "solid", "highlight preserves its original ink and group style")
+
+        var singleBand = Fixture(count: 1)
+        singleBand.data.append(8)
+        singleBand.word(0x2011_2233)
+        singleBand.word(1)
+        singleBand.rectangle(-5, 4, 9, 8)
+        let single = try decode(singleBand.data, version: 1)
+        try check(single[0].highlightBands == [CGRect(x: -5, y: 4, width: 9, height: 8)] && single[0].alpha == Ink.unit(32),
+                  "version 1 highlight bands retain recorded alpha")
+
+        var invalidBand = Fixture(count: 1)
+        invalidBand.data.append(8)
+        invalidBand.word(0xffab_cdef)
+        invalidBand.word(1)
+        invalidBand.rectangle(1234, 1, Float.leastNonzeroMagnitude, 7)
+        try checkInvalid(invalidBand.data, version: 3)
 
         var rotated = Fixture(count: 1)
         rotated.data.append(2)

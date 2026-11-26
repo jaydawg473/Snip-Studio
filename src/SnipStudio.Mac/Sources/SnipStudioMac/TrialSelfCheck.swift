@@ -53,6 +53,7 @@ enum TrialSelfCheck {
         let strokeFixture = "U05JUEVESVQBAAAAKgAAAJoETo/N17lgaXhwIsnLuwsWwgsL7qLiCZO8uV7alnwsAgAAAAIAAAABAAAAASBAgJoAAEA/AQIAAAAAAIA+AAAAPwAAwD8AAOA/GJ60E6sckLXQ2C4N+oOWnb/mcdxfm3DiETuaLKbf+q1jYPj/n+E/iACTDQA="
         let cardinalFixture = "U05JUEVESVQCAAAAMwAAAG5YXhRxn3zN7Myx4Bf0mG7T8j/r6NaixcS1pgPuW4JmAgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AALRCASBAYIAAAAAAQBkAAABTAAAAGJ60E6sckLXQ2C4N+oOWnb/mcdxfm3DiETuaLKbf+q1jYPj/n+E/iACTDQA="
         let outlineFixture = "U05JUEVESVQDAAAAOAAAABrGEcc2fHNf4bDOmK1eLEgR0MyN1ZEegiiLxk1L4/P5AgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AAAxCASBAYIABgEAgmgAAgD4ZAAAASwAAAAIYnrQTqxyQtdDYLg36g5adv+Zx3F+bcOIRO5ospt/6rWNg+P+f4T+IAJMNAA=="
+        let bandsFixture = "U05JUEVESVQBAAAANQAAAOHg84SxVo4QA23LpXTQpUUB4LJK/spintx+ThTvPrZpBgAAAAYAAAABAAAACAAA/4ACAAAAAACAPwAAgD8AAEBAAAAAQAAAAEAAAABAAABAQAAAAECBxhHzW/95SRU4svfPIBx1l6ZhpcVJYzVBxivcivFhP2MYZAAA"
         let masksFixture = "U05JUEVESVQBAAAAJQAAABQvCk9rjI58KPJXAAo4oO1lhiodkzy6bexFZ4TWoRxsAgAAAAIAAAABAAAACQEAAAAAAIA+AAAAPwAAgD8AAAA/AAAA/xietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
         let richTextFixture = "U05JUEVESVQBAAAAkQAAAKGBYxtibbPlunCcYRbvmMZQwkaI+d1l7j14/GuJmUwbAgAAAAIAAAABAAAABgAAgD4AAAA/AADAQQAAQEEIAAAAUVRZIDAwMDdkAAAAe1xydGYxXGFuc2lcZGVmZjB7XGZvbnR0Ymx7XGYwIFNlZ29lIFVJO319e1xjb2xvcnRibDtccmVkMFxncmVlbjBcYmx1ZTA7fVxmMFxmczE4XGNmMSBRVFkge1xiIDAwMDd9fRietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SnipStudioWindowsFixture-\(UUID().uuidString)", isDirectory: true)
@@ -102,13 +103,33 @@ enum TrialSelfCheck {
         let sourceBytes = try Data(contentsOf: input)
         try require(sourceBytes == outlineBytes, "opening and saving a Mac copy preserves the original Windows project bytes")
 
+        let bands = try await load(fixture(bandsFixture))
+        let grouped = EditorDocument()
+        try await grouped.openProject(bands)
+        try require(grouped.strokes.count == 1 && grouped.strokes[0].highlightBands ==
+                    [CGRect(x: 1, y: 1, width: 3, height: 2), CGRect(x: 2, y: 2, width: 3, height: 2)],
+                    "Windows highlight bands remain one editable object in original paint order")
+        let bandImage = try await decodedPNG(from: grouped)
+        let singleBand = try pixel(in: bandImage, x: 1, y: 1)
+        let overlap = try pixel(in: bandImage, x: 2, y: 2)
+        let outside = try pixel(in: bandImage, x: 0, y: 0)
+        try require(singleBand == [128, 0, 0, 128] && overlap == [192, 0, 0, 192] && outside == [0, 0, 0, 0],
+                    "overlapping Windows highlight bands match GDI+ premultiplied output")
+        try await grouped.pngSnapshot().writeProject(to: roundTrip)
+        let restoredBands = try await StudioProjectFile.load(from: roundTrip)
+        try require(restoredBands.annotations == bands.annotations, "a saved Mac copy preserves the grouped highlight records")
+
         var wrongMetadataHash = outlineBytes
         wrongMetadataHash[16] ^= 1
         var wrongPixelHash = outlineBytes
         wrongPixelHash[48 + 56] ^= 1
         let truncated = Data(outlineBytes.dropLast())
         let trailing = outlineBytes + Data([0])
-        for invalid in [wrongMetadataHash, wrongPixelHash, truncated, trailing, try fixture(masksFixture), try fixture(richTextFixture)] {
+        let bgra = Data([0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, 0, 255, 255, 128])
+        // One final RFC 1951 stored block containing the expected raster plus one unexpected decoded byte.
+        let excessPixels = Data(outlineBytes.prefix(80 + 56)) + Data([1, 17, 0, 238, 255]) + bgra + Data([0])
+        for invalid in [wrongMetadataHash, wrongPixelHash, truncated, trailing, excessPixels,
+                        try fixture(masksFixture), try fixture(richTextFixture)] {
             try invalid.write(to: input, options: .atomic)
             do {
                 _ = try await StudioProjectFile.load(from: input)

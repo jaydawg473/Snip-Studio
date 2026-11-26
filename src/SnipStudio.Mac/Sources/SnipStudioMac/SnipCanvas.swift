@@ -282,8 +282,14 @@ struct SnipCanvas: View {
     private func draw(_ stroke: InkStroke, in ink: GraphicsContext) {
         if let bitmap = stroke.bitmap {
             var layer = ink
-            layer.concatenate(stroke.bitmapTransform)
+            layer.concatenate(stroke.paintTransform)
             layer.draw(Image(decorative: bitmap, scale: 1), in: stroke.bitmapDrawingFrame)
+            return
+        }
+        if let bands = stroke.highlightBands {
+            var layer = ink
+            layer.concatenate(stroke.paintTransform)
+            for band in bands { layer.fill(Path(band), with: .color(Color(cgColor: stroke.color))) }
             return
         }
         if let fill = stroke.fillColor, let area = stroke.fillOutline {

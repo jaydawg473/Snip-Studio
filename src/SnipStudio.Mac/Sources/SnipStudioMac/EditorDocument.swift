@@ -23,6 +23,7 @@ struct InkStroke: Identifiable, Sendable {
     private(set) var fillColor: CGColor?
     private(set) var emoji: String?
     private(set) var bitmap: CGImage?
+    private(set) var highlightBands: [CGRect]?
     private(set) var lineStyle: SnipLineStyle
     private var quarterTurns = 0
     private var rotationDegrees: CGFloat?
@@ -65,6 +66,7 @@ struct InkStroke: Identifiable, Sendable {
         quarterTurns = record.quarterTurns
         rotationDegrees = record.rotationDegrees
         emojiFrameSize = record.emojiFrameSize
+        highlightBands = record.highlightBands
         textNote = record.text
         if let fill = record.fill, fill.count == 4 {
             fillColor = CGColor(red: fill[0], green: fill[1], blue: fill[2], alpha: fill[3])
@@ -85,7 +87,8 @@ struct InkStroke: Identifiable, Sendable {
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
                                        quarterTurns: quarterTurns, text: textNote,
                                        fill: fillColor?.converted(to: space, intent: .defaultIntent, options: nil)?.components,
-                                       emoji: emoji, rotationDegrees: rotationDegrees, emojiFrameSize: emojiFrameSize)
+                                       emoji: emoji, rotationDegrees: rotationDegrees, emojiFrameSize: emojiFrameSize,
+                                       highlightBands: highlightBands)
     }
 
     mutating func extend(to point: CGPoint) {
@@ -109,6 +112,9 @@ struct InkStroke: Identifiable, Sendable {
     func offset(by delta: CGSize) -> InkStroke {
         var copy = self
         copy.points = points.map { CGPoint(x: $0.x + delta.width, y: $0.y + delta.height) }
+        if let highlightBands {
+            copy.setHighlightBands(highlightBands.map { $0.offsetBy(dx: delta.width, dy: delta.height) })
+        }
         copy.committedOutline = nil
         if let committedOutline {
             var translation = CGAffineTransform(translationX: delta.width, y: delta.height)
@@ -157,7 +163,12 @@ struct InkStroke: Identifiable, Sendable {
         let pivot = anchor ?? CGPoint(x: bounds.midX, y: bounds.midY)
         copy.points = points.map { CGPoint(x: pivot.x + ($0.x - pivot.x) * factor,
                                            y: pivot.y + ($0.y - pivot.y) * factor) }
-        if var note = textNote {
+        if let highlightBands {
+            copy.setHighlightBands(highlightBands.map { band in
+                CGRect(x: pivot.x + (band.minX - pivot.x) * factor, y: pivot.y + (band.minY - pivot.y) * factor,
+                       width: band.width * factor, height: band.height * factor)
+            })
+        } else if var note = textNote {
             note.pixelSize *= factor
             guard StudioTextAnnotation.pixelSizeRange.contains(note.pixelSize) else { return nil }
             copy.textNote = note
@@ -178,6 +189,12 @@ struct InkStroke: Identifiable, Sendable {
         return copy
     }
 
+    private mutating func setHighlightBands(_ rectangles: [CGRect]) {
+        highlightBands = rectangles
+        let box = rectangles.reduce(CGRect.null) { $0.union($1) }
+        points = [box.origin, CGPoint(x: box.maxX, y: box.maxY)]
+    }
+
     var bitmapFrame: CGRect {
         guard let bitmap else { return .null }
         return CGRect(origin: origin, size: emojiFrameSize ?? CGSize(width: bitmap.width, height: bitmap.height))
@@ -190,7 +207,7 @@ struct InkStroke: Identifiable, Sendable {
         return CGRect(x: frame.midX - side / 2, y: frame.midY - side / 2, width: side, height: side)
     }
 
-    var bitmapTransform: CGAffineTransform { rotationTransform }
+    var paintTransform: CGAffineTransform { rotationTransform }
 
     var fillOutline: CGPath? {
         guard fillColor != nil, let shape, (shape == .rectangle || shape == .ellipse), let last = points.last else { return nil }
@@ -203,8 +220,8 @@ struct InkStroke: Identifiable, Sendable {
 
     fileprivate func restyled(color: CGColor?, width: CGFloat?, lineStyle: SnipLineStyle?) -> InkStroke? {
         let newColor = color ?? self.color
-        let newWidth = width ?? self.width
-        let newLineStyle = lineStyle ?? self.lineStyle
+        let newWidth = highlightBands == nil ? width ?? self.width : self.width
+        let newLineStyle = highlightBands == nil ? lineStyle ?? self.lineStyle : self.lineStyle
         guard newWidth.isFinite, newWidth > 0,
               !CFEqual(newColor, self.color) || newWidth != self.width || newLineStyle != self.lineStyle else { return nil }
         var copy = self
@@ -227,6 +244,10 @@ struct InkStroke: Identifiable, Sendable {
     private var unrotatedOutline: CGPath {
         let path = CGMutablePath()
         let first = points[0]
+        if let highlightBands {
+            for band in highlightBands { path.addRect(band) }
+            return path
+        }
         if bitmap != nil { return CGPath(rect: bitmapFrame, transform: nil) }
         if let textNote { return textNote.makeOutline(at: first) }
         if let shape { return shapeOutline(shape, from: first, to: points[points.count - 1]) }
@@ -857,10 +878,18 @@ struct PngSnapshot: Sendable {
             if let bitmap = stroke.bitmap {
                 let frame = stroke.bitmapDrawingFrame
                 context.saveGState()
-                context.concatenate(stroke.bitmapTransform)
+                context.concatenate(stroke.paintTransform)
                 context.translateBy(x: frame.minX, y: frame.maxY)
                 context.scaleBy(x: 1, y: -1)
                 context.draw(bitmap, in: CGRect(origin: .zero, size: frame.size))
+                context.restoreGState()
+                continue
+            }
+            if let bands = stroke.highlightBands {
+                context.saveGState()
+                context.concatenate(stroke.paintTransform)
+                context.setFillColor(stroke.color)
+                for band in bands { context.fill(band) }
                 context.restoreGState()
                 continue
             }

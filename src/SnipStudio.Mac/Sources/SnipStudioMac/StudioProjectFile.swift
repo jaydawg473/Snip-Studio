@@ -20,6 +20,7 @@ struct StudioProjectAnnotation: Codable, Sendable, Equatable {
     var emoji: String? = nil
     var rotationDegrees: CGFloat? = nil
     var emojiFrameSize: CGSize? = nil
+    var highlightBands: [CGRect]? = nil
 }
 
 struct StudioProjectContents: Sendable {
@@ -264,11 +265,24 @@ enum StudioProjectFile {
                 guard annotation.emoji != nil, size.width > 0, size.height > 0,
                       size.width <= 32_768, size.height <= 32_768 else { throw Failure.invalidAnnotations }
             }
+            if let bands = annotation.highlightBands {
+                guard (1...16).contains(bands.count), annotation.shape == nil, annotation.text == nil,
+                      annotation.emoji == nil, annotation.fill == nil, annotation.width == 1,
+                      annotation.lineStyle == "solid", annotation.points.count == 2,
+                      bands.allSatisfy({ band in
+                          band.width > 0 && band.height > 0 && abs(band.minX) <= 128_000_000 &&
+                          abs(band.maxX) <= 128_000_000 && abs(band.minY) <= 128_000_000 && abs(band.maxY) <= 128_000_000
+                      }) else { throw Failure.invalidAnnotations }
+                let bounds = bands.reduce(CGRect.null) { $0.union($1) }
+                guard annotation.points == [bounds.origin, CGPoint(x: bounds.maxX, y: bounds.maxY)] else {
+                    throw Failure.invalidAnnotations
+                }
+            }
         }
     }
 
     private static func requiredVersion(for annotations: [StudioProjectAnnotation]) -> UInt64 {
-        if annotations.contains(where: { $0.rotationDegrees != nil || $0.emojiFrameSize != nil }) {
+        if annotations.contains(where: { $0.rotationDegrees != nil || $0.emojiFrameSize != nil || $0.highlightBands != nil }) {
             return exactGeometryVersion
         }
         if annotations.contains(where: { $0.fill != nil || $0.emoji != nil }) { return decoratedVersion }

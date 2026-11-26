@@ -720,7 +720,7 @@ struct StudioView: View {
                 .labelsHidden()
                 .help("Annotation color and opacity")
             }
-            if annotation.textNote == nil && annotation.emoji == nil {
+            if annotation.textNote == nil && annotation.emoji == nil && annotation.highlightBands == nil {
                 Stepper(value: Binding(get: { annotation.width }, set: { width in
                     document.updateAnnotation(id: annotation.id, width: width)
                 }), in: 1...30, step: 1) {
