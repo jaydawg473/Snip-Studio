@@ -29,6 +29,7 @@ enum TrialSelfCheck {
             }
             try await StudioProjectFile.selfCheck()
             try StudioWindowsProjectAnnotations.selfCheck()
+            try StudioWindowsTextNote.selfCheck()
             try await checkWindowsProjects()
             try await checkRasterPatches()
             try await checkRedactionAndProjectReplacement()
@@ -58,7 +59,8 @@ enum TrialSelfCheck {
         let bandsFixture = "U05JUEVESVQBAAAANQAAAOHg84SxVo4QA23LpXTQpUUB4LJK/spintx+ThTvPrZpBgAAAAYAAAABAAAACAAA/4ACAAAAAACAPwAAgD8AAEBAAAAAQAAAAEAAAABAAABAQAAAAECBxhHzW/95SRU4svfPIBx1l6ZhpcVJYzVBxivcivFhP2MYZAAA"
         let masksFixture = "U05JUEVESVQBAAAAXAAAAC/AVwICt43ehZdHvOy+nx8udUEqYHfoE04TZ8A3p9OBBAAAAAQAAAADAAAACQEAAAAAAIC/AAAAAAAAQEAAAABAZ0Uj/wkBAAAAAACAPwAAgD8AAABAAAAAQALNq/8BZVRD/wAAAD8AAgAAAAAAUEAAAFBAAABwQAAAcEA7rpVILSbDgbLRHNqWhOG+mfp6bL+nqCtp33henF23+fv///9/ZiZGsjEA"
         let fractionalMaskFixture = "U05JUEVESVQBAAAAJQAAABQvCk9rjI58KPJXAAo4oO1lhiodkzy6bexFZ4TWoRxsAgAAAAIAAAABAAAACQEAAAAAAIA+AAAAPwAAgD8AAAA/AAAA/xietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
-        let richTextFixture = "U05JUEVESVQBAAAAkQAAAKGBYxtibbPlunCcYRbvmMZQwkaI+d1l7j14/GuJmUwbAgAAAAIAAAABAAAABgAAgD4AAAA/AADAQQAAQEEIAAAAUVRZIDAwMDdkAAAAe1xydGYxXGFuc2lcZGVmZjB7XGZvbnR0Ymx7XGYwIFNlZ29lIFVJO319e1xjb2xvcnRibDtccmVkMFxncmVlbjBcYmx1ZTA7fVxmMFxmczE4XGNmMSBRVFkge1xiIDAwMDd9fRietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
+        let richTextFixture = "U05JUEVESVQBAAAAPQEAAMpMME1GEQ6I/80+bW88W1f9h4e+oyRjPfXAr6yCfQTskAEAADwAAAABAAAABgAAAEEAACBBAAAAAAAAAAAVAAAAQzpcd29ya1xGSUxFXzAwMjcuZXhlAwEAAHtccnRmMVxhbnNpXGFuc2ljcGcxMjUyXGRlZmYwXG5vdWljb21wYXRcZGVmbGFuZzEwMzN7XGZvbnR0Ymx7XGYwXGZuaWxcZmNoYXJzZXQwIEFyaWFsO317XGYxXGZuaWwgU2Vnb2UgVUk7fX0NCntcY29sb3J0YmwgO1xyZWQxMFxncmVlbjY1XGJsdWUxMjM7fQ0Ke1wqXGdlbmVyYXRvciBSaWNoZWQyMCAxMC4wLjI2MTAwfVx2aWV3a2luZDRcdWMxIA0KXHBhcmRcY2YxXGZzMjQgQzpcXHdvcmtcXEZJTEVfMDAyNy5leGVcY2YwXGYxXGZzMThccGFyDQp9DQpT/DyzMS0Kv6ca98cNmH0sVWR9RPKK4tHRhajJ/6oYu+3BgQAAAADDIH/qXeAIVQEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAHQN"
+        let customTextLayoutFixture = "U05JUEVESVQBAAAAkQAAAKGBYxtibbPlunCcYRbvmMZQwkaI+d1l7j14/GuJmUwbAgAAAAIAAAABAAAABgAAgD4AAAA/AADAQQAAQEEIAAAAUVRZIDAwMDdkAAAAe1xydGYxXGFuc2lcZGVmZjB7XGZvbnR0Ymx7XGYwIFNlZ29lIFVJO319e1xjb2xvcnRibDtccmVkMFxncmVlbjBcYmx1ZTA7fVxmMFxmczE4XGNmMSBRVFkge1xiIDAwMDd9fRietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SnipStudioWindowsFixture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -141,6 +143,27 @@ enum TrialSelfCheck {
         let retainedMaskBytes = try Data(contentsOf: input)
         try require(retainedMaskBytes == masksBytes, "the Mac copy leaves the Windows source bytes untouched")
 
+        let richTextBytes = try fixture(richTextFixture)
+        let withText = try await load(richTextBytes)
+        guard let record = withText.annotations.first, withText.annotations.count == 1, var note = record.text else {
+            throw CheckFailure("a supported Windows RTF note must remain editable")
+        }
+        let path = #"C:\work\FILE_0027.exe"#
+        try require(Array(note.text.utf16) == Array(path.utf16) && record.points == [CGPoint(x: 8, y: 10)] &&
+                    note.pixelSize == 16 && !note.bold && !note.italic && !note.underline &&
+                    [record.red, record.green, record.blue, record.alpha] == [CGFloat(10) / 255, CGFloat(65) / 255, CGFloat(123) / 255, 1],
+                    "Windows note import preserves text, origin, size and color")
+        let textDocument = EditorDocument()
+        try await textDocument.openProject(withText)
+        guard let editableNote = textDocument.strokes.first else { throw CheckFailure("install the Windows text annotation") }
+        note.text = #"C:\work\FILE_0028.exe"#
+        try textDocument.applyText(note, at: editableNote.origin, color: editableNote.color, updating: editableNote.id)
+        try await textDocument.pngSnapshot().writeProject(to: roundTrip)
+        let editedNote = try await StudioProjectFile.load(from: roundTrip)
+        try require(editedNote.annotations.first?.text == note, "the converted Windows text remains editable after saving a Mac copy")
+        let retainedTextBytes = try Data(contentsOf: input)
+        try require(retainedTextBytes == richTextBytes, "editing a converted note leaves the original Windows file unchanged")
+
         var wrongMetadataHash = outlineBytes
         wrongMetadataHash[16] ^= 1
         var wrongPixelHash = outlineBytes
@@ -151,7 +174,7 @@ enum TrialSelfCheck {
         // One final RFC 1951 stored block containing the expected raster plus one unexpected decoded byte.
         let excessPixels = Data(outlineBytes.prefix(80 + 56)) + Data([1, 17, 0, 238, 255]) + bgra + Data([0])
         for invalid in [wrongMetadataHash, wrongPixelHash, truncated, trailing, excessPixels,
-                        try fixture(fractionalMaskFixture), try fixture(richTextFixture)] {
+                        try fixture(fractionalMaskFixture), try fixture(customTextLayoutFixture)] {
             try invalid.write(to: input, options: .atomic)
             do {
                 _ = try await StudioProjectFile.load(from: input)

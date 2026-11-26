@@ -91,12 +91,7 @@ enum StudioWindowsProjectAnnotations {
         case 5:
             return try readOpenShape(.arrow, from: &input, version: version)
         case 6:
-            _ = try input.point()
-            _ = try input.number(in: 0...32768)
-            _ = try input.number(in: 0...32768)
-            _ = try input.string(maximumCharacters: 16_000)
-            _ = try input.string(maximumCharacters: 1_048_576)
-            throw Failure.unsupportedObject("Windows formatted text")
+            return try readTextNote(from: &input)
         case 7:
             return try readEmoji(from: &input)
         case 8:
@@ -104,6 +99,21 @@ enum StudioWindowsProjectAnnotations {
         default:
             throw Failure.unsupportedObject("an unknown Windows annotation")
         }
+    }
+
+    private static func readTextNote(from input: inout Reader) throws -> StudioProjectAnnotation {
+        let origin = try input.point()
+        let layoutWidth = try input.number(in: 0...32768)
+        let minimumHeight = try input.number(in: 0...32768)
+        guard layoutWidth == 0, minimumHeight == 0 else {
+            throw Failure.unsupportedObject("a Windows text box with custom wrapping or height")
+        }
+        let plain = try input.string(maximumCharacters: StudioTextAnnotation.maximumUTF16Length)
+        let rtf = try input.string(maximumCharacters: 1_048_576)
+        let imported = try StudioWindowsTextNote.decode(plain: plain, rtf: rtf)
+        return StudioProjectAnnotation(points: [origin], red: imported.red, green: imported.green,
+                                       blue: imported.blue, alpha: imported.alpha, width: 1, shape: nil,
+                                       lineStyle: SnipLineStyle.solid.rawValue, quarterTurns: 0, text: imported.note)
     }
 
     private static func readClosedShape(_ shape: SnipShape, from input: inout Reader, version: UInt32) throws -> StudioProjectAnnotation {
@@ -195,8 +205,14 @@ enum StudioWindowsProjectAnnotations {
         // Every imported sticker gets a detached bitmap and every dash becomes path geometry.
         private var availableStickerPixels = 16_000_000
         private var availablePatternMarks: CGFloat = 250_000
+        private var availableTextCodeUnits = 131_072
 
         mutating func reserve(_ annotation: StudioProjectAnnotation) throws {
+            if let note = annotation.text {
+                let codeUnits = note.text.utf16.count
+                guard codeUnits <= availableTextCodeUnits else { throw Failure.renderingLimit }
+                availableTextCodeUnits -= codeUnits
+            }
             if annotation.emoji != nil {
                 let side = Int(annotation.width.rounded(.up))
                 let pixels = side * side
@@ -366,7 +382,7 @@ enum StudioWindowsProjectAnnotations {
             case .unsupportedVersion: "This Windows editable snip uses an unsupported version."
             case .invalidMetadata: "This Windows editable snip contains incomplete or invalid annotation data."
             case .tooManyObjects: "This Windows editable snip exceeds the Mac project’s annotation limit."
-            case .renderingLimit: "This Windows editable snip contains too much sticker or patterned-outline detail to open safely on Mac."
+            case .renderingLimit: "This Windows editable snip contains too much text, sticker, or outline detail to open on Mac."
             case let .unsupportedObject(reason): "This snip contains \(reason) that the Mac editor cannot preserve. Open it in Snip Studio for Windows to keep the original annotations."
             }
         }
@@ -452,8 +468,8 @@ enum StudioWindowsProjectAnnotations {
         notes.string("{\\rtf1 ID 0027}")
         do {
             _ = try decode(notes.data, version: 1)
-            throw CheckFailure.failed("formatted Windows notes are rejected intact")
-        } catch Failure.unsupportedObject("Windows formatted text") {}
+            throw CheckFailure.failed("Windows notes that require wrapping are rejected intact")
+        } catch Failure.unsupportedObject("a Windows text box with custom wrapping or height") {}
 
         var overlaidMask = Fixture(count: 2)
         overlaidMask.stroke(color: 0xff11_2233, width: 5, highlighter: false, points: [(1, 1), (3, 3)])
