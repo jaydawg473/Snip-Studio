@@ -1046,7 +1046,11 @@ struct StudioView: View {
                 try await document.openProject(contents, replacing: revision)
                 presentLoadedImage(alreadySaved: true)
                 recordRecent(url)
-                if importsWindowsProject { status = "Windows snip opened. Use Save Editable Mac Snip to keep a Mac copy." }
+                if contents.containsBakedWindowsSourceMasks {
+                    status = "Windows snip opened. Covered source pixels are permanently replaced in the Mac copy."
+                } else if importsWindowsProject {
+                    status = "Windows snip opened. Use Save Editable Mac Snip to keep a Mac copy."
+                }
             } catch is CancellationError {
                 return
             } catch { report(error) }

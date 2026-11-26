@@ -24,12 +24,21 @@ struct RecognizedLine: Sendable {
     let bounds: CGRect
     let contacts: [OCRContact]
     let words: [OCRWord]
+    let supportsWordSelection: Bool
 
     init(text: String, bounds: CGRect, contacts: [OCRContact] = [], words: [OCRWord] = []) {
         self.text = text
         self.bounds = bounds
         self.contacts = contacts
         self.words = words
+        guard !words.isEmpty else {
+            supportsWordSelection = false
+            return
+        }
+        let tokens = text.split(whereSeparator: \.isWhitespace)
+        supportsWordSelection = words.count == tokens.count && zip(words, tokens).allSatisfy { word, token in
+            word.utf16Range == NSRange(token.startIndex..<token.endIndex, in: text)
+        }
     }
 }
 

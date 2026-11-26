@@ -11,6 +11,7 @@ enum StudioWindowsProjectFile {
     private static let maximumMetadataBytes: UInt32 = 24 * 1024 * 1024
     private static let maximumDimension: UInt32 = 32_768
     private static let maximumPixels: UInt64 = 64_000_000
+    private static let maximumMaskWrites = 128_000_000
     private static let digestBytes = 32
     private static let fixedBytes: UInt64 = 80
     private static let chunkBytes = 256 * 1024
@@ -33,11 +34,16 @@ enum StudioWindowsProjectFile {
         guard width > 0, height > 0 else { throw Failure.corrupt }
         guard width <= maximumDimension, height <= maximumDimension, area <= maximumPixels else { throw Failure.tooLarge }
 
-        let annotations = try StudioWindowsProjectAnnotations.decode(Data(metadata.dropFirst(8)), version: version)
+        let decoded = try StudioWindowsProjectAnnotations.decode(Data(metadata.dropFirst(8)), version: version)
         let expectedDigest = try StudioProjectFile.readExactly(digestBytes, from: input)
-        let pixels = try inflate(from: input, bytesRemaining: fileBytes - fixedBytes - UInt64(count), pixelBytes: Int(area) * 4)
+        var pixels = try inflate(from: input, bytesRemaining: fileBytes - fixedBytes - UInt64(count), pixelBytes: Int(area) * 4)
         guard SHA256.hash(data: pixels).elementsEqual(expectedDigest) else { throw Failure.corrupt }
         try Task.checkCancellation()
+        // Windows puts source masks beneath all editable objects. Bake them into the copy so
+        // removing or moving an annotation cannot expose the original covered source pixels.
+        if !decoded.sourceMasks.isEmpty {
+            try applySourceMasks(decoded.sourceMasks, to: &pixels, width: Int(width), height: Int(height))
+        }
 
         // Format32bppArgb stores straight BGRA bytes in logical top-to-bottom row order.
         let pixelFormat = CGBitmapInfo.byteOrder32Little.union(CGBitmapInfo(rawValue: CGImageAlphaInfo.first.rawValue))
@@ -47,7 +53,43 @@ enum StudioWindowsProjectFile {
                                   provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent) else {
             throw Failure.corrupt
         }
-        return StudioProjectContents(image: image, annotations: annotations)
+        return StudioProjectContents(image: image, annotations: decoded.annotations,
+                                     containsBakedWindowsSourceMasks: !decoded.sourceMasks.isEmpty)
+    }
+
+    private static func applySourceMasks(_ masks: [StudioWindowsProjectAnnotations.SourceMask], to pixels: inout Data,
+                                         width: Int, height: Int) throws {
+        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
+        var remainingWrites = maximumMaskWrites
+        try pixels.withUnsafeMutableBytes { (raster: UnsafeMutableRawBufferPointer) in
+            guard let destination = raster.baseAddress else { throw Failure.corrupt }
+            for mask in masks {
+                try Task.checkCancellation()
+                // Windows GDI+ antialiases the right and bottom edge into one more pixel.
+                // Replace those pixels too, even if the Windows view only partially covered them.
+                let rect = mask.rect
+                let covered = CGRect(x: rect.minX, y: rect.minY, width: rect.width + 1, height: rect.height + 1)
+                let box = covered.intersection(bounds)
+                guard !box.isEmpty else { continue }
+                let x = Int(box.minX)
+                let y = Int(box.minY)
+                let columns = Int(box.width)
+                let rows = Int(box.height)
+                let writes = columns * rows
+                guard writes <= remainingWrites else { throw Failure.tooManyMaskPixels }
+                remainingWrites -= writes
+                // The little-endian bytes of the stored ARGB word are already in bitmap BGRA order.
+                let row = [UInt32](repeating: mask.argb.littleEndian, count: columns)
+                try row.withUnsafeBytes { source in
+                    guard let start = source.baseAddress else { throw Failure.corrupt }
+                    for offset in 0..<rows {
+                        if offset % 256 == 0 { try Task.checkCancellation() }
+                        destination.advanced(by: ((y + offset) * width + x) * 4)
+                            .copyMemory(from: start, byteCount: source.count)
+                    }
+                }
+            }
+        }
     }
 
     private static func inflate(from input: FileHandle, bytesRemaining: UInt64, pixelBytes: Int) throws -> Data {
@@ -103,13 +145,14 @@ enum StudioWindowsProjectFile {
     }
 
     private enum Failure: LocalizedError {
-        case unsupportedVersion, corrupt, tooLarge
+        case unsupportedVersion, corrupt, tooLarge, tooManyMaskPixels
 
         var errorDescription: String? {
             switch self {
             case .unsupportedVersion: "This Windows editable snip uses an unsupported format version."
             case .corrupt: "This Windows editable snip is incomplete or damaged."
             case .tooLarge: "This Windows editable snip exceeds the supported file or image size."
+            case .tooManyMaskPixels: "This Windows editable snip contains too many overlapping or large source-text masks to open on Mac."
             }
         }
     }

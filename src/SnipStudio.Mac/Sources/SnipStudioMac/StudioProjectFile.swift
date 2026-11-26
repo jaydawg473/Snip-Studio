@@ -26,6 +26,7 @@ struct StudioProjectAnnotation: Codable, Sendable, Equatable {
 struct StudioProjectContents: Sendable {
     let image: CGImage
     let annotations: [StudioProjectAnnotation]
+    var containsBakedWindowsSourceMasks = false
 }
 
 enum StudioProjectFile {

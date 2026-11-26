@@ -38,6 +38,7 @@ enum TrialSelfCheck {
             try checkViewport()
             try checkRowOrder()
             try checkOCRWordSelection()
+            try StudioOCRSelection.selfCheck()
             try checkOCRTable()
             try await checkVision()
             try await StudioFileExportSelfCheck.run()
@@ -54,7 +55,8 @@ enum TrialSelfCheck {
         let cardinalFixture = "U05JUEVESVQCAAAAMwAAAG5YXhRxn3zN7Myx4Bf0mG7T8j/r6NaixcS1pgPuW4JmAgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AALRCASBAYIAAAAAAQBkAAABTAAAAGJ60E6sckLXQ2C4N+oOWnb/mcdxfm3DiETuaLKbf+q1jYPj/n+E/iACTDQA="
         let outlineFixture = "U05JUEVESVQDAAAAOAAAABrGEcc2fHNf4bDOmK1eLEgR0MyN1ZEegiiLxk1L4/P5AgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AAAxCASBAYIABgEAgmgAAgD4ZAAAASwAAAAIYnrQTqxyQtdDYLg36g5adv+Zx3F+bcOIRO5ospt/6rWNg+P+f4T+IAJMNAA=="
         let bandsFixture = "U05JUEVESVQBAAAANQAAAOHg84SxVo4QA23LpXTQpUUB4LJK/spintx+ThTvPrZpBgAAAAYAAAABAAAACAAA/4ACAAAAAACAPwAAgD8AAEBAAAAAQAAAAEAAAABAAABAQAAAAECBxhHzW/95SRU4svfPIBx1l6ZhpcVJYzVBxivcivFhP2MYZAAA"
-        let masksFixture = "U05JUEVESVQBAAAAJQAAABQvCk9rjI58KPJXAAo4oO1lhiodkzy6bexFZ4TWoRxsAgAAAAIAAAABAAAACQEAAAAAAIA+AAAAPwAAgD8AAAA/AAAA/xietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
+        let masksFixture = "U05JUEVESVQBAAAAXAAAAC/AVwICt43ehZdHvOy+nx8udUEqYHfoE04TZ8A3p9OBBAAAAAQAAAADAAAACQEAAAAAAIC/AAAAAAAAQEAAAABAZ0Uj/wkBAAAAAACAPwAAgD8AAABAAAAAQALNq/8BZVRD/wAAAD8AAgAAAAAAUEAAAFBAAABwQAAAcEA7rpVILSbDgbLRHNqWhOG+mfp6bL+nqCtp33henF23+fv///9/ZiZGsjEA"
+        let fractionalMaskFixture = "U05JUEVESVQBAAAAJQAAABQvCk9rjI58KPJXAAo4oO1lhiodkzy6bexFZ4TWoRxsAgAAAAIAAAABAAAACQEAAAAAAIA+AAAAPwAAgD8AAAA/AAAA/xietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
         let richTextFixture = "U05JUEVESVQBAAAAkQAAAKGBYxtibbPlunCcYRbvmMZQwkaI+d1l7j14/GuJmUwbAgAAAAIAAAABAAAABgAAgD4AAAA/AADAQQAAQEEIAAAAUVRZIDAwMDdkAAAAe1xydGYxXGFuc2lcZGVmZjB7XGZvbnR0Ymx7XGYwIFNlZ29lIFVJO319e1xjb2xvcnRibDtccmVkMFxncmVlbjBcYmx1ZTA7fVxmMFxmczE4XGNmMSBRVFkge1xiIDAwMDd9fRietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SnipStudioWindowsFixture-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
@@ -119,6 +121,25 @@ enum TrialSelfCheck {
         let restoredBands = try await StudioProjectFile.load(from: roundTrip)
         try require(restoredBands.annotations == bands.annotations, "a saved Mac copy preserves the grouped highlight records")
 
+        let masksBytes = try fixture(masksFixture)
+        let masked = try await load(masksBytes)
+        try require(masked.containsBakedWindowsSourceMasks && masked.annotations.count == 1 &&
+                    masked.annotations[0].points == [CGPoint(x: 3.25, y: 3.25), CGPoint(x: 3.75, y: 3.75)],
+                    "source masks become pixels while the Windows stroke remains separately editable")
+        try checkWindowsMaskedPixels(masked.image)
+        let maskedDocument = EditorDocument()
+        try await maskedDocument.openProject(masked)
+        maskedDocument.eraseAllAnnotations()
+        try require(maskedDocument.strokes.isEmpty, "erase all removes the editable stroke")
+        try checkWindowsMaskedPixels(try await decodedPNG(from: maskedDocument))
+        try await maskedDocument.pngSnapshot().writeProject(to: roundTrip)
+        let restoredMasked = try await StudioProjectFile.load(from: roundTrip)
+        try require(restoredMasked.annotations.isEmpty && !restoredMasked.containsBakedWindowsSourceMasks,
+                    "the Mac copy stores the covered pixels in its source raster")
+        try checkWindowsMaskedPixels(restoredMasked.image)
+        let retainedMaskBytes = try Data(contentsOf: input)
+        try require(retainedMaskBytes == masksBytes, "the Mac copy leaves the Windows source bytes untouched")
+
         var wrongMetadataHash = outlineBytes
         wrongMetadataHash[16] ^= 1
         var wrongPixelHash = outlineBytes
@@ -129,7 +150,7 @@ enum TrialSelfCheck {
         // One final RFC 1951 stored block containing the expected raster plus one unexpected decoded byte.
         let excessPixels = Data(outlineBytes.prefix(80 + 56)) + Data([1, 17, 0, 238, 255]) + bgra + Data([0])
         for invalid in [wrongMetadataHash, wrongPixelHash, truncated, trailing, excessPixels,
-                        try fixture(masksFixture), try fixture(richTextFixture)] {
+                        try fixture(fractionalMaskFixture), try fixture(richTextFixture)] {
             try invalid.write(to: input, options: .atomic)
             do {
                 _ = try await StudioProjectFile.load(from: input)
@@ -144,6 +165,18 @@ enum TrialSelfCheck {
             }
         }
         print("PASS: Windows project v1–v3 import, color and transparency, editable Mac copy and damaged-data rejection")
+    }
+
+    private static func checkWindowsMaskedPixels(_ image: CGImage) throws {
+        let first = try pixel(in: image, x: 0, y: 0)
+        let firstEdge = try pixel(in: image, x: 2, y: 0)
+        let overlap = try pixel(in: image, x: 1, y: 1)
+        let second = try pixel(in: image, x: 2, y: 2)
+        let secondEdge = try pixel(in: image, x: 3, y: 3)
+        let outside = try pixel(in: image, x: 3, y: 0)
+        try require(first == [0x23, 0x45, 0x67, 255] && firstEdge == first && overlap == [0xAB, 0xCD, 0x02, 255] &&
+                    second == overlap && secondEdge == second &&
+                    outside == [1, 2, 3, 255], "Windows masks are clipped, applied top-down in paint order, and limited to covered pixels")
     }
 
     private static func checkRasterPatches() async throws {

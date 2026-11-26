@@ -17,7 +17,7 @@ The trial also includes crop, object movement and rotation, editable text with f
 
 ## Windows editable snips
 
-Open supports Windows `.snipstudio` projects that contain strokes, geometric shapes, catalog stickers, and highlights, including grouped bands. Save an editable copy as `.snipstudiomac` after opening. The importer reads the Windows file and verifies its metadata and pixel hashes. Sticker artwork follows macOS. Projects with Windows rich text, source-text masks, or other unsupported records fail as a whole. Use PNG export from Windows when you only need a flattened image in those cases.
+Open supports Windows `.snipstudio` projects that contain strokes, geometric shapes, catalog stickers, and highlights, including grouped bands. Save an editable copy as `.snipstudiomac` after opening. The importer reads the Windows file and verifies its metadata and pixel hashes. Sticker artwork follows macOS. Opaque, pixel-aligned Windows source-text masks beneath the annotations permanently replace the covered pixels in the Mac copy. Other annotations stay editable, and the original Windows file is kept. Projects with Windows rich text or unsupported records fail as a whole. Use PNG export from Windows when you only need a flattened image in those cases.
 
 ## Signing on GitHub Actions
 

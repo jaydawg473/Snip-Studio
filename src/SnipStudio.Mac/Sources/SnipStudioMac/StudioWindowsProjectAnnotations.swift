@@ -8,9 +8,20 @@ enum StudioWindowsProjectAnnotations {
     private static let windowsAnnotationLimit = 16_384
     private static let nativeAnnotationLimit = 15_000
     private static let nativePointLimit = 750_000
+    private static let maximumMaskRegions = 16_384
     private static let maximumCoordinate: Float = 1_048_576
 
-    static func decode(_ data: Data, version: UInt32) throws -> [StudioProjectAnnotation] {
+    struct SourceMask {
+        let rect: CGRect
+        let argb: UInt32
+    }
+
+    struct Decoded {
+        var annotations: [StudioProjectAnnotation] = []
+        var sourceMasks: [SourceMask] = []
+    }
+
+    static func decode(_ data: Data, version: UInt32) throws -> Decoded {
         guard (1...3).contains(version) else { throw Failure.unsupportedVersion }
         guard (4...maximumBytes).contains(data.count) else { throw Failure.invalidMetadata }
 
@@ -21,24 +32,42 @@ enum StudioWindowsProjectAnnotations {
         }
         guard count <= nativeAnnotationLimit else { throw Failure.tooManyObjects }
 
-        var result: [StudioProjectAnnotation] = []
-        result.reserveCapacity(count)
+        var result = Decoded()
+        result.annotations.reserveCapacity(count)
         var remainingPoints = nativePointLimit
         var budget = RenderingBudget()
         for _ in 0..<count {
             try Task.checkCancellation()
-            let annotation = try readAnnotation(from: &input, version: version, remainingPoints: remainingPoints)
+            let kind = try input.byte()
+            if kind == 9 {
+                guard result.annotations.isEmpty else {
+                    throw Failure.unsupportedObject("a source-text mask above other annotations")
+                }
+                let regionCount = try input.elementCount(itemBytes: 20)
+                guard regionCount <= maximumMaskRegions - result.sourceMasks.count else { throw Failure.tooManyObjects }
+                for _ in 0..<regionCount {
+                    let rect = try input.rectangle()
+                    let argb = try input.word()
+                    guard rect == rect.integral, argb >> 24 == 255 else {
+                        throw Failure.unsupportedObject("a fractional or translucent source-text mask")
+                    }
+                    result.sourceMasks.append(SourceMask(rect: rect, argb: argb))
+                }
+                continue
+            }
+            let annotation = try readAnnotation(kind, from: &input, version: version, remainingPoints: remainingPoints)
             guard annotation.points.count <= remainingPoints else { throw Failure.tooManyObjects }
             remainingPoints -= annotation.points.count
             try budget.reserve(annotation)
-            result.append(annotation)
+            result.annotations.append(annotation)
         }
         guard input.remaining == 0 else { throw Failure.invalidMetadata }
         return result
     }
 
-    private static func readAnnotation(from input: inout Reader, version: UInt32, remainingPoints: Int) throws -> StudioProjectAnnotation {
-        switch try input.byte() {
+    private static func readAnnotation(_ kind: UInt8, from input: inout Reader, version: UInt32,
+                                       remainingPoints: Int) throws -> StudioProjectAnnotation {
+        switch kind {
         case 1:
             var ink = try input.color()
             let width = try input.number(in: 0.001...1024)
@@ -72,10 +101,6 @@ enum StudioWindowsProjectAnnotations {
             return try readEmoji(from: &input)
         case 8:
             return try readHighlight(from: &input)
-        case 9:
-            _ = try input.elementCount(itemBytes: 20)
-            // On Windows these objects permanently track their source-pixel locations and are not selectable.
-            throw Failure.unsupportedObject("a Windows source-text mask")
         default:
             throw Failure.unsupportedObject("an unknown Windows annotation")
         }
@@ -276,7 +301,7 @@ enum StudioWindowsProjectAnnotations {
             Int(Int32(bitPattern: try word()))
         }
 
-        private mutating func word() throws -> UInt32 {
+        mutating func word() throws -> UInt32 {
             guard remaining >= 4 else { throw Failure.invalidMetadata }
             let low = UInt32(bytes[offset]) | (UInt32(bytes[offset + 1]) << 8)
             let high = UInt32(bytes[offset + 2]) | (UInt32(bytes[offset + 3]) << 8)
@@ -353,7 +378,7 @@ enum StudioWindowsProjectAnnotations {
         var strokes = Fixture(count: 1)
         strokes.stroke(color: 0x3311_2233, width: 5, highlighter: true, points: [(-12.5, 30), (20, 50)])
         for version in [UInt32(1), 2, 3] {
-            let decoded = try decode(strokes.data, version: version)
+            let decoded = try decode(strokes.data, version: version).annotations
             try check(decoded.count == 1, "one stroke was stored")
             let stroke = decoded[0]
             try check(stroke.alpha == Ink.unit(version == 3 ? 0x33 : 80), "highlighter alpha follows the file version")
@@ -379,7 +404,7 @@ enum StudioWindowsProjectAnnotations {
         shapes.word(2)
         shapes.rectangle(3, 4, 9, 8)
         shapes.rectangle(7, 9, 8, 7)
-        let decoded = try decode(shapes.data, version: 3)
+        let decoded = try decode(shapes.data, version: 3).annotations
         try check(decoded.map(\.shape) == ["ellipse", "line", nil, nil], "annotation paint order")
         try check(decoded[0].rotationDegrees == -37.5 && decoded[0].quarterTurns == 0, "arbitrary clockwise shape geometry")
         try check(decoded[0].lineStyle == "dotted" && decoded[0].alpha == Ink.unit(2), "dotted outline and ties-to-even alpha")
@@ -399,7 +424,7 @@ enum StudioWindowsProjectAnnotations {
         singleBand.word(0x2011_2233)
         singleBand.word(1)
         singleBand.rectangle(-5, 4, 9, 8)
-        let single = try decode(singleBand.data, version: 1)
+        let single = try decode(singleBand.data, version: 1).annotations
         try check(single[0].highlightBands == [CGRect(x: -5, y: 4, width: 9, height: 8)] && single[0].alpha == Ink.unit(32),
                   "version 1 highlight bands retain recorded alpha")
 
@@ -415,7 +440,7 @@ enum StudioWindowsProjectAnnotations {
         rotated.rectangle(1, 2, 10, 20)
         rotated.float(-90)
         rotated.style(fill: nil, outline: 0xff00_0000, width: 2, fillOpacity: 100, outlineOpacity: 100)
-        let v2 = try decode(rotated.data, version: 2)
+        let v2 = try decode(rotated.data, version: 2).annotations
         try check(v2[0].quarterTurns == 3 && v2[0].rotationDegrees == nil && v2[0].lineStyle == "solid", "version 2 cardinal shape rotation")
 
         var notes = Fixture(count: 1)
@@ -429,6 +454,27 @@ enum StudioWindowsProjectAnnotations {
             _ = try decode(notes.data, version: 1)
             throw CheckFailure.failed("formatted Windows notes are rejected intact")
         } catch Failure.unsupportedObject("Windows formatted text") {}
+
+        var overlaidMask = Fixture(count: 2)
+        overlaidMask.stroke(color: 0xff11_2233, width: 5, highlighter: false, points: [(1, 1), (3, 3)])
+        overlaidMask.data.append(9)
+        overlaidMask.word(1)
+        overlaidMask.rectangle(0, 0, 4, 4)
+        overlaidMask.word(0xff00_0000)
+        do {
+            _ = try decode(overlaidMask.data, version: 1)
+            throw CheckFailure.failed("baking a mask above existing ink would expose the obscured ink")
+        } catch Failure.unsupportedObject("a source-text mask above other annotations") {}
+
+        var translucentMask = Fixture(count: 1)
+        translucentMask.data.append(9)
+        translucentMask.word(1)
+        translucentMask.rectangle(0, 0, 4, 4)
+        translucentMask.word(0x8000_0000)
+        do {
+            _ = try decode(translucentMask.data, version: 1)
+            throw CheckFailure.failed("translucent masks cannot be imported as opaque replacements")
+        } catch Failure.unsupportedObject("a fractional or translucent source-text mask") {}
 
         var extra = shapes.data
         extra.append(0)
