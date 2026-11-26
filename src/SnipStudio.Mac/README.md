@@ -13,7 +13,11 @@ From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certifi
 - Draw near the top-left, add and erase a shape, then undo and redo. Check Fit and 100% at Retina scale, copy the image, and reopen each export format. Check Print Preview without submitting a physical job.
 - Run Text Actions on multiple lines including a filename with leading zeros. Check the overlay and paste copied text and a table into their intended apps. Test automatic copy and original saving with each option enabled and disabled.
 
-The trial also includes crop, object movement and rotation, editable text with font and style controls, reviewed email and phone redaction, video review with a filmstrip, MP4 trim, and size-limited export for email. Scrolling capture offers manual sampling or an explicit Auto Scroll action and lets you review the accepted views. On macOS 15 or later, Video mode records a display or window, with region selection where supported. Floating controls keep Stop available, with optional system audio and microphone input. Stop saves the MP4 to Movies/Snip Studio and opens it for review. Save an editable Mac snip as `.snipstudiomac` to reopen its annotations. Windows `.snipstudio` files remain a separate format. The file menu checks the original Snip Studio repository for an Apple Silicon download.
+The trial also includes crop, object movement and rotation, editable text with font and style controls, reviewed email and phone redaction, video review with a filmstrip, MP4 trim, and size-limited export for email. Scrolling capture offers manual sampling or an explicit Auto Scroll action and lets you review the accepted views. On macOS 15 or later, Video mode records a display or window, with region selection where supported. Floating controls keep Stop available, with optional system audio and microphone input. Stop saves the MP4 to Movies/Snip Studio and opens it for review. The file menu checks the original Snip Studio repository for an Apple Silicon download.
+
+## Windows editable snips
+
+Open supports Windows `.snipstudio` projects that contain strokes, geometric shapes, catalog stickers, and single-band highlights. Save an editable copy as `.snipstudiomac` after opening. The importer reads the Windows file and verifies its metadata and pixel hashes. Sticker artwork follows macOS. Projects with Windows rich text, grouped highlights, source-text masks, or other unsupported records fail as a whole. Use PNG export from Windows when you only need a flattened image in those cases.
 
 ## Signing on GitHub Actions
 

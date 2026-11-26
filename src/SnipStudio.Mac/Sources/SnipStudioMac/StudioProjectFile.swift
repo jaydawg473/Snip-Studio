@@ -18,6 +18,8 @@ struct StudioProjectAnnotation: Codable, Sendable, Equatable {
     let text: StudioTextAnnotation?
     var fill: [CGFloat]? = nil
     var emoji: String? = nil
+    var rotationDegrees: CGFloat? = nil
+    var emojiFrameSize: CGSize? = nil
 }
 
 struct StudioProjectContents: Sendable {
@@ -31,6 +33,7 @@ enum StudioProjectFile {
     private static let magic = Data("SNIPMAC\0".utf8)
     private static let baseVersion: UInt64 = 1
     private static let decoratedVersion: UInt64 = 2
+    private static let exactGeometryVersion: UInt64 = 3
     private static let digestLength = 32
     private static let pixelDigestOffset = 64
     private static let headerSize = 96
@@ -62,7 +65,7 @@ enum StudioProjectFile {
             let output = try openPrivateOutput(staged)
             do {
                 var header = magic
-                header.appendBigEndian(annotations.contains { $0.fill != nil || $0.emoji != nil } ? decoratedVersion : baseVersion)
+                header.appendBigEndian(requiredVersion(for: annotations))
                 header.appendBigEndian(UInt64(annotationData.count))
                 header.appendBigEndian(pngBytes)
                 header.append(Data(SHA256.hash(data: annotationData)))
@@ -92,10 +95,19 @@ enum StudioProjectFile {
             guard fileBytes <= UInt64(headerSize + maximumMetadataBytes + maximumPNGBytes) else {
                 throw Failure.projectTooLarge
             }
-            let header = try readExactly(headerSize, from: input)
-            guard header.prefix(magic.count).elementsEqual(magic) else { throw Failure.wrongFormat }
+            let signature = try readExactly(magic.count, from: input)
+            if signature == StudioWindowsProjectFile.magic {
+                let result = try StudioWindowsProjectFile.read(afterMagicFrom: input, fileBytes: fileBytes)
+                try validateAnnotations(result.annotations)
+                guard try size(of: input) == fileBytes else { throw Failure.corrupt }
+                return result
+            }
+            guard signature == magic else { throw Failure.wrongFormat }
+            let header = signature + (try readExactly(headerSize - signature.count, from: input))
             let version = header.bigEndian(at: 8)
-            guard version == baseVersion || version == decoratedVersion else { throw Failure.unsupportedVersion }
+            guard version == baseVersion || version == decoratedVersion || version == exactGeometryVersion else {
+                throw Failure.unsupportedVersion
+            }
             let annotationBytes = header.bigEndian(at: 16)
             let pngBytes = header.bigEndian(at: 24)
             guard annotationBytes > 0, annotationBytes <= UInt64(maximumMetadataBytes),
@@ -110,9 +122,7 @@ enum StudioProjectFile {
             do { annotations = try JSONDecoder().decode([StudioProjectAnnotation].self, from: annotationData) }
             catch { throw Failure.corrupt }
             try validateAnnotations(annotations)
-            if version == baseVersion && annotations.contains(where: { $0.fill != nil || $0.emoji != nil }) {
-                throw Failure.corrupt
-            }
+            guard version >= requiredVersion(for: annotations) else { throw Failure.corrupt }
 
             let directory = try privateDirectory(in: FileManager.default.temporaryDirectory)
             defer { try? FileManager.default.removeItem(at: directory) }
@@ -247,7 +257,22 @@ enum StudioProjectFile {
             if let glyph = annotation.emoji {
                 guard annotation.points.count == 1, StudioEmojiRaster.stickers.contains(glyph) else { throw Failure.invalidAnnotations }
             }
+            if let rotation = annotation.rotationDegrees {
+                guard annotation.quarterTurns == 0, (-180...180).contains(rotation) else { throw Failure.invalidAnnotations }
+            }
+            if let size = annotation.emojiFrameSize {
+                guard annotation.emoji != nil, size.width > 0, size.height > 0,
+                      size.width <= 32_768, size.height <= 32_768 else { throw Failure.invalidAnnotations }
+            }
         }
+    }
+
+    private static func requiredVersion(for annotations: [StudioProjectAnnotation]) -> UInt64 {
+        if annotations.contains(where: { $0.rotationDegrees != nil || $0.emojiFrameSize != nil }) {
+            return exactGeometryVersion
+        }
+        if annotations.contains(where: { $0.fill != nil || $0.emoji != nil }) { return decoratedVersion }
+        return baseVersion
     }
 
     private static func validateDimensions(width: Int, height: Int) throws {
@@ -323,7 +348,7 @@ enum StudioProjectFile {
         return size
     }
 
-    private static func readExactly(_ count: Int, from handle: FileHandle) throws -> Data {
+    static func readExactly(_ count: Int, from handle: FileHandle) throws -> Data {
         var data = Data()
         data.reserveCapacity(count)
         while data.count < count {
@@ -370,7 +395,7 @@ enum StudioProjectFile {
         var errorDescription: String? {
             switch self {
             case .invalidPath: "Choose a regular file on this Mac."
-            case .wrongFormat: "This file is not an editable Snip Studio project for Mac."
+            case .wrongFormat: "This file is not an editable Snip Studio project."
             case .unsupportedVersion: "This editable project uses an unsupported format version."
             case .corrupt: "This editable project is incomplete or damaged."
             case .invalidAnnotations: "This editable project contains invalid annotation data."

@@ -283,7 +283,7 @@ struct SnipCanvas: View {
         if let bitmap = stroke.bitmap {
             var layer = ink
             layer.concatenate(stroke.bitmapTransform)
-            layer.draw(Image(decorative: bitmap, scale: 1), in: stroke.bitmapFrame)
+            layer.draw(Image(decorative: bitmap, scale: 1), in: stroke.bitmapDrawingFrame)
             return
         }
         if let fill = stroke.fillColor, let area = stroke.fillOutline {

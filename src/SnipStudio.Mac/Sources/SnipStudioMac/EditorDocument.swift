@@ -25,6 +25,8 @@ struct InkStroke: Identifiable, Sendable {
     private(set) var bitmap: CGImage?
     private(set) var lineStyle: SnipLineStyle
     private var quarterTurns = 0
+    private var rotationDegrees: CGFloat?
+    private var emojiFrameSize: CGSize?
     private var committedOutline: CommittedOutline?
 
     var bounds: CGRect { committedOutline?.bounds ?? outline.boundingBoxOfPath }
@@ -61,6 +63,8 @@ struct InkStroke: Identifiable, Sendable {
         self.init(color: color, width: record.width, at: first, shape: shape, lineStyle: lineStyle)
         points = record.points
         quarterTurns = record.quarterTurns
+        rotationDegrees = record.rotationDegrees
+        emojiFrameSize = record.emojiFrameSize
         textNote = record.text
         if let fill = record.fill, fill.count == 4 {
             fillColor = CGColor(red: fill[0], green: fill[1], blue: fill[2], alpha: fill[3])
@@ -81,7 +85,7 @@ struct InkStroke: Identifiable, Sendable {
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
                                        quarterTurns: quarterTurns, text: textNote,
                                        fill: fillColor?.converted(to: space, intent: .defaultIntent, options: nil)?.components,
-                                       emoji: emoji)
+                                       emoji: emoji, rotationDegrees: rotationDegrees, emojiFrameSize: emojiFrameSize)
     }
 
     mutating func extend(to point: CGPoint) {
@@ -117,7 +121,14 @@ struct InkStroke: Identifiable, Sendable {
 
     fileprivate func rotated(clockwise: Bool) -> InkStroke {
         var copy = self
-        copy.quarterTurns = (quarterTurns + (clockwise ? 1 : 3)) % 4
+        if let rotationDegrees {
+            let rotated = rotationDegrees + (clockwise ? 90 : -90)
+            if rotated > 180 { copy.rotationDegrees = rotated - 360 }
+            else if rotated < -180 { copy.rotationDegrees = rotated + 360 }
+            else { copy.rotationDegrees = rotated }
+        } else {
+            copy.quarterTurns = (quarterTurns + (clockwise ? 1 : 3)) % 4
+        }
         copy.committedOutline = nil
         return copy
     }
@@ -151,7 +162,14 @@ struct InkStroke: Identifiable, Sendable {
             guard StudioTextAnnotation.pixelSizeRange.contains(note.pixelSize) else { return nil }
             copy.textNote = note
         } else if let emoji {
-            copy.width *= factor
+            if let frame = emojiFrameSize {
+                let scaled = CGSize(width: frame.width * factor, height: frame.height * factor)
+                guard scaled.width > 0, scaled.height > 0, scaled.width <= 32_768, scaled.height <= 32_768 else { return nil }
+                copy.emojiFrameSize = scaled
+                copy.width = min(512, max(1, copy.width * factor))
+            } else {
+                copy.width *= factor
+            }
             copy.bitmap = try StudioEmojiRaster.image(for: emoji, pixelSize: copy.width)
         } else {
             copy.width *= factor
@@ -162,16 +180,23 @@ struct InkStroke: Identifiable, Sendable {
 
     var bitmapFrame: CGRect {
         guard let bitmap else { return .null }
-        return CGRect(origin: origin, size: CGSize(width: bitmap.width, height: bitmap.height))
+        return CGRect(origin: origin, size: emojiFrameSize ?? CGSize(width: bitmap.width, height: bitmap.height))
     }
 
-    var bitmapTransform: CGAffineTransform { quarterTurnTransform }
+    var bitmapDrawingFrame: CGRect {
+        let frame = bitmapFrame
+        guard emojiFrameSize != nil, !frame.isNull else { return frame }
+        let side = min(frame.width, frame.height)
+        return CGRect(x: frame.midX - side / 2, y: frame.midY - side / 2, width: side, height: side)
+    }
+
+    var bitmapTransform: CGAffineTransform { rotationTransform }
 
     var fillOutline: CGPath? {
         guard fillColor != nil, let shape, (shape == .rectangle || shape == .ellipse), let last = points.last else { return nil }
         let area = CGRect(x: origin.x, y: origin.y, width: last.x - origin.x, height: last.y - origin.y).standardized
         guard !area.isEmpty else { return nil }
-        var transform = quarterTurnTransform
+        var transform = rotationTransform
         if shape == .rectangle { return CGPath(rect: area, transform: &transform) }
         return CGPath(ellipseIn: area, transform: &transform)
     }
@@ -194,8 +219,8 @@ struct InkStroke: Identifiable, Sendable {
     var outline: CGPath {
         if let committedOutline { return committedOutline.path }
         let path = unrotatedOutline
-        guard quarterTurns != 0 else { return path }
-        var rotation = quarterTurnTransform
+        guard quarterTurns != 0 || rotationDegrees != nil else { return path }
+        var rotation = rotationTransform
         return path.copy(using: &rotation) ?? path
     }
 
@@ -217,7 +242,8 @@ struct InkStroke: Identifiable, Sendable {
         return stroked(path, cap: .round)
     }
 
-    private var quarterTurnTransform: CGAffineTransform {
+    private var rotationTransform: CGAffineTransform {
+        guard quarterTurns != 0 || rotationDegrees != nil else { return .identity }
         let start = points[0]
         var minimum = start
         var maximum = start
@@ -230,6 +256,13 @@ struct InkStroke: Identifiable, Sendable {
         let textBounds = bitmap == nil ? textNote?.bounds(at: start) : bitmapFrame
         let x = textBounds?.midX ?? minimum.x + (maximum.x - minimum.x) / 2
         let y = textBounds?.midY ?? minimum.y + (maximum.y - minimum.y) / 2
+        if let rotationDegrees {
+            let radians = rotationDegrees * .pi / 180
+            let cosine = cos(radians)
+            let sine = sin(radians)
+            return CGAffineTransform(a: cosine, b: sine, c: -sine, d: cosine,
+                                     tx: x - x * cosine + y * sine, ty: y - x * sine - y * cosine)
+        }
         switch quarterTurns {
         case 1: return CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: x + y, ty: y - x)
         case 2: return CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: 2 * x, ty: 2 * y)
@@ -822,7 +855,7 @@ struct PngSnapshot: Sendable {
         for stroke in strokes {
             try Task.checkCancellation()
             if let bitmap = stroke.bitmap {
-                let frame = stroke.bitmapFrame
+                let frame = stroke.bitmapDrawingFrame
                 context.saveGState()
                 context.concatenate(stroke.bitmapTransform)
                 context.translateBy(x: frame.minX, y: frame.maxY)

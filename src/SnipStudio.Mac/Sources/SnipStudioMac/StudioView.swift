@@ -104,6 +104,7 @@ struct StudioView: View {
     }
     private static let zoomPresets = [25, 50, 75, 100, 125, 150, 200, 300, 400]
     private static let projectType = UTType(exportedAs: "com.automationforge.snipstudio.editable-mac")
+    private static let windowsProjectType = UTType(importedAs: "com.automationforge.snipstudio.editable-windows")
 
     var body: some View {
         workspace
@@ -278,7 +279,7 @@ struct StudioView: View {
             }
 
             Spacer(minLength: 2)
-            iconButton("Open image (⌘O)", symbol: "folder", action: openImage)
+            iconButton("Open image or editable snip (⌘O)", symbol: "folder", action: openImage)
                 .keyboardShortcut("o", modifiers: .command)
                 .disabled(fileActionsDisabled)
             iconButton("Paste image (⌘V)", symbol: "doc.on.clipboard", action: pasteImage)
@@ -1019,14 +1020,15 @@ struct StudioView: View {
     private func openImage() {
         guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image, Self.projectType]
+        panel.allowedContentTypes = [.image, Self.projectType, Self.windowsProjectType]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         openImageOrProject(url)
     }
 
     private func openImageOrProject(_ url: URL) {
-        if url.pathExtension.caseInsensitiveCompare(StudioProjectFile.filenameExtension) == .orderedSame {
+        let extensionName = url.pathExtension.lowercased()
+        if extensionName == StudioProjectFile.filenameExtension || extensionName == StudioWindowsProjectFile.filenameExtension {
             openProject(url)
         } else {
             openImage(at: url)
@@ -1035,7 +1037,8 @@ struct StudioView: View {
 
     private func openProject(_ url: URL) {
         let revision = document.contentRevision
-        status = "Opening editable Mac snip…"
+        let importsWindowsProject = url.pathExtension.lowercased() == StudioWindowsProjectFile.filenameExtension
+        status = "Opening editable snip…"
         exportTask = Task { @MainActor in
             defer { exportTask = nil }
             do {
@@ -1043,6 +1046,7 @@ struct StudioView: View {
                 try await document.openProject(contents, replacing: revision)
                 presentLoadedImage(alreadySaved: true)
                 recordRecent(url)
+                if importsWindowsProject { status = "Windows snip opened. Use Save Editable Mac Snip to keep a Mac copy." }
             } catch is CancellationError {
                 return
             } catch { report(error) }

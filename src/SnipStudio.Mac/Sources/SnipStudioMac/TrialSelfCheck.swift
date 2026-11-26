@@ -28,6 +28,8 @@ enum TrialSelfCheck {
                             "recording a selected window region accounts for its secondary display origin")
             }
             try await StudioProjectFile.selfCheck()
+            try StudioWindowsProjectAnnotations.selfCheck()
+            try await checkWindowsProjects()
             try await checkRasterPatches()
             try await checkRedactionAndProjectReplacement()
             try await checkShapesAndEraser()
@@ -44,6 +46,83 @@ enum TrialSelfCheck {
             FileHandle.standardError.write(Data("Mac trial check failed: \(error)\n".utf8))
             return 1
         }
+    }
+
+    private static func checkWindowsProjects() async throws {
+        // Independent fixtures from Windows BinaryWriter, GDI+ 32bppArgb rows and .NET DeflateStream.
+        let strokeFixture = "U05JUEVESVQBAAAAKgAAAJoETo/N17lgaXhwIsnLuwsWwgsL7qLiCZO8uV7alnwsAgAAAAIAAAABAAAAASBAgJoAAEA/AQIAAAAAAIA+AAAAPwAAwD8AAOA/GJ60E6sckLXQ2C4N+oOWnb/mcdxfm3DiETuaLKbf+q1jYPj/n+E/iACTDQA="
+        let cardinalFixture = "U05JUEVESVQCAAAAMwAAAG5YXhRxn3zN7Myx4Bf0mG7T8j/r6NaixcS1pgPuW4JmAgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AALRCASBAYIAAAAAAQBkAAABTAAAAGJ60E6sckLXQ2C4N+oOWnb/mcdxfm3DiETuaLKbf+q1jYPj/n+E/iACTDQA="
+        let outlineFixture = "U05JUEVESVQDAAAAOAAAABrGEcc2fHNf4bDOmK1eLEgR0MyN1ZEegiiLxk1L4/P5AgAAAAIAAAABAAAAAgAAgD4AAAA+AACgPwAAQD8AAAxCASBAYIABgEAgmgAAgD4ZAAAASwAAAAIYnrQTqxyQtdDYLg36g5adv+Zx3F+bcOIRO5ospt/6rWNg+P+f4T+IAJMNAA=="
+        let masksFixture = "U05JUEVESVQBAAAAJQAAABQvCk9rjI58KPJXAAo4oO1lhiodkzy6bexFZ4TWoRxsAgAAAAIAAAABAAAACQEAAAAAAIA+AAAAPwAAgD8AAAA/AAAA/xietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
+        let richTextFixture = "U05JUEVESVQBAAAAkQAAAKGBYxtibbPlunCcYRbvmMZQwkaI+d1l7j14/GuJmUwbAgAAAAIAAAABAAAABgAAgD4AAAA/AADAQQAAQEEIAAAAUVRZIDAwMDdkAAAAe1xydGYxXGFuc2lcZGVmZjB7XGZvbnR0Ymx7XGYwIFNlZ29lIFVJO319e1xjb2xvcnRibDtccmVkMFxncmVlbjBcYmx1ZTA7fVxmMFxmczE4XGNmMSBRVFkge1xiIDAwMDd9fRietBOrHJC10NguDfqDlp2/5nHcX5tw4hE7miym3/qtY2D4/5/hP4gAkw0A"
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("SnipStudioWindowsFixture-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let input = directory.appendingPathComponent("test.snipstudio")
+
+        func fixture(_ encoded: String) throws -> Data {
+            guard let data = Data(base64Encoded: encoded) else { throw CheckFailure("decode Windows project fixture") }
+            return data
+        }
+
+        func load(_ data: Data) async throws -> StudioProjectContents {
+            try data.write(to: input, options: .atomic)
+            return try await StudioProjectFile.load(from: input)
+        }
+
+        let stroke = try await load(fixture(strokeFixture))
+        try require(stroke.annotations.count == 1, "Windows v1 stroke loads")
+        try require(stroke.annotations[0].points == [CGPoint(x: 0.25, y: 0.5), CGPoint(x: 1.5, y: 1.75)] &&
+                    stroke.annotations[0].alpha == CGFloat(80) / 255, "Windows v1 highlighter preserves points and legacy alpha")
+        let cardinal = try await load(fixture(cardinalFixture))
+        try require(cardinal.annotations.count == 1 && cardinal.annotations[0].shape == "rectangle" &&
+                    cardinal.annotations[0].quarterTurns == 1, "Windows v2 keeps a cardinal shape rotation")
+        let outlineBytes = try fixture(outlineFixture)
+        let outline = try await load(outlineBytes)
+        try require(outline.annotations.count == 1 && outline.annotations[0].lineStyle == "dotted" &&
+                    outline.annotations[0].width == 0.25 && outline.annotations[0].rotationDegrees == 35 &&
+                    outline.annotations[0].alpha == CGFloat(116) / 255 &&
+                    outline.annotations[0].fill?.last == CGFloat(32) / 255,
+                    "Windows v3 keeps arbitrary rotation, fractional width, dotted style and independent alpha")
+        try require(outline.image.width == 2 && outline.image.height == 2, "Windows raster dimensions are exact")
+        let red = try pixel(in: outline.image, x: 0, y: 0)
+        let green = try pixel(in: outline.image, x: 1, y: 0)
+        let blue = try pixel(in: outline.image, x: 0, y: 1)
+        let yellow = try pixel(in: outline.image, x: 1, y: 1)
+        try require(red == [255, 0, 0, 255] && green == [0, 255, 0, 255] && blue == [0, 0, 255, 255] &&
+                    yellow == [128, 128, 0, 128], "Windows BGRA keeps row orientation, RGB channels, and straight alpha")
+
+        let document = EditorDocument()
+        try await document.openProject(outline)
+        let roundTrip = directory.appendingPathComponent("converted.snipstudiomac")
+        try await document.pngSnapshot().writeProject(to: roundTrip)
+        let reopened = try await StudioProjectFile.load(from: roundTrip)
+        try require(reopened.annotations.count == 1 && reopened.annotations[0].lineStyle == "dotted" &&
+                    reopened.annotations[0].rotationDegrees == 35, "the Mac copy reopens with its editable Windows geometry")
+        let sourceBytes = try Data(contentsOf: input)
+        try require(sourceBytes == outlineBytes, "opening and saving a Mac copy preserves the original Windows project bytes")
+
+        var wrongMetadataHash = outlineBytes
+        wrongMetadataHash[16] ^= 1
+        var wrongPixelHash = outlineBytes
+        wrongPixelHash[48 + 56] ^= 1
+        let truncated = Data(outlineBytes.dropLast())
+        let trailing = outlineBytes + Data([0])
+        for invalid in [wrongMetadataHash, wrongPixelHash, truncated, trailing, try fixture(masksFixture), try fixture(richTextFixture)] {
+            try invalid.write(to: input, options: .atomic)
+            do {
+                _ = try await StudioProjectFile.load(from: input)
+                throw CheckFailure("damaged or unsupported Windows projects must be rejected as a whole")
+            } catch let failure as CheckFailure {
+                throw failure
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Rejection leaves the existing editable document available.
+                try require(document.strokes.count == 1, "failed Windows loads do not modify the current snip")
+            }
+        }
+        print("PASS: Windows project v1–v3 import, color and transparency, editable Mac copy and damaged-data rejection")
     }
 
     private static func checkRasterPatches() async throws {
