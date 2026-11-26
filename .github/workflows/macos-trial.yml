@@ -22,3 +22,58 @@ jobs:
           bash -n src/SnipStudio.Mac/package-trial.sh
       - name: Build release executable
         run: swift build --package-path src/SnipStudio.Mac --configuration release
+
+  sign:
+    if: vars.SNIPSTUDIO_MACOS_SIGNING_READY == 'true' && github.ref == 'refs/heads/feature/macos-trial'
+    needs: compile
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: macos-trial-signing
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Sign and notarize trial
+        env:
+          DEV_ID_P12: ${{ secrets.MACOS_DEVELOPER_ID_P12_BASE64 }}
+          DEV_ID_PASSWORD: ${{ secrets.MACOS_DEVELOPER_ID_P12_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          NOTARY_APP_PASSWORD: ${{ secrets.MACOS_NOTARY_APP_PASSWORD }}
+          SNIPSTUDIO_SIGNING_IDENTITY: ${{ vars.MACOS_DEVELOPER_ID_IDENTITY }}
+        run: |
+          set -euo pipefail
+          umask 077
+          : "${DEV_ID_P12:?Missing Developer ID identity export}"
+          : "${DEV_ID_PASSWORD:?Missing Developer ID export password}"
+          : "${NOTARY_APPLE_ID:?Missing notarization Apple ID}"
+          : "${NOTARY_TEAM_ID:?Missing notarization team ID}"
+          : "${NOTARY_APP_PASSWORD:?Missing notarization app-specific password}"
+          : "${SNIPSTUDIO_SIGNING_IDENTITY:?Missing Developer ID identity name}"
+
+          work="$(mktemp -d "$RUNNER_TEMP/snipstudio-signing.XXXXXX")"
+          keychain="$work/signing.keychain-db"
+          trap 'security delete-keychain "$keychain" >/dev/null 2>&1 || true; rm -rf -- "$work"' EXIT
+          keychain_password="$(openssl rand -hex 32)"
+          security create-keychain -p "$keychain_password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$keychain_password" "$keychain"
+          security list-keychains -d user -s "$keychain"
+          printf '%s' "$DEV_ID_P12" | base64 -D > "$work/identity.p12"
+          security import "$work/identity.p12" -k "$keychain" -P "$DEV_ID_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$keychain"
+          rm -- "$work/identity.p12"
+          export SNIPSTUDIO_NOTARY_PROFILE=snipstudio-trial
+          export SNIPSTUDIO_NOTARY_KEYCHAIN="$keychain"
+          xcrun notarytool store-credentials "$SNIPSTUDIO_NOTARY_PROFILE" --keychain "$keychain" \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_APP_PASSWORD"
+          unset DEV_ID_P12 DEV_ID_PASSWORD NOTARY_APPLE_ID NOTARY_TEAM_ID NOTARY_APP_PASSWORD keychain_password
+          bash src/SnipStudio.Mac/package-trial.sh "$RUNNER_TEMP/snipstudio-mac-output"
+      - name: Upload verified trial disk image
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: SnipStudio-macOS-arm64-trial
+          path: ${{ runner.temp }}/snipstudio-mac-output/SnipStudio-0.1.0-macOS-arm64-trial.dmg
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

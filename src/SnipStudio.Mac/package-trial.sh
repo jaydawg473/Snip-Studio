@@ -54,7 +54,11 @@ codesign --verify --strict --verbose=2 "$bundle"
 dmg="$work/trial.dmg"
 hdiutil create -volname "Snip Studio" -srcfolder "$stage" -format UDZO "$dmg"
 codesign --timestamp --sign "$SNIPSTUDIO_SIGNING_IDENTITY" "$dmg"
-xcrun notarytool submit "$dmg" --keychain-profile "$SNIPSTUDIO_NOTARY_PROFILE" --wait
+notary_options=(--keychain-profile "$SNIPSTUDIO_NOTARY_PROFILE")
+if [[ -n "${SNIPSTUDIO_NOTARY_KEYCHAIN:-}" ]]; then
+    notary_options+=(--keychain "$SNIPSTUDIO_NOTARY_KEYCHAIN")
+fi
+xcrun notarytool submit "$dmg" "${notary_options[@]}" --wait
 xcrun stapler staple "$dmg"
 xcrun stapler validate "$dmg"
 codesign --verify --strict --verbose=2 "$dmg"

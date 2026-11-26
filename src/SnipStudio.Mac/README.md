@@ -14,3 +14,19 @@ From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certifi
 - Run OCR on a screenshot with multiple lines and a filename with leading zeros. Check what Vision recognized and paste the copied text into another app.
 
 Screen and audio recording, scrolling capture, and editable Windows projects are outside this trial.
+
+## Signing on GitHub Actions
+
+Use the `macos-trial-signing` environment in the repository settings. Limit deployments to `feature/macos-trial`. Set its environment variable `MACOS_DEVELOPER_ID_IDENTITY` to the full Developer ID Application certificate name.
+
+Add these values through GitHub's environment secrets form.
+
+| Secret | Value |
+| --- | --- |
+| `MACOS_DEVELOPER_ID_P12_BASE64` | Base64 of the password-protected Developer ID Application certificate and private key exported as a P12 |
+| `MACOS_DEVELOPER_ID_P12_PASSWORD` | Password used for that export |
+| `MACOS_NOTARY_APPLE_ID` | Apple Account email |
+| `MACOS_NOTARY_TEAM_ID` | Apple Developer Team ID |
+| `MACOS_NOTARY_APP_PASSWORD` | Apple app-specific password for notarization |
+
+Finally set the repository Actions variable `SNIPSTUDIO_MACOS_SIGNING_READY` to `true`. Re-run the trial workflow or push a new commit to its branch. The signing job applies the environment’s deployment rules and uploads the verified disk image as an Actions artifact.
