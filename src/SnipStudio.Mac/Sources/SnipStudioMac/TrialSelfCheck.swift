@@ -31,6 +31,7 @@ enum TrialSelfCheck {
             try await checkObjectEditing()
             try checkViewport()
             try checkRowOrder()
+            try checkOCRWordSelection()
             try checkOCRTable()
             try await checkVision()
             try await StudioFileExportSelfCheck.run()
@@ -415,6 +416,22 @@ enum TrialSelfCheck {
         try require(actual.imagePoint(CGPoint(x: 44, y: 54), in: imageFrame) == CGPoint(x: 200, y: 100),
                     "Panning and zoom map a pen gesture back to the source pixel")
         print("PASS: Fit, native-pixel zoom, and scrolled ink coordinates")
+    }
+
+    private static func checkOCRWordSelection() throws {
+        let original = "ID  0027   Printer   C:\\Temp\\A0.txt"
+        let names = ["ID", "0027", "Printer", "C:\\Temp\\A0.txt"]
+        let words = names.enumerated().map { index, text in
+            OCRWord(text: text, utf16Range: (original as NSString).range(of: text),
+                    bounds: CGRect(x: CGFloat(index) / 4, y: 0.4, width: 0.2, height: 0.2))
+        }
+        let lines = [RecognizedLine(text: original, bounds: CGRect(x: 0, y: 0.4, width: 1, height: 0.2), words: words)]
+        let units = StudioOCRSelection.units(for: lines, words: true)
+        let first = StudioOCRSelection.selected([0, 1], from: units, lines: lines)
+        let disjoint = StudioOCRSelection.selected([1, 3], from: units, lines: lines)
+        try require(first.map(\.text) == ["ID  0027"], "copying consecutive words preserves the exact recognized spacing")
+        try require(disjoint.map(\.text) == ["0027", "C:\\Temp\\A0.txt"], "separated selections retain paths without including intervening words")
+        print("PASS: word selection and preserving exact recognized text")
     }
 
     private static func checkVision() async throws {

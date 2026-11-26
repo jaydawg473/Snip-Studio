@@ -139,10 +139,13 @@ struct InkStroke: Identifiable, Sendable {
         return copy
     }
 
-    fileprivate func scaled(by factor: CGFloat) throws -> InkStroke? {
+    fileprivate func scaled(by factor: CGFloat, around anchor: CGPoint? = nil) throws -> InkStroke? {
         guard factor.isFinite, factor > 0, factor != 1 else { return nil }
         var copy = self
         copy.committedOutline = nil
+        let pivot = anchor ?? CGPoint(x: bounds.midX, y: bounds.midY)
+        copy.points = points.map { CGPoint(x: pivot.x + ($0.x - pivot.x) * factor,
+                                           y: pivot.y + ($0.y - pivot.y) * factor) }
         if var note = textNote {
             note.pixelSize *= factor
             guard StudioTextAnnotation.pixelSizeRange.contains(note.pixelSize) else { return nil }
@@ -150,13 +153,9 @@ struct InkStroke: Identifiable, Sendable {
         } else if let emoji {
             copy.width *= factor
             copy.bitmap = try StudioEmojiRaster.image(for: emoji, pixelSize: copy.width)
-        } else if points.count == 1 {
-            copy.width *= factor
-            guard (1...512).contains(copy.width) else { return nil }
         } else {
-            let pivot = CGPoint(x: bounds.midX, y: bounds.midY)
-            copy.points = points.map { CGPoint(x: pivot.x + ($0.x - pivot.x) * factor,
-                                               y: pivot.y + ($0.y - pivot.y) * factor) }
+            copy.width *= factor
+            guard (0.1...512).contains(copy.width) else { return nil }
         }
         return copy
     }
@@ -242,6 +241,19 @@ struct InkStroke: Identifiable, Sendable {
     func contains(_ point: CGPoint, tolerance: CGFloat) -> Bool {
         guard bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
         if fillOutline?.contains(point) == true { return true }
+        return outlineContains(point, tolerance: tolerance)
+    }
+
+    func isNearPerimeter(_ point: CGPoint, tolerance: CGFloat) -> Bool {
+        let outline = bounds
+        guard outline.insetBy(dx: -tolerance, dy: -tolerance).contains(point) else { return false }
+        if bitmap != nil || textNote != nil {
+            return !outline.insetBy(dx: tolerance, dy: tolerance).contains(point)
+        }
+        return outlineContains(point, tolerance: tolerance)
+    }
+
+    private func outlineContains(_ point: CGPoint, tolerance: CGFloat) -> Bool {
         let path = outline
         if path.contains(point) { return true }
         guard tolerance > 0 else { return false }
@@ -550,18 +562,21 @@ final class EditorDocument: ObservableObject {
         draftStroke = InkStroke(color: color, width: width, at: point, shape: shape, lineStyle: lineStyle, fill: fill)
     }
 
-    func addEmoji(_ emoji: String, at origin: CGPoint, size: CGFloat) throws {
+    @discardableResult
+    func addEmoji(_ emoji: String, at origin: CGPoint, size: CGFloat) throws -> UUID? {
         guard image != nil, origin.x.isFinite, origin.y.isFinite else { throw EditorDocumentError.noImage }
         var sticker = try InkStroke(emoji: emoji, size: size, at: origin)
-        if sticker.prepareForCommit() { commit(.insert(sticker)) }
+        guard sticker.prepareForCommit() else { return nil }
+        commit(.insert(sticker))
+        return sticker.id
     }
 
     func setFill(id: UUID, color: CGColor?) {
         _ = updateAnnotation(id: id) { $0.filled(with: color) }
     }
 
-    func resizeAnnotation(id: UUID, factor: CGFloat) throws {
-        guard let stroke = annotation(withID: id), let changed = try stroke.scaled(by: factor) else { return }
+    func resizeAnnotation(id: UUID, factor: CGFloat, around anchor: CGPoint? = nil) throws {
+        guard let stroke = annotation(withID: id), let changed = try stroke.scaled(by: factor, around: anchor) else { return }
         _ = updateAnnotation(id: id) { _ in changed }
     }
 
@@ -570,11 +585,13 @@ final class EditorDocument: ObservableObject {
         draftStroke?.extend(to: point)
     }
 
-    func finishStroke() {
-        guard var stroke = draftStroke else { return }
+    @discardableResult
+    func finishStroke() -> UUID? {
+        guard var stroke = draftStroke else { return nil }
         draftStroke = nil
-        guard stroke.prepareForCommit() else { return }
+        guard stroke.prepareForCommit() else { return nil }
         commit(.insert(stroke))
+        return stroke.id
     }
 
     func cancelStroke() {
@@ -594,6 +611,10 @@ final class EditorDocument: ObservableObject {
 
     func annotation(withID id: UUID) -> InkStroke? {
         strokes.first { $0.id == id }
+    }
+
+    func annotationOnPerimeter(at point: CGPoint, tolerance: CGFloat) -> InkStroke? {
+        strokes.last(where: { $0.isNearPerimeter(point, tolerance: tolerance) })
     }
 
     private func annotationIndex(at point: CGPoint, tolerance: CGFloat) -> Int? {

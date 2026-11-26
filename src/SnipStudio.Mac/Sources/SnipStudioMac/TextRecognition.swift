@@ -14,6 +14,7 @@ struct OCRContact: Identifiable, Sendable {
 
 struct OCRWord: Sendable {
     let text: String
+    let utf16Range: NSRange
     // Vision reports bounds in normalized, bottom-left coordinates.
     let bounds: CGRect
 }
@@ -78,7 +79,7 @@ enum TextRecognition {
     private static func words(in text: String, candidate: VNRecognizedText) -> [OCRWord] {
         let words = text.split(whereSeparator: \.isWhitespace).compactMap { token -> OCRWord? in
             guard let bounds = nativeBounds(for: token.startIndex..<token.endIndex, in: candidate) else { return nil }
-            return OCRWord(text: String(token), bounds: bounds)
+            return OCRWord(text: String(token), utf16Range: NSRange(token.startIndex..<token.endIndex, in: text), bounds: bounds)
         }
         // Vision may return the same span for several requests. A single line's words need distinct horizontal spans.
         let byLeftEdge = words.indices.sorted { words[$0].bounds.minX < words[$1].bounds.minX }

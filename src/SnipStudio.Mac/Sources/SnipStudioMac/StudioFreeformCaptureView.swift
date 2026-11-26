@@ -31,6 +31,10 @@ struct StudioFreeformCaptureView: View {
                 .disabled(appliesSelection || displays.isEmpty)
                 Button("Refresh preview") { refreshID = UUID() }.disabled(appliesSelection)
                 Spacer(minLength: 0)
+                Button("Capture entire display") {
+                    if let frozenImage { openCapture(frozenImage) }
+                }
+                .disabled(frozenImage == nil || loadsImage || appliesSelection)
             }
 
             GeometryReader { viewport in
@@ -184,16 +188,20 @@ struct StudioFreeformCaptureView: View {
                     try StudioFreeformMask.extract(frozenImage, polygon: polygon)
                 }.value
                 try Task.checkCancellation()
-                let output = NSImage(cgImage: result, size: CGSize(width: result.width, height: result.height))
-                let id = applicationDelegate.storePendingSnip(output)
-                openWindow(id: "studio", value: id)
-                dismissWindow(id: "freeform")
+                openCapture(result)
             } catch is CancellationError {
                 return
             } catch {
                 status = error.localizedDescription
             }
         }
+    }
+
+    private func openCapture(_ result: CGImage) {
+        let output = NSImage(cgImage: result, size: CGSize(width: result.width, height: result.height))
+        let id = applicationDelegate.storePendingSnip(output)
+        openWindow(id: "studio", value: id)
+        dismissWindow(id: "freeform")
     }
 }
 

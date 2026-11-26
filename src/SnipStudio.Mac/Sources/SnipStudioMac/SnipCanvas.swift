@@ -14,10 +14,13 @@ struct SnipCanvas: View {
     let erasesAnnotations: Bool
     let cropSelection: Binding<CGRect>?
     let annotationSelection: Binding<UUID?>?
+    let onAutomaticMove: ((UUID) -> Void)?
+    let onTransformError: ((Error) -> Void)?
     let textDraft: Binding<StudioTextDraft?>?
     let onTextTap: ((CGPoint) -> Void)?
     let recognizedLines: [RecognizedLine]
     let ocrSelection: Binding<Set<Int>>?
+    let selectableOCRBounds: [CGRect]
     let snapWordRegions: [CGRect]
     let showsRecognitionGlow: Bool
     let onZoomChanged: (CGFloat) -> Void
@@ -35,9 +38,11 @@ struct SnipCanvas: View {
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
          allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid, shapeFill: Color? = nil,
          erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
-         annotationSelection: Binding<UUID?>? = nil, textDraft: Binding<StudioTextDraft?>? = nil,
+         annotationSelection: Binding<UUID?>? = nil, onAutomaticMove: ((UUID) -> Void)? = nil,
+         onTransformError: ((Error) -> Void)? = nil,
+         textDraft: Binding<StudioTextDraft?>? = nil,
          onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [], ocrSelection: Binding<Set<Int>>? = nil,
-         snapWordRegions: [CGRect] = [], showsRecognitionGlow: Bool = false,
+         selectableOCRBounds: [CGRect] = [], snapWordRegions: [CGRect] = [], showsRecognitionGlow: Bool = false,
          onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
@@ -50,10 +55,13 @@ struct SnipCanvas: View {
         self.erasesAnnotations = erasesAnnotations
         self.cropSelection = cropSelection
         self.annotationSelection = annotationSelection
+        self.onAutomaticMove = onAutomaticMove
+        self.onTransformError = onTransformError
         self.textDraft = textDraft
         self.onTextTap = onTextTap
         self.recognizedLines = recognizedLines
         self.ocrSelection = ocrSelection
+        self.selectableOCRBounds = selectableOCRBounds
         self.snapWordRegions = snapWordRegions
         self.showsRecognitionGlow = showsRecognitionGlow
         self.onZoomChanged = onZoomChanged
@@ -102,7 +110,7 @@ struct SnipCanvas: View {
         }
         .onDisappear {
             document.cancelStroke()
-            if annotationSelection != nil { NSCursor.arrow.set() }
+            if annotationSelection != nil || onAutomaticMove != nil { NSCursor.arrow.set() }
         }
         .onChange(of: zoom) { _, _ in
             document.cancelStroke()
@@ -125,7 +133,7 @@ struct SnipCanvas: View {
         let editedID = textDraft?.wrappedValue?.annotationID
         let strokes = document.strokes
         let draft = document.draftStroke
-        let selected = annotationSelection?.wrappedValue
+        let selected = annotationSelection?.wrappedValue ?? annotationDrag?.id
         let drag = annotationDrag
         let border = Color(nsColor: .separatorColor)
         return ZStack {
@@ -142,17 +150,33 @@ struct SnipCanvas: View {
                 ink.translateBy(x: frame.minX, y: frame.minY)
                 ink.scaleBy(x: layout.scale, y: layout.scale)
                 for stroke in strokes where stroke.id != editedID {
-                    let offset = drag?.id == stroke.id ? drag?.translation ?? .zero : .zero
                     var layer = ink
-                    layer.translateBy(x: offset.width, y: offset.height)
+                    if let drag, drag.id == stroke.id {
+                        if let resize = drag.resize {
+                            layer.translateBy(x: resize.anchor.x, y: resize.anchor.y)
+                            layer.scaleBy(x: drag.factor, y: drag.factor)
+                            layer.translateBy(x: -resize.anchor.x, y: -resize.anchor.y)
+                        } else {
+                            layer.translateBy(x: drag.translation.width, y: drag.translation.height)
+                        }
+                    }
                     draw(stroke, in: layer)
                     if selected == stroke.id {
-                        let padding = 4 / layout.scale
+                        let scale = layout.scale * (drag?.id == stroke.id ? drag?.factor ?? 1 : 1)
+                        let padding = 4 / scale
                         let bounds = Path(stroke.bounds.insetBy(dx: -padding, dy: -padding))
-                        layer.stroke(bounds, with: .color(.white), lineWidth: 2 / layout.scale)
+                        layer.stroke(bounds, with: .color(.white), lineWidth: 2 / scale)
                         layer.stroke(bounds, with: .color(StudioColors.primary), style: StrokeStyle(
-                            lineWidth: 1 / layout.scale, dash: [4 / layout.scale, 3 / layout.scale]
+                            lineWidth: 1 / scale, dash: [4 / scale, 3 / scale]
                         ))
+                        if annotationSelection != nil {
+                            for grip in ResizeGrip.corners(of: stroke.bounds, padding: padding) {
+                                let handle = Path(CGRect(x: grip.point.x - 3 / scale, y: grip.point.y - 3 / scale,
+                                                         width: 6 / scale, height: 6 / scale))
+                                layer.fill(handle, with: .color(.white))
+                                layer.stroke(handle, with: .color(StudioColors.primary), lineWidth: 1 / scale)
+                            }
+                        }
                     }
                 }
                 if let draft, snappedWordIndices.isEmpty {
@@ -175,14 +199,22 @@ struct SnipCanvas: View {
                 guard frame.contains(event.location), textDraft?.wrappedValue == nil else { return }
                 onTextTap?(layout.imagePoint(event.location, in: frame))
             }, including: onTextTap == nil ? .none : .all)
-            .gesture(textSelectionGesture(in: frame), including: ocrSelection == nil || recognizedLines.isEmpty ? .none : .all)
+            .gesture(textSelectionGesture(in: frame), including: ocrSelection == nil || selectableOCRBounds.isEmpty ? .none : .all)
             .onContinuousHover { phase in
-                guard annotationSelection != nil else { return }
+                guard annotationSelection != nil || onAutomaticMove != nil else { return }
                 switch phase {
                 case let .active(location):
-                    let hit = frame.contains(location) && document.annotation(
-                        at: layout.imagePoint(location, in: frame), tolerance: 5 / layout.scale
-                    ) != nil
+                    let point = layout.imagePoint(location, in: frame)
+                    if annotationDrag?.resize != nil || (frame.insetBy(dx: -10, dy: -10).contains(location) &&
+                                                         resizeGrip(around: point, layout: layout) != nil) {
+                        NSCursor.crosshair.set()
+                        return
+                    }
+                    let hit = frame.contains(location) && (
+                        annotationSelection != nil
+                        ? document.annotation(at: point, tolerance: 5 / layout.scale) != nil
+                        : !NSEvent.modifierFlags.contains(.option) && document.annotationOnPerimeter(at: point, tolerance: 5 / layout.scale) != nil
+                    )
                     if hit || annotationDrag != nil { Self.moveCursor.set() } else { NSCursor.arrow.set() }
                 case .ended: NSCursor.arrow.set()
                 }
@@ -193,8 +225,8 @@ struct SnipCanvas: View {
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
                 Canvas { context, _ in
-                    for index in ocrSelection?.wrappedValue ?? [] where recognizedLines.indices.contains(index) {
-                        let box = OCRRegionOverlay.displayBounds(for: recognizedLines[index], in: frame)
+                    for index in ocrSelection?.wrappedValue ?? [] where selectableOCRBounds.indices.contains(index) {
+                        let box = OCRRegionOverlay.displayBounds(for: selectableOCRBounds[index], in: frame)
                         guard !box.isEmpty else { continue }
                         let outline = Path(roundedRect: box.insetBy(dx: -2, dy: -2).intersection(frame), cornerRadius: 2)
                         context.fill(outline, with: .color(StudioColors.primary.opacity(0.3)))
@@ -266,6 +298,8 @@ struct SnipCanvas: View {
             .onChanged { event in
                 if let annotationSelection {
                     moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
+                } else if automaticMove(for: event, in: frame, layout: layout) {
+                    return
                 } else if erasesAnnotations {
                     eraseAnnotations(for: event, in: frame, layout: layout)
                 } else {
@@ -277,10 +311,9 @@ struct SnipCanvas: View {
                 // A click can complete without a distinct drag update.
                 if let annotationSelection {
                     moveAnnotation(for: event, in: frame, layout: layout, selected: annotationSelection)
-                    if let annotationDrag, annotationDrag.revision == document.contentRevision {
-                        document.translateAnnotation(id: annotationDrag.id, by: annotationDrag.translation)
-                    }
-                    annotationDrag = nil
+                    finishAnnotationMove(automatic: false)
+                } else if automaticMove(for: event, in: frame, layout: layout) {
+                    finishAnnotationMove(automatic: true)
                 } else if erasesAnnotations {
                     eraseAnnotations(for: event, in: frame, layout: layout)
                     lastEraseLocation = nil
@@ -291,7 +324,8 @@ struct SnipCanvas: View {
                         snapWordRegions.indices.contains(index) ? snapWordRegions[index] : nil
                     }
                     if snapped.isEmpty {
-                        document.finishStroke()
+                        let placed = document.finishStroke()
+                        if activeShape != nil, let placed { onAutomaticMove?(placed) }
                     } else {
                         document.cancelStroke()
                         let color = NSColor(inkColor).usingColorSpace(.sRGB)?.cgColor ?? NSColor.systemYellow.withAlphaComponent(0.42).cgColor
@@ -352,17 +386,70 @@ struct SnipCanvas: View {
     private func moveAnnotation(for event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout,
                                 selected: Binding<UUID?>) {
         if annotationDrag == nil {
-            guard frame.contains(event.startLocation), let stroke = document.annotation(
-                at: layout.imagePoint(event.startLocation, in: frame), tolerance: 5 / layout.scale
-            ) else {
-                selected.wrappedValue = nil
-                return
+            let imagePoint = layout.imagePoint(event.startLocation, in: frame)
+            if frame.insetBy(dx: -10, dy: -10).contains(event.startLocation),
+               let id = selected.wrappedValue, let stroke = document.annotation(withID: id),
+               let grip = resizeGrip(around: imagePoint, layout: layout) {
+                let nativeSize = stroke.textNote.map { CGFloat($0.pixelSize) } ?? stroke.width
+                let minimumSize: CGFloat = stroke.textNote != nil || stroke.emoji != nil ? 1 : 0.1
+                annotationDrag = AnnotationDrag(id: id, revision: document.contentRevision, resize: grip,
+                                                minFactor: min(1, max(0.12, minimumSize / nativeSize)),
+                                                maxFactor: max(1, min(8, 512 / nativeSize)))
+            } else {
+                guard frame.contains(event.startLocation), let stroke = document.annotation(
+                    at: imagePoint, tolerance: 5 / layout.scale
+                ) else {
+                    selected.wrappedValue = nil
+                    return
+                }
+                selected.wrappedValue = stroke.id
+                annotationDrag = AnnotationDrag(id: stroke.id, revision: document.contentRevision)
             }
-            selected.wrappedValue = stroke.id
+        }
+        let movement = CGSize(width: event.translation.width / layout.scale, height: event.translation.height / layout.scale)
+        if var drag = annotationDrag, let resize = drag.resize {
+            let x = resize.point.x - resize.anchor.x
+            let y = resize.point.y - resize.anchor.y
+            let dot = (x * movement.width + y * movement.height) / max(1, x * x + y * y)
+            drag.factor = max(drag.minFactor, min(drag.maxFactor, 1 + dot))
+            annotationDrag = drag
+        } else {
+            annotationDrag?.translation = movement
+        }
+    }
+
+    private func resizeGrip(around point: CGPoint, layout: SnipViewportLayout) -> ResizeGrip? {
+        guard let id = annotationSelection?.wrappedValue, let stroke = document.annotation(withID: id) else { return nil }
+        let handlePadding = 4 / layout.scale
+        let nearest = ResizeGrip.corners(of: stroke.bounds, padding: handlePadding)
+            .map { ($0, hypot($0.point.x - point.x, $0.point.y - point.y)) }
+            .min { $0.1 < $1.1 }
+        return nearest.flatMap { $0.1 <= 6 / layout.scale ? $0.0 : nil }
+    }
+
+    private func automaticMove(for event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout) -> Bool {
+        guard onAutomaticMove != nil, !document.isDrawing, frame.contains(event.startLocation) else { return false }
+        if annotationDrag == nil {
+            guard !NSEvent.modifierFlags.contains(.option), let stroke = document.annotationOnPerimeter(
+                at: layout.imagePoint(event.startLocation, in: frame), tolerance: 5 / layout.scale
+            ) else { return false }
             annotationDrag = AnnotationDrag(id: stroke.id, revision: document.contentRevision)
         }
         annotationDrag?.translation = CGSize(width: event.translation.width / layout.scale,
                                              height: event.translation.height / layout.scale)
+        return true
+    }
+
+    private func finishAnnotationMove(automatic: Bool) {
+        defer { annotationDrag = nil }
+        guard let drag = annotationDrag, drag.revision == document.contentRevision else { return }
+        if let resize = drag.resize {
+            do { try document.resizeAnnotation(id: drag.id, factor: drag.factor, around: resize.anchor) }
+            catch { onTransformError?(error) }
+        } else {
+            document.translateAnnotation(id: drag.id, by: drag.translation)
+        }
+        if automatic { onAutomaticMove?(drag.id) }
     }
 
     private func textSelectionGesture(in frame: CGRect) -> some Gesture {
@@ -380,10 +467,10 @@ struct SnipCanvas: View {
                 let addToSelection = NSEvent.modifierFlags.contains(.shift)
                 var selected = addToSelection ? ocrSelection.wrappedValue : []
                 if let textSelectionFrame {
-                    for index in recognizedLines.indices where OCRRegionOverlay.displayBounds(
-                        for: recognizedLines[index], in: frame
+                    for index in selectableOCRBounds.indices where OCRRegionOverlay.displayBounds(
+                        for: selectableOCRBounds[index], in: frame
                     ).intersects(textSelectionFrame) { selected.insert(index) }
-                } else if let hit = recognizedLines.firstIndex(where: {
+                } else if let hit = selectableOCRBounds.firstIndex(where: {
                     OCRRegionOverlay.displayBounds(for: $0, in: frame).insetBy(dx: -3, dy: -3).contains(event.location)
                 }) {
                     if addToSelection && selected.contains(hit) { selected.remove(hit) } else { selected.insert(hit) }
@@ -395,7 +482,25 @@ struct SnipCanvas: View {
     private struct AnnotationDrag {
         let id: UUID
         let revision: UUID
+        var resize: ResizeGrip? = nil
+        var minFactor: CGFloat = 0.12
+        var maxFactor: CGFloat = 8
+        var factor: CGFloat = 1
         var translation = CGSize.zero
+    }
+
+    private struct ResizeGrip {
+        let point: CGPoint
+        let anchor: CGPoint
+
+        static func corners(of box: CGRect, padding: CGFloat) -> [ResizeGrip] {
+            let outer = box.insetBy(dx: -padding, dy: -padding)
+            let positions = [CGPoint(x: outer.minX, y: outer.minY), CGPoint(x: outer.maxX, y: outer.minY),
+                             CGPoint(x: outer.maxX, y: outer.maxY), CGPoint(x: outer.minX, y: outer.maxY)]
+            let anchors = [CGPoint(x: box.maxX, y: box.maxY), CGPoint(x: box.minX, y: box.maxY),
+                           CGPoint(x: box.minX, y: box.minY), CGPoint(x: box.maxX, y: box.minY)]
+            return zip(positions, anchors).map { ResizeGrip(point: $0.0, anchor: $0.1) }
+        }
     }
 
     private static let moveCursor: NSCursor = {

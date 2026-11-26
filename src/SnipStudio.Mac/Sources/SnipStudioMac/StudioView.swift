@@ -47,6 +47,7 @@ struct StudioView: View {
     @State private var openedImageRevision: UUID?
     @State private var recognizedLines: [RecognizedLine]?
     @State private var selectedOCRIndices: Set<Int> = []
+    @State private var selectsOCRWords = false
     @State private var reviewText = false
     @State private var reviewedContacts: [OCRContact] = []
     @State private var reviewRedactions = false
@@ -65,9 +66,12 @@ struct StudioView: View {
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
     private var fileActionsDisabled: Bool { busy || textDraft != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
+    private var ocrSelectionUnits: [StudioOCRSelection.Unit] {
+        StudioOCRSelection.units(for: recognizedLines ?? [], words: selectsOCRWords)
+    }
     private var selectedOCRLines: [RecognizedLine] {
         guard let recognizedLines else { return [] }
-        return recognizedLines.indices.filter { selectedOCRIndices.contains($0) }.map { recognizedLines[$0] }
+        return StudioOCRSelection.selected(selectedOCRIndices, from: ocrSelectionUnits, lines: recognizedLines)
     }
     private var drawingColor: Color {
         switch tool {
@@ -83,6 +87,20 @@ struct StudioView: View {
         case .shape: shapeWidth
         default: inkWidth
         }
+    }
+
+    private var inkColorBinding: Binding<Color> {
+        switch tool {
+        case .shape: $shapeColor
+        case .highlight: $highlightColor
+        default: $inkColor
+        }
+    }
+
+    private var textColorBinding: Binding<Color> {
+        Binding(get: { textDraft?.color ?? textColor }, set: { color in
+            if textDraft == nil { textColor = color } else { textDraft?.color = color }
+        })
     }
     private static let zoomPresets = [25, 50, 75, 100, 125, 150, 200, 300, 400]
     private static let projectType = UTType(exportedAs: "com.automationforge.snipstudio.editable-mac")
@@ -136,6 +154,10 @@ struct StudioView: View {
             Text("Snip Studio uses the recognized characters as shown. Undo restores the original image.")
         }
         .focusedSceneValue(\.studioNewSnip, startNew)
+        .focusedSceneValue(\.studioHistory, StudioHistoryCommands(
+            canUndo: document.canUndo, canRedo: document.canRedo, editingText: textDraft != nil,
+            undo: document.undo, redo: document.redo
+        ))
         .task {
             guard let sessionID, let capturedImage = applicationDelegate.takePendingSnip(sessionID) else { return }
             do { try finishCapture(with: capturedImage) } catch { report(error) }
@@ -196,6 +218,10 @@ struct StudioView: View {
         }
         let zoom = zoomPercent.map { CGFloat($0) / 100 }
         let inkEnabled = tool == .pen || tool == .highlight || tool == .shape || tool == .eraser
+        let autoMove: ((UUID) -> Void)? = inkEnabled && tool != .eraser ? { id in
+            selectTool(.move)
+            selectedAnnotationID = id
+        } : nil
         let ocrLines: [RecognizedLine] = tool == .textActions ? recognizedLines ?? [] : []
         return SnipCanvas(
             document: document,
@@ -209,10 +235,13 @@ struct StudioView: View {
             erasesAnnotations: tool == .eraser,
             cropSelection: tool == .crop || tool == .removeArea ? $cropBounds : nil,
             annotationSelection: tool == .move ? $selectedAnnotationID : nil,
+            onAutomaticMove: autoMove,
+            onTransformError: report,
             textDraft: tool == .text ? $textDraft : nil,
             onTextTap: canvasTap,
             recognizedLines: ocrLines,
             ocrSelection: tool == .textActions ? $selectedOCRIndices : nil,
+            selectableOCRBounds: tool == .textActions ? ocrSelectionUnits.map(\.bounds) : [],
             snapWordRegions: tool == .highlight && snapHighlightToText ? snapWordRegions : [],
             showsRecognitionGlow: (tool == .textActions && recognitionInProgress) || ocrConversionInProgress,
             onZoomChanged: { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
@@ -278,7 +307,7 @@ struct StudioView: View {
                     }
                 }
                 Divider()
-                Button("Freeform…") { openWindow(id: "freeform") }
+                Button("Freeform or choose display…") { openWindow(id: "freeform") }
                 Button("Scrolling capture…") { openWindow(id: "scrolling") }
             } label: {
                 if compact {
@@ -413,9 +442,10 @@ struct StudioView: View {
             }
         case .pen, .highlight, .shape:
             HStack(spacing: 10) {
-                ColorPicker("Ink color", selection: tool == .shape ? $shapeColor : (tool == .highlight ? $highlightColor : $inkColor), supportsOpacity: tool == .shape)
+                ColorPicker("Ink color", selection: inkColorBinding, supportsOpacity: tool == .shape)
                     .labelsHidden()
                     .help("Ink color")
+                colorPalette(inkColorBinding)
                 Stepper(value: tool == .shape ? $shapeWidth : (tool == .highlight ? $highlightWidth : $inkWidth), in: 1...30, step: 1) {
                     Text("\(Int(drawingWidth)) px").monospacedDigit()
                 }
@@ -593,6 +623,9 @@ struct StudioView: View {
             iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
                 .disabled(recognizedText.isEmpty)
             Menu {
+                Toggle(isOn: $selectsOCRWords) { Text("Select individual words") }
+                    .onChange(of: selectsOCRWords) { _, _ in selectedOCRIndices.removeAll() }
+                Divider()
                 Button("Edit line…") { editOCRLine() }.disabled(selectedOCRLines.count != 1 || busy)
                 Button("Convert to text…") { confirmOCRConversion = true }.disabled(selectedOCRLines.isEmpty || busy)
                 Button("Translate…") { translateOCR() }.disabled(recognizedText.isEmpty || busy)
@@ -624,11 +657,10 @@ struct StudioView: View {
     private var textOptions: some View {
         let note = textDraft?.note ?? textStyle
         return HStack(spacing: 6) {
-            ColorPicker("Text color", selection: Binding(get: { textDraft?.color ?? textColor }, set: { color in
-                if textDraft == nil { textColor = color } else { textDraft?.color = color }
-            }))
+            ColorPicker("Text color", selection: textColorBinding)
             .labelsHidden()
             .help("Text color")
+            colorPalette(textColorBinding)
             Menu {
                 ForEach(["Helvetica", "Menlo-Regular", "ArialMT", "TimesNewRomanPSMT"], id: \.self) { name in
                     Button(NSFont(name: name, size: 12)?.displayName ?? name) { changeTextStyle { $0.fontName = name } }
@@ -731,6 +763,28 @@ struct StudioView: View {
         .background(StudioColors.options)
     }
 
+    private func colorPalette(_ color: Binding<Color>) -> some View {
+        Menu {
+            Button("Sample screen color…") {
+                Task { @MainActor in
+                    if let picked = await NSColorSampler().sample() { color.wrappedValue = Color(nsColor: picked) }
+                }
+            }
+            Divider()
+            Button("Black") { color.wrappedValue = .black }
+            Button("White") { color.wrappedValue = .white }
+            Button("Red") { color.wrappedValue = .red }
+            Button("Yellow") { color.wrappedValue = .yellow }
+            Button("Green") { color.wrappedValue = .green }
+            Button("Blue") { color.wrappedValue = StudioColors.primary }
+        } label: {
+            Image(systemName: "eyedropper").accessibilityLabel("Color presets and eyedropper")
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("Color presets and eyedropper")
+    }
+
     private func iconButton(
         _ title: String,
         symbol: String,
@@ -812,7 +866,12 @@ struct StudioView: View {
     }
 
     private func insertEmoji(at origin: CGPoint) {
-        do { try document.addEmoji(selectedEmoji, at: origin, size: emojiSize) }
+        do {
+            if let placed = try document.addEmoji(selectedEmoji, at: origin, size: emojiSize) {
+                selectTool(.move)
+                selectedAnnotationID = placed
+            }
+        }
         catch { report(error) }
     }
 
@@ -1073,7 +1132,7 @@ struct StudioView: View {
                 snapWordRegions = lines.flatMap { line -> [CGRect] in
                     let boxes = line.words.isEmpty ? [line.bounds] : line.words.map(\.bounds)
                     return boxes.map { box in
-                        OCRRegionOverlay.displayBounds(for: RecognizedLine(text: line.text, bounds: box), in: frame)
+                        OCRRegionOverlay.displayBounds(for: box, in: frame)
                             .insetBy(dx: -1, dy: -1).intersection(frame)
                     }.filter { !$0.isEmpty }
                 }

@@ -5,7 +5,10 @@ struct OCRRegionOverlay: View {
     let imageFrame: CGRect
 
     static func displayBounds(for line: RecognizedLine, in imageFrame: CGRect) -> CGRect {
-        let box = line.bounds
+        displayBounds(for: line.bounds, in: imageFrame)
+    }
+
+    static func displayBounds(for box: CGRect, in imageFrame: CGRect) -> CGRect {
         return CGRect(x: imageFrame.minX + box.minX * imageFrame.width,
                       y: imageFrame.minY + (1 - box.maxY) * imageFrame.height,
                       width: box.width * imageFrame.width, height: box.height * imageFrame.height)

@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import SwiftUI
 
@@ -70,6 +71,7 @@ private struct StudioCommands: Commands {
 
     @Environment(\.openWindow) private var openWindow
     @FocusedValue(\.studioNewSnip) private var newSnip
+    @FocusedValue(\.studioHistory) private var history
 
     var body: some Commands {
         CommandGroup(replacing: .newItem) {
@@ -81,7 +83,40 @@ private struct StudioCommands: Commands {
                 applicationDelegate.closeAllSnipsWithoutSaving()
             }
         }
+        CommandGroup(replacing: .undoRedo) {
+            Button("Undo") { changeHistory(redo: false) }
+                .keyboardShortcut("z", modifiers: .command)
+                .disabled(history?.editingText != true && history?.canUndo != true)
+            Button("Redo") { changeHistory(redo: true) }
+                .keyboardShortcut("z", modifiers: [.command, .shift])
+                .disabled(history?.editingText != true && history?.canRedo != true)
+        }
     }
+
+    private func changeHistory(redo: Bool) {
+        guard let history else { return }
+        if history.editingText {
+            if let undoManager = NSApp.keyWindow?.firstResponder?.undoManager {
+                if redo { undoManager.redo() } else { undoManager.undo() }
+            }
+        } else if redo {
+            history.redo()
+        } else {
+            history.undo()
+        }
+    }
+}
+
+struct StudioHistoryCommands {
+    let canUndo: Bool
+    let canRedo: Bool
+    let editingText: Bool
+    let undo: () -> Void
+    let redo: () -> Void
+}
+
+private struct StudioHistoryKey: FocusedValueKey {
+    typealias Value = StudioHistoryCommands
 }
 
 private struct StudioNewSnipKey: FocusedValueKey {
@@ -92,5 +127,9 @@ extension FocusedValues {
     var studioNewSnip: (() -> Void)? {
         get { self[StudioNewSnipKey.self] }
         set { self[StudioNewSnipKey.self] = newValue }
+    }
+    var studioHistory: StudioHistoryCommands? {
+        get { self[StudioHistoryKey.self] }
+        set { self[StudioHistoryKey.self] = newValue }
     }
 }
