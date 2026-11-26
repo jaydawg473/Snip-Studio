@@ -18,13 +18,18 @@ struct SnipCanvas: View {
     let onTextTap: ((CGPoint) -> Void)?
     let recognizedLines: [RecognizedLine]
     let ocrSelection: Binding<Set<Int>>?
+    let snapWordRegions: [CGRect]
+    let showsRecognitionGlow: Bool
     let onZoomChanged: (CGFloat) -> Void
 
     @Environment(\.displayScale) private var displayScale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @GestureState private var dragActive = false
     @State private var lastEraseLocation: CGPoint?
     @State private var annotationDrag: AnnotationDrag?
     @State private var textSelectionFrame: CGRect?
+    @State private var snappedWordIndices = Set<Int>()
+    @State private var lastSnapLocation: CGPoint?
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
@@ -32,6 +37,7 @@ struct SnipCanvas: View {
          erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
          annotationSelection: Binding<UUID?>? = nil, textDraft: Binding<StudioTextDraft?>? = nil,
          onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [], ocrSelection: Binding<Set<Int>>? = nil,
+         snapWordRegions: [CGRect] = [], showsRecognitionGlow: Bool = false,
          onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
@@ -48,6 +54,8 @@ struct SnipCanvas: View {
         self.onTextTap = onTextTap
         self.recognizedLines = recognizedLines
         self.ocrSelection = ocrSelection
+        self.snapWordRegions = snapWordRegions
+        self.showsRecognitionGlow = showsRecognitionGlow
         self.onZoomChanged = onZoomChanged
     }
 
@@ -88,6 +96,7 @@ struct SnipCanvas: View {
                     document.cancelStroke()
                     lastEraseLocation = nil
                     annotationDrag = nil
+                    resetSnapDrag()
                 }
             }
         }
@@ -99,6 +108,7 @@ struct SnipCanvas: View {
             document.cancelStroke()
             annotationDrag = nil
             textSelectionFrame = nil
+            resetSnapDrag()
         }
         .onChange(of: annotationSelection != nil) { _, selecting in
             if !selecting {
@@ -145,8 +155,13 @@ struct SnipCanvas: View {
                         ))
                     }
                 }
-                if let draft {
+                if let draft, snappedWordIndices.isEmpty {
                     draw(draft, in: ink)
+                } else {
+                    for index in snappedWordIndices where snapWordRegions.indices.contains(index) {
+                        let region = snapWordRegions[index]
+                        ink.fill(Path(region), with: .color(inkColor))
+                    }
                 }
 
                 let borderWidth = layout.usesNativePixels ? 1 / displayScale : 1
@@ -200,6 +215,7 @@ struct SnipCanvas: View {
                 StudioCropOverlay(bounds: cropSelection, imageFrame: frame,
                                   pixelSize: CGSize(width: image.width, height: image.height))
             }
+            if showsRecognitionGlow { recognitionGlow(around: frame) }
             if let textDraft, let draft = Binding(textDraft) {
                 GeometryReader { viewport in
                     let position = draft.wrappedValue.origin
@@ -214,6 +230,21 @@ struct SnipCanvas: View {
                 }
             }
         }
+    }
+
+    private func recognitionGlow(around frame: CGRect) -> some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: reduceMotion)) { time in
+            let position = reduceMotion ? 0 : time.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: 1.5) * 240
+            let colors: [Color] = [.cyan, .blue, .purple, .pink, .cyan]
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(AngularGradient(colors: colors, center: .center,
+                                              startAngle: .degrees(position), endAngle: .degrees(position + 360)), lineWidth: 3)
+                .shadow(color: .blue.opacity(0.75), radius: 5)
+                .frame(width: frame.width + 9, height: frame.height + 9)
+                .position(x: frame.midX, y: frame.midY)
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
     }
 
     private func draw(_ stroke: InkStroke, in ink: GraphicsContext) {
@@ -239,6 +270,7 @@ struct SnipCanvas: View {
                     eraseAnnotations(for: event, in: frame, layout: layout)
                 } else {
                     addInk(for: event, in: frame, layout: layout)
+                    trackSnappedWords(event, in: frame, layout: layout)
                 }
             }
             .onEnded { event in
@@ -254,9 +286,43 @@ struct SnipCanvas: View {
                     lastEraseLocation = nil
                 } else {
                     addInk(for: event, in: frame, layout: layout)
-                    document.finishStroke()
+                    trackSnappedWords(event, in: frame, layout: layout)
+                    let snapped = snappedWordIndices.sorted().compactMap { index in
+                        snapWordRegions.indices.contains(index) ? snapWordRegions[index] : nil
+                    }
+                    if snapped.isEmpty {
+                        document.finishStroke()
+                    } else {
+                        document.cancelStroke()
+                        let color = NSColor(inkColor).usingColorSpace(.sRGB)?.cgColor ?? NSColor.systemYellow.withAlphaComponent(0.42).cgColor
+                        document.highlightRegions(snapped, color: color)
+                    }
+                    resetSnapDrag()
                 }
             }
+    }
+
+    private func trackSnappedWords(_ event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout) {
+        guard !snapWordRegions.isEmpty, frame.contains(event.startLocation), !NSEvent.modifierFlags.contains(.shift) else {
+            resetSnapDrag()
+            return
+        }
+        let start = lastSnapLocation ?? layout.imagePoint(event.startLocation, in: frame)
+        let end = layout.imagePoint(event.location, in: frame)
+        let radius = max(1, inkWidth / 3)
+        let sample = CGRect(x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y)
+            .standardized.insetBy(dx: -radius, dy: -radius)
+        var candidates = snappedWordIndices
+        for index in snapWordRegions.indices where snapWordRegions[index].intersects(sample) {
+            candidates.insert(index)
+        }
+        if candidates != snappedWordIndices { snappedWordIndices = candidates }
+        lastSnapLocation = end
+    }
+
+    private func resetSnapDrag() {
+        if lastSnapLocation != nil { lastSnapLocation = nil }
+        if !snappedWordIndices.isEmpty { snappedWordIndices.removeAll() }
     }
 
     private func addInk(for event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout) {

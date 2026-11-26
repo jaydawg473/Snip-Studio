@@ -12,15 +12,23 @@ struct OCRContact: Identifiable, Sendable {
     let bounds: CGRect
 }
 
+struct OCRWord: Sendable {
+    let text: String
+    // Vision reports bounds in normalized, bottom-left coordinates.
+    let bounds: CGRect
+}
+
 struct RecognizedLine: Sendable {
     let text: String
     let bounds: CGRect
     let contacts: [OCRContact]
+    let words: [OCRWord]
 
-    init(text: String, bounds: CGRect, contacts: [OCRContact] = []) {
+    init(text: String, bounds: CGRect, contacts: [OCRContact] = [], words: [OCRWord] = []) {
         self.text = text
         self.bounds = bounds
         self.contacts = contacts
+        self.words = words
     }
 }
 
@@ -43,16 +51,16 @@ enum TextRecognition {
                                                 NSTextCheckingResult.CheckingType.phoneNumber.rawValue)
             let lines = (request.results ?? []).compactMap { observation -> RecognizedLine? in
                 guard let candidate = observation.topCandidates(1).first else { return nil }
-                return RecognizedLine(text: candidate.string, bounds: observation.boundingBox,
-                                      contacts: detector.map { contacts(in: candidate, with: $0) } ?? [])
+                let text = candidate.string
+                return RecognizedLine(text: text, bounds: observation.boundingBox,
+                                      contacts: detector.map { contacts(in: text, candidate: candidate, with: $0) } ?? [],
+                                      words: words(in: text, candidate: candidate))
             }
             return orderRows(lines)
         }.value
     }
 
-    private static func contacts(in candidate: VNRecognizedText, with detector: NSDataDetector) -> [OCRContact] {
-        let text = candidate.string
-        let imageBounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+    private static func contacts(in text: String, candidate: VNRecognizedText, with detector: NSDataDetector) -> [OCRContact] {
         return detector.matches(in: text, range: NSRange(location: 0, length: text.utf16.count)).compactMap { match in
             let kind: OCRContact.Kind
             switch match.resultType {
@@ -60,16 +68,44 @@ enum TextRecognition {
             case .phoneNumber where match.phoneNumber != nil: kind = .phone
             default: return nil
             }
-            guard let range = Range(match.range, in: text), !range.isEmpty,
-                  let observation = try? candidate.boundingBox(for: range) else { return nil }
-            let bounds = observation.boundingBox
-            guard bounds.minX.isFinite, bounds.minY.isFinite, bounds.maxX.isFinite, bounds.maxY.isFinite else {
+            guard let range = Range(match.range, in: text), let bounds = nativeBounds(for: range, in: candidate) else {
                 return nil
             }
-            let clipped = bounds.intersection(imageBounds)
-            guard !clipped.isNull, !clipped.isEmpty else { return nil }
-            return OCRContact(kind: kind, value: String(text[range]), bounds: clipped)
+            return OCRContact(kind: kind, value: String(text[range]), bounds: bounds)
         }
+    }
+
+    private static func words(in text: String, candidate: VNRecognizedText) -> [OCRWord] {
+        let words = text.split(whereSeparator: \.isWhitespace).compactMap { token -> OCRWord? in
+            guard let bounds = nativeBounds(for: token.startIndex..<token.endIndex, in: candidate) else { return nil }
+            return OCRWord(text: String(token), bounds: bounds)
+        }
+        // Vision may return the same span for several requests. A single line's words need distinct horizontal spans.
+        let byLeftEdge = words.indices.sorted { words[$0].bounds.minX < words[$1].bounds.minX }
+        var rightmost: Int?
+        var ambiguous = Set<Int>()
+        for index in byLeftEdge {
+            let bounds = words[index].bounds
+            if let previous = rightmost {
+                let rightEdge = words[previous].bounds.maxX
+                if bounds.minX < rightEdge {
+                    ambiguous.insert(previous)
+                    ambiguous.insert(index)
+                }
+                if bounds.maxX > rightEdge { rightmost = index }
+            } else {
+                rightmost = index
+            }
+        }
+        return words.indices.compactMap { ambiguous.contains($0) ? nil : words[$0] }
+    }
+
+    private static func nativeBounds(for range: Range<String.Index>, in candidate: VNRecognizedText) -> CGRect? {
+        guard !range.isEmpty, let observation = try? candidate.boundingBox(for: range) else { return nil }
+        let bounds = observation.boundingBox
+        guard bounds.minX.isFinite, bounds.minY.isFinite, bounds.maxX.isFinite, bounds.maxY.isFinite else { return nil }
+        let clipped = bounds.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
+        return clipped.width > 0 && clipped.height > 0 ? clipped : nil
     }
 
     static func orderRows(_ lines: [RecognizedLine]) -> [RecognizedLine] {

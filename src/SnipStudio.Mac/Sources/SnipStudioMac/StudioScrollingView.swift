@@ -16,6 +16,7 @@ struct StudioScrollingView: View {
     @State private var showsSelection = false
     @State private var confirmReset = false
     @State private var review: StitchReview?
+    @State private var showStitchJoins = false
     @State private var status = "Select the part of a display that you want to capture."
 
     private var display: StudioScrollDisplay? { displays.first { $0.id == displayID } }
@@ -75,11 +76,33 @@ struct StudioScrollingView: View {
         }
         .sheet(item: $review) { result in
             VStack(alignment: .leading, spacing: 12) {
-                Text("\(result.image.width) × \(result.image.height) px · \(acceptedFrames) captured views")
-                    .font(.callout).foregroundStyle(.secondary)
+                HStack {
+                    Text("\(result.image.width) × \(result.image.height) px · \(acceptedFrames) captured views")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Toggle("Show stitch joins", isOn: $showStitchJoins)
+                        .disabled(result.joins.isEmpty)
+                }
                 ScrollView {
                     Image(decorative: result.image, scale: 1).resizable().scaledToFit()
                         .accessibilityLabel("Assembled scrolling capture")
+                        .overlay {
+                            if showStitchJoins {
+                                Canvas { context, size in
+                                    var guides = Path()
+                                    for row in result.joins {
+                                        let y = CGFloat(row) * size.height / CGFloat(result.image.height)
+                                        guides.move(to: CGPoint(x: 0, y: y))
+                                        guides.addLine(to: CGPoint(x: size.width, y: y))
+                                    }
+                                    context.stroke(guides, with: .color(.white), lineWidth: 2)
+                                    context.stroke(guides, with: .color(StudioColors.primary),
+                                                   style: StrokeStyle(lineWidth: 1, dash: [5, 4]))
+                                }
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                            }
+                        }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(StudioColors.canvas)
@@ -127,7 +150,10 @@ struct StudioScrollingView: View {
         Task { @MainActor in
             defer { busy = false }
             do {
-                if let image = try await session.image() { review = StitchReview(image: image) }
+                if let result = try await session.makeReview() {
+                    showStitchJoins = false
+                    review = StitchReview(image: result.image, joins: result.joins)
+                }
             } catch { status = error.localizedDescription }
         }
     }
@@ -151,6 +177,7 @@ struct StudioScrollingView: View {
     private struct StitchReview: Identifiable {
         let id = UUID()
         let image: CGImage
+        let joins: [Int]
     }
 }
 
@@ -162,7 +189,10 @@ private actor StudioScrollSession {
         return (result, stitcher.frameCount, stitcher.outputHeight)
     }
 
-    func image() throws -> CGImage? { try stitcher.makeImage() }
+    func makeReview() throws -> (image: CGImage, joins: [Int])? {
+        guard let image = try stitcher.makeImage() else { return nil }
+        return (image, stitcher.joinRows)
+    }
 }
 
 @MainActor

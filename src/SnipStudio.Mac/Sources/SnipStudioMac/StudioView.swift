@@ -20,6 +20,9 @@ struct StudioView: View {
     @State private var inkWidth: CGFloat = 4
     @State private var highlightColor = Color.yellow
     @State private var highlightWidth: CGFloat = 14
+    @State private var highlightOpacity = 0.42
+    @State private var snapHighlightToText = true
+    @State private var snapWordRegions: [CGRect] = []
     @State private var shape = SnipShape.rectangle
     @State private var lineStyle = SnipLineStyle.solid
     @State private var shapeColor = Color.red
@@ -38,6 +41,7 @@ struct StudioView: View {
     @State private var zoomPercent: Int?
     @State private var displayedZoom = 100
     @State private var recognitionInProgress = false
+    @State private var ocrConversionInProgress = false
     @State private var exportTask: Task<Void, Never>?
     @State private var automaticClipboardTask: Task<Void, Never>?
     @State private var openedImageRevision: UUID?
@@ -67,7 +71,7 @@ struct StudioView: View {
     }
     private var drawingColor: Color {
         switch tool {
-        case .highlight: highlightColor.opacity(0.42)
+        case .highlight: highlightColor.opacity(highlightOpacity)
         case .shape: shapeColor
         default: inkColor
         }
@@ -153,6 +157,7 @@ struct StudioView: View {
         }
         .onChange(of: document.rasterRevision) { _, _ in
             recognizedLines = nil
+            snapWordRegions = []
             selectedOCRIndices.removeAll()
             if tool == .crop {
                 cropBounds = fullImageBounds
@@ -160,6 +165,8 @@ struct StudioView: View {
                 selectTool(.removeArea)
             } else if tool == .textActions {
                 selectTool(.pen)
+            } else if tool == .highlight && snapHighlightToText {
+                startRecognitionIfNeeded(forTextActions: false)
             }
         }
     }
@@ -206,6 +213,8 @@ struct StudioView: View {
             onTextTap: canvasTap,
             recognizedLines: ocrLines,
             ocrSelection: tool == .textActions ? $selectedOCRIndices : nil,
+            snapWordRegions: tool == .highlight && snapHighlightToText ? snapWordRegions : [],
+            showsRecognitionGlow: (tool == .textActions && recognitionInProgress) || ocrConversionInProgress,
             onZoomChanged: { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
         )
     }
@@ -413,6 +422,17 @@ struct StudioView: View {
                 .fixedSize()
                 .accessibilityLabel("Ink width")
                 StudioStrokeSample(color: drawingColor, width: drawingWidth)
+                if tool == .highlight {
+                    Toggle("Snap to text", isOn: $snapHighlightToText)
+                        .toggleStyle(.checkbox)
+                        .onChange(of: snapHighlightToText) { _, enabled in
+                            if enabled { startRecognitionIfNeeded(forTextActions: false) }
+                        }
+                        .help("Hold Shift to highlight freehand")
+                    Slider(value: $highlightOpacity, in: 0.1...0.9) { Text("Opacity") }
+                        .frame(width: 65)
+                        .help("Highlighter opacity")
+                }
                 if tool == .shape {
                     Picker("Line style", selection: $lineStyle) {
                         ForEach(SnipLineStyle.allCases, id: \.self) { style in
@@ -760,7 +780,9 @@ struct StudioView: View {
         switch value {
         case .move: status = "Scroll to move around a zoomed screenshot."
         case .pen: status = "Draw on the screenshot."
-        case .highlight: status = "Drag to highlight an area."
+        case .highlight:
+            status = "Drag across text to highlight it. Hold Shift for freehand."
+            if snapHighlightToText { startRecognitionIfNeeded(forTextActions: false) }
         case .shape: status = "Drag to draw a \(shape.rawValue)."
         case .emoji: status = "Click the screenshot to place the selected sticker."
         case .text: status = "Click the screenshot to add or edit text."
@@ -1014,6 +1036,7 @@ struct StudioView: View {
     private func presentLoadedImage(alreadySaved: Bool) {
         openedImageRevision = alreadySaved ? document.contentRevision : nil
         recognizedLines = nil
+        snapWordRegions = []
         externalWorkingCopy = nil
         zoomPercent = fitOnLoad ? nil : 100
         selectTool(.pen)
@@ -1025,15 +1048,20 @@ struct StudioView: View {
             selectTool(.pen)
             return
         }
-        guard !busy, let image = document.image else { return }
+        guard !busy, document.hasImage else { return }
         selectTool(.textActions)
         if let recognizedLines {
             status = recognizedLines.isEmpty ? "No text found." : "Text ready to copy."
             return
         }
+        startRecognitionIfNeeded(forTextActions: true)
+    }
 
+    private func startRecognitionIfNeeded(forTextActions: Bool) {
+        guard (forTextActions || snapHighlightToText), recognizedLines == nil,
+              !recognitionInProgress, let image = document.image else { return }
         recognitionInProgress = true
-        status = "Recognizing text on this Mac…"
+        status = forTextActions ? "Recognizing text on this Mac…" : "Preparing text snapping…"
         let revision = document.rasterRevision
         Task { @MainActor in
             defer { recognitionInProgress = false }
@@ -1041,9 +1069,19 @@ struct StudioView: View {
                 let lines = try await TextRecognition.recognizeLines(image)
                 guard document.rasterRevision == revision else { return }
                 recognizedLines = lines
+                let frame = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+                snapWordRegions = lines.flatMap { line -> [CGRect] in
+                    let boxes = line.words.isEmpty ? [line.bounds] : line.words.map(\.bounds)
+                    return boxes.map { box in
+                        OCRRegionOverlay.displayBounds(for: RecognizedLine(text: line.text, bounds: box), in: frame)
+                            .insetBy(dx: -1, dy: -1).intersection(frame)
+                    }.filter { !$0.isEmpty }
+                }
                 if tool == .textActions { status = lines.isEmpty ? "No text found." : "Text ready to copy." }
+                if tool == .highlight { status = "Drag across text to highlight it. Hold Shift for freehand." }
             } catch {
-                report(error)
+                if forTextActions { report(error) }
+                else if tool == .highlight { status = "Text snapping is unavailable. Freehand highlighting is ready." }
             }
         }
     }
@@ -1104,6 +1142,7 @@ struct StudioView: View {
         }
         let stamp = document.rasterRevision
         status = "Checking text size, color and surrounding pixels…"
+        ocrConversionInProgress = true
         exportTask = Task { @MainActor in
             do {
                 let proposals = try await Task.detached(priority: .userInitiated) {
@@ -1112,11 +1151,14 @@ struct StudioView: View {
                 try Task.checkCancellation()
                 guard document.rasterRevision == stamp else { throw EditorDocumentError.rasterChanged }
                 exportTask = nil
+                ocrConversionInProgress = false
                 completion(proposals, stamp)
             } catch is CancellationError {
                 exportTask = nil
+                ocrConversionInProgress = false
             } catch {
                 exportTask = nil
+                ocrConversionInProgress = false
                 report(error)
             }
         }
@@ -1125,8 +1167,12 @@ struct StudioView: View {
     private func applyOCRText(_ edits: [StudioOCRTextEdit], revision: UUID) {
         guard !busy, !edits.isEmpty else { return }
         status = "Applying editable text to the screenshot…"
+        ocrConversionInProgress = true
         exportTask = Task { @MainActor in
-            defer { exportTask = nil }
+            defer {
+                exportTask = nil
+                ocrConversionInProgress = false
+            }
             do {
                 try await document.replaceOCRText(edits, expectedRevision: revision)
                 cancelText()

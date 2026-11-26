@@ -16,7 +16,7 @@ enum TrialSelfCheck {
             try StudioOCRReplacement.selfCheck()
             if #available(macOS 15.0, *) {
                 try StudioTranslationReviewSelfCheck.run()
-                let crop = StudioScreenRecorder.displayRect(
+                let crop = try StudioScreenRecorder.displayRect(
                     for: CGRect(x: 40, y: 30, width: 200, height: 100),
                     windowFrame: CGRect(x: -1360, y: 70, width: 800, height: 500),
                     displayFrame: CGRect(x: -1440, y: -160, width: 1440, height: 900)
@@ -430,8 +430,12 @@ enum TrialSelfCheck {
             CTLineDraw(line, bitmap)
         }
         guard let fixture = bitmap.makeImage() else { throw CheckFailure("create Vision fixture") }
-        let output = try await TextRecognition.recognize(fixture)
+        let result = try await TextRecognition.recognizeLines(fixture)
+        let output = result.map(\.text).joined(separator: "\n")
         try require(output == "SNIP STUDIO\nFILE 0027", "Vision returns both fixture lines in order, including leading zeros")
+        let words = result[1].words
+        try require(words.map(\.text) == ["FILE", "0027"] && words[0].bounds.maxX <= words[1].bounds.minX,
+                    "native word snapping separates the filename label and zero-padded token")
         print("PASS: on-device Vision recognition")
     }
 

@@ -506,6 +506,20 @@ final class EditorDocument: ObservableObject {
         if !strokes.isEmpty { commit(.eraseAll(strokes)) }
     }
 
+    func highlightRegions(_ regions: [CGRect], color: CGColor) {
+        guard image != nil, !regions.isEmpty else { return }
+        let highlights = regions.compactMap { region -> InkStroke? in
+            guard !region.isEmpty, !region.isInfinite else { return nil }
+            let start = CGPoint(x: region.minX, y: region.minY)
+            let end = CGPoint(x: region.maxX, y: region.maxY)
+            var stroke = InkStroke(color: CGColor(gray: 0, alpha: 0), width: 0.5, at: start,
+                                   shape: .rectangle, fill: color)
+            stroke.extend(to: end)
+            return stroke.prepareForCommit() ? stroke : nil
+        }
+        if !highlights.isEmpty { commit(.insertMany(highlights)) }
+    }
+
     func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
         beginAnnotation(at: point, color: color, width: width)
     }
@@ -629,6 +643,7 @@ final class EditorDocument: ObservableObject {
     private func apply(_ operation: AnnotationOperation) {
         switch operation {
         case let .insert(stroke): strokes.append(stroke)
+        case let .insertMany(marks): strokes.append(contentsOf: marks)
         case let .erase(index, _): strokes.remove(at: index)
         case let .replace(index, _, after): strokes[index] = after
         case let .raster(_, after): setRaster(after)
@@ -648,6 +663,7 @@ final class EditorDocument: ObservableObject {
         redoHistory.append(edit)
         switch edit.operation {
         case .insert: strokes.removeLast()
+        case let .insertMany(marks): strokes.removeLast(marks.count)
         case let .erase(index, stroke): strokes.insert(stroke, at: index)
         case let .replace(index, before, _): strokes[index] = before
         case let .raster(before, _): setRaster(before)
@@ -678,6 +694,7 @@ final class EditorDocument: ObservableObject {
 
     private enum AnnotationOperation {
         case insert(InkStroke)
+        case insertMany([InkStroke])
         case erase(index: Int, stroke: InkStroke)
         case replace(index: Int, before: InkStroke, after: InkStroke)
         case raster(before: RasterState, after: RasterState)

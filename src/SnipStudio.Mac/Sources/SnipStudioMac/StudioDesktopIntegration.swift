@@ -49,7 +49,7 @@ struct StudioDesktopSettingsView: View {
             }
             Toggle("Open Snip Studio at login", isOn: Binding(
                 get: { loginStatus == .enabled || loginStatus == .requiresApproval },
-                set: setLaunchAtLogin
+                set: { requested in setLaunchAtLogin(requested) }
             ))
             if loginStatus == .requiresApproval {
                 VStack(alignment: .leading, spacing: 6) {
