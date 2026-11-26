@@ -16,19 +16,21 @@ struct SnipCanvas: View {
     let textDraft: Binding<StudioTextDraft?>?
     let onTextTap: ((CGPoint) -> Void)?
     let recognizedLines: [RecognizedLine]
+    let ocrSelection: Binding<Set<Int>>?
     let onZoomChanged: (CGFloat) -> Void
 
     @Environment(\.displayScale) private var displayScale
     @GestureState private var dragActive = false
     @State private var lastEraseLocation: CGPoint?
     @State private var annotationDrag: AnnotationDrag?
+    @State private var textSelectionFrame: CGRect?
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
          allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid,
          erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
          annotationSelection: Binding<UUID?>? = nil, textDraft: Binding<StudioTextDraft?>? = nil,
-         onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [],
+         onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [], ocrSelection: Binding<Set<Int>>? = nil,
          onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
@@ -43,6 +45,7 @@ struct SnipCanvas: View {
         self.textDraft = textDraft
         self.onTextTap = onTextTap
         self.recognizedLines = recognizedLines
+        self.ocrSelection = ocrSelection
         self.onZoomChanged = onZoomChanged
     }
 
@@ -93,6 +96,7 @@ struct SnipCanvas: View {
         .onChange(of: zoom) { _, _ in
             document.cancelStroke()
             annotationDrag = nil
+            textSelectionFrame = nil
         }
         .onChange(of: annotationSelection != nil) { _, selecting in
             if !selecting {
@@ -154,6 +158,7 @@ struct SnipCanvas: View {
                 guard frame.contains(event.location), textDraft?.wrappedValue == nil else { return }
                 onTextTap?(layout.imagePoint(event.location, in: frame))
             }, including: onTextTap == nil ? .none : .all)
+            .gesture(textSelectionGesture(in: frame), including: ocrSelection == nil || recognizedLines.isEmpty ? .none : .all)
             .onContinuousHover { phase in
                 guard annotationSelection != nil else { return }
                 switch phase {
@@ -170,6 +175,24 @@ struct SnipCanvas: View {
                 OCRRegionOverlay(lines: recognizedLines, imageFrame: frame)
                     .allowsHitTesting(false)
                     .accessibilityHidden(true)
+                Canvas { context, _ in
+                    for index in ocrSelection?.wrappedValue ?? [] where recognizedLines.indices.contains(index) {
+                        let box = OCRRegionOverlay.displayBounds(for: recognizedLines[index], in: frame)
+                        guard !box.isEmpty else { continue }
+                        let outline = Path(roundedRect: box.insetBy(dx: -2, dy: -2).intersection(frame), cornerRadius: 2)
+                        context.fill(outline, with: .color(StudioColors.primary.opacity(0.3)))
+                        context.stroke(outline, with: .color(.white), lineWidth: 2)
+                        context.stroke(outline, with: .color(StudioColors.primary), lineWidth: 1)
+                    }
+                    if let textSelectionFrame {
+                        let outline = Path(textSelectionFrame)
+                        context.fill(outline, with: .color(StudioColors.primary.opacity(0.12)))
+                        context.stroke(outline, with: .color(.white), lineWidth: 2)
+                        context.stroke(outline, with: .color(StudioColors.primary), style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    }
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
             }
             if let cropSelection {
                 StudioCropOverlay(bounds: cropSelection, imageFrame: frame,
@@ -258,6 +281,33 @@ struct SnipCanvas: View {
         }
         annotationDrag?.translation = CGSize(width: event.translation.width / layout.scale,
                                              height: event.translation.height / layout.scale)
+    }
+
+    private func textSelectionGesture(in frame: CGRect) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { event in
+                if hypot(event.translation.width, event.translation.height) >= 4 {
+                    textSelectionFrame = CGRect(x: event.startLocation.x, y: event.startLocation.y,
+                                                width: event.translation.width, height: event.translation.height)
+                        .standardized.intersection(frame)
+                }
+            }
+            .onEnded { event in
+                defer { textSelectionFrame = nil }
+                guard let ocrSelection else { return }
+                let addToSelection = NSEvent.modifierFlags.contains(.shift)
+                var selected = addToSelection ? ocrSelection.wrappedValue : []
+                if let textSelectionFrame {
+                    for index in recognizedLines.indices where OCRRegionOverlay.displayBounds(
+                        for: recognizedLines[index], in: frame
+                    ).intersects(textSelectionFrame) { selected.insert(index) }
+                } else if let hit = recognizedLines.firstIndex(where: {
+                    OCRRegionOverlay.displayBounds(for: $0, in: frame).insetBy(dx: -3, dy: -3).contains(event.location)
+                }) {
+                    if addToSelection && selected.contains(hit) { selected.remove(hit) } else { selected.insert(hit) }
+                }
+                ocrSelection.wrappedValue = selected
+            }
     }
 
     private struct AnnotationDrag {

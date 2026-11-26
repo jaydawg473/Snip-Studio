@@ -46,6 +46,12 @@ struct SnipStudioMacApp: App {
         }
         .defaultSize(width: 490, height: 205)
         .windowResizability(.contentMinSize)
+
+        Window("Freeform capture", id: "freeform") {
+            StudioFreeformCaptureView(applicationDelegate: applicationDelegate)
+        }
+        .defaultSize(width: 840, height: 620)
+        .windowResizability(.contentMinSize)
     }
 }
 

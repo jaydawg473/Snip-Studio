@@ -37,6 +37,7 @@ struct StudioView: View {
     @State private var automaticClipboardTask: Task<Void, Never>?
     @State private var openedImageRevision: UUID?
     @State private var recognizedLines: [RecognizedLine]?
+    @State private var selectedOCRIndices: Set<Int> = []
     @State private var reviewText = false
     @State private var reviewedContacts: [OCRContact] = []
     @State private var reviewRedactions = false
@@ -51,6 +52,10 @@ struct StudioView: View {
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
     private var fileActionsDisabled: Bool { busy || textDraft != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
+    private var selectedOCRLines: [RecognizedLine] {
+        guard let recognizedLines else { return [] }
+        return recognizedLines.indices.filter { selectedOCRIndices.contains($0) }.map { recognizedLines[$0] }
+    }
     private var drawingColor: Color {
         switch tool {
         case .highlight: highlightColor.opacity(0.42)
@@ -128,6 +133,7 @@ struct StudioView: View {
         }
         .onChange(of: document.rasterRevision) { _, _ in
             recognizedLines = nil
+            selectedOCRIndices.removeAll()
             if tool == .crop {
                 cropBounds = fullImageBounds
             } else if tool == .removeArea {
@@ -173,6 +179,7 @@ struct StudioView: View {
             textDraft: tool == .text ? $textDraft : nil,
             onTextTap: textTap,
             recognizedLines: ocrLines,
+            ocrSelection: tool == .textActions ? $selectedOCRIndices : nil,
             onZoomChanged: { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
         )
     }
@@ -236,6 +243,7 @@ struct StudioView: View {
                     }
                 }
                 Divider()
+                Button("Freeform…") { openWindow(id: "freeform") }
                 Button("Scrolling capture…") { openWindow(id: "scrolling") }
             } label: {
                 if compact {
@@ -393,35 +401,9 @@ struct StudioView: View {
             .frame(height: 40)
             .background(StudioColors.options)
         case .textActions:
-            HStack(spacing: 6) {
-                Button { copyText(recognizedText) } label: {
-                    Label("Copy all text", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(StudioButtonStyle())
-                .disabled(recognizedText.isEmpty || exportTask != nil)
-                Button { copyRecognizedTable() } label: {
-                    Label("Copy as table", systemImage: "tablecells")
-                }
-                .buttonStyle(StudioButtonStyle())
-                .disabled(recognizedText.isEmpty || exportTask != nil)
-                Menu {
-                    Button("Email addresses and phone numbers") { redactContacts() }
-                    Button("Email addresses") { redactContacts(kind: .email) }
-                    Button("Phone numbers") { redactContacts(kind: .phone) }
-                } label: {
-                    Label("Quick redact", systemImage: "rectangle.and.pencil.and.ellipsis")
-                }
-                .menuStyle(.borderlessButton)
-                .fixedSize()
-                .disabled(recognizedText.isEmpty || busy)
-                iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
-                .disabled(recognizedText.isEmpty)
-                Spacer(minLength: 0)
-                iconButton("Close text actions", symbol: "xmark") { selectTool(.pen) }
-            }
-            .padding(.horizontal, 12)
-            .frame(height: 40)
-            .background(StudioColors.options)
+            GeometryReader { geometry in ocrOptions(compact: geometry.size.width < 650) }
+                .frame(height: 40)
+                .background(StudioColors.options)
         case .eraser:
             HStack {
                 Button("Erase all annotations") { document.eraseAllAnnotations() }
@@ -498,6 +480,47 @@ struct StudioView: View {
         .padding(.horizontal, 12)
         .frame(height: 34)
         .background(StudioColors.toolbar)
+    }
+
+    private func ocrOptions(compact: Bool) -> some View {
+        HStack(spacing: 5) {
+            ocrButton("Copy all text", symbol: "doc.on.doc", compact: compact) { copyText(recognizedText) }
+                .disabled(recognizedText.isEmpty || exportTask != nil)
+            ocrButton("Copy selection", symbol: "selection.pin.in.out", compact: compact) {
+                copyText(selectedOCRLines.map(\.text).joined(separator: "\n"))
+            }
+            .disabled(selectedOCRLines.isEmpty || exportTask != nil)
+            ocrButton("Copy as table", symbol: "tablecells", compact: compact, action: copyRecognizedTable)
+                .disabled(recognizedText.isEmpty || exportTask != nil)
+            Menu {
+                Button("Email addresses and phone numbers") { redactContacts() }
+                Button("Email addresses") { redactContacts(kind: .email) }
+                Button("Phone numbers") { redactContacts(kind: .phone) }
+            } label: {
+                Label("Quick redact", systemImage: "rectangle.and.pencil.and.ellipsis")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(recognizedText.isEmpty || busy)
+            iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
+                .disabled(recognizedText.isEmpty)
+            iconButton("Delete selected text pixels", symbol: "trash", action: deleteOCRSelection)
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(selectedOCRLines.isEmpty || busy)
+            Spacer(minLength: 0)
+            iconButton("Close text actions", symbol: "xmark") { selectTool(.pen) }
+        }
+        .padding(.horizontal, 12)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private func ocrButton(_ title: String, symbol: String, compact: Bool, action: @escaping () -> Void) -> some View {
+        if compact {
+            iconButton(title, symbol: symbol, action: action)
+        } else {
+            Button(action: action) { Label(title, systemImage: symbol) }.buttonStyle(StudioButtonStyle())
+        }
     }
 
     private var textOptions: some View {
@@ -912,9 +935,16 @@ struct StudioView: View {
         automaticClipboardTask?.cancel()
         applicationDelegate.clipboardGeneration = UUID()
         do {
-            let result = try OCRTableClipboard.write(recognizedLines)
+            let result = try OCRTableClipboard.write(selectedOCRIndices.isEmpty ? recognizedLines : selectedOCRLines)
             status = "Copied \(result.rowCount) rows × \(result.columnCount) columns."
         } catch { report(error) }
+    }
+
+    private func deleteOCRSelection() {
+        guard let image = document.image else { return }
+        let frame = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let regions = selectedOCRLines.map { OCRRegionOverlay.displayBounds(for: $0, in: frame).insetBy(dx: -2, dy: -2) }
+        patchRaster(regions, opaque: false)
     }
 
     private func redactContacts(kind: OCRContact.Kind? = nil) {

@@ -4,6 +4,14 @@ struct OCRRegionOverlay: View {
     let lines: [RecognizedLine]
     let imageFrame: CGRect
 
+    static func displayBounds(for line: RecognizedLine, in imageFrame: CGRect) -> CGRect {
+        let box = line.bounds
+        return CGRect(x: imageFrame.minX + box.minX * imageFrame.width,
+                      y: imageFrame.minY + (1 - box.maxY) * imageFrame.height,
+                      width: box.width * imageFrame.width, height: box.height * imageFrame.height)
+            .intersection(imageFrame)
+    }
+
     var body: some View {
         let regions = Self.revealRegions(lines, in: imageFrame)
         Canvas { context, _ in

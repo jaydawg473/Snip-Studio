@@ -11,6 +11,7 @@ enum TrialSelfCheck {
             try await checkEditor()
             try StudioTextAnnotationSelfCheck.run()
             try StudioScrollStitcher.selfCheck()
+            try StudioFreeformMask.selfCheck()
             try await StudioProjectFile.selfCheck()
             try await checkRasterPatches()
             try await checkShapesAndEraser()
