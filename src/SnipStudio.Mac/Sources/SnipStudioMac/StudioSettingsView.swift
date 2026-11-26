@@ -45,7 +45,7 @@ struct StudioSettingsView: View {
             Section("Translation") {
                 TextField("Optional LibreTranslate server", text: $translationServer)
                     .textFieldStyle(.roundedBorder)
-                Text("Enter an HTTPS server address. Snip Studio asks each time before sending recognized text.")
+                Text("Enter an HTTPS server address. Snip Desk asks each time before sending recognized text.")
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }

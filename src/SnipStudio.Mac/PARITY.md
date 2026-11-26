@@ -1,4 +1,4 @@
-# Snip Studio macOS feature parity
+# Snip Desk feature parity with Snip Studio for Windows
 
 This checklist compares Windows 0.7.0 (`c41c21e98dfcbd2f342a2069c62bd77fb0fd49d9`) with the Mac trial in this checkout. **In source** records an implemented Mac workflow. **Partial** identifies the portion built so far. **Pending** identifies a workflow that still needs implementation. These states describe source inspection. Record signed-device results separately.
 
@@ -9,7 +9,7 @@ The Mac target is macOS 14 or later on Apple Silicon. [Windows 0.7.0 release not
 | Windows 0.7.0 workflow | Mac status | Native acceptance |
 | --- | --- | --- |
 | New, screenshot mode, rectangle and window capture, delay | In source. New, mode and delay use the Windows toolbar order. | Grant and deny capture permission. Capture a region and a window with Off and with a delay. Cancel each selector and check that the working snip remains. |
-| Current monitor, all monitors, freeform | In source. Primary-screen, all-monitor, and selectable full-display or freeform capture are available. | Arrange Retina and non-Retina screens above and beside each other. Check orientation, scale, mirroring, empty gaps, bounds and omission of Snip Studio. Check freeform transparency and cancellation. |
+| Current monitor, all monitors, freeform | In source. Primary-screen, all-monitor, and selectable full-display or freeform capture are available. | Arrange Retina and non-Retina screens above and beside each other. Check orientation, scale, mirroring, empty gaps, bounds and omission of Snip Desk. Check freeform transparency and cancellation. |
 | Scrolling capture, partial review, stitch joins | In source. Start Auto Scroll explicitly and bring the selected source window forward, or capture views manually. Accepted views survive overlap and size errors. Optional stitch guides default off and stay out of exported pixels. | Capture a long page with sticky headers and changing content, with permission granted and denied. Inspect the stitch and test manual capture, stopping and partial review. |
 | Automatic clipboard copy and saving the original capture | In source. Clipboard copy defaults on. Saving original captures is opt-in, matching Windows 0.7.0. | Paste immediately after capturing, erasing and Undo. Check newest-operation precedence, disabled automatic copy and preservation of the original in Pictures/Snip Studio after opting in. |
 | Compact launcher, editor toolbar, contextual options and status footer | In source. The launcher, toolbar rows, canvas and footer follow the Windows reference. | Compare the empty launcher, first snip, pen, highlighter and Text Actions in light and dark appearances at narrow and normal widths. Check focus, labels and readable hit targets. |

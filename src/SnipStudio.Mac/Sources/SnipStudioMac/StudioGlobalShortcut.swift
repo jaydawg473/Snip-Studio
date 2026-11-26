@@ -122,7 +122,7 @@ final class StudioGlobalShortcut: ObservableObject {
     }
 
     private func unavailableMessage(for chord: Chord) -> String {
-        "macOS could not enable \(chord.title). You can still start a capture from Snip Studio."
+        "macOS could not enable \(chord.title). You can still start a capture from Snip Desk."
     }
 
     private final class Registration {

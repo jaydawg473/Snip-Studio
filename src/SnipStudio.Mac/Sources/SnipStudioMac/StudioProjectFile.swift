@@ -410,12 +410,12 @@ enum StudioProjectFile {
         var errorDescription: String? {
             switch self {
             case .invalidPath: "Choose a regular file on this Mac."
-            case .wrongFormat: "This file is not an editable Snip Studio project."
+            case .wrongFormat: "This file is not an editable snip project."
             case .unsupportedVersion: "This editable project uses an unsupported format version."
             case .corrupt: "This editable project is incomplete or damaged."
             case .invalidAnnotations: "This editable project contains invalid annotation data."
             case .projectTooLarge: "The editable project exceeds the supported size."
-            case .couldNotEncode: "Snip Studio could not encode the project’s source image."
+            case .couldNotEncode: "Snip Desk could not encode the project’s source image."
             }
         }
     }

@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDisplayName</key>
-    <string>Snip Studio</string>
+    <string>Snip Desk</string>
     <key>CFBundleName</key>
-    <string>Snip Studio</string>
+    <string>Snip Desk</string>
     <key>CFBundleIdentifier</key>
     <string>com.automationforge.snipstudio</string>
     <key>CFBundleExecutable</key>
@@ -23,16 +23,16 @@
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
-    <string>Snip Studio captures your screen when you select New. Captures stay on this Mac.</string>
+    <string>Snip Desk captures your screen when you select New. Captures stay on this Mac.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Snip Studio includes microphone audio only when you enable the microphone for a recording.</string>
+    <string>Snip Desk includes microphone audio only when you enable the microphone for a recording.</string>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>
             <key>UTTypeIdentifier</key>
             <string>com.automationforge.snipstudio.editable-mac</string>
             <key>UTTypeDescription</key>
-            <string>Editable Snip Studio Mac Document</string>
+            <string>Editable Snip Desk Document</string>
             <key>UTTypeConformsTo</key>
             <array><string>public.data</string></array>
             <key>UTTypeTagSpecification</key>

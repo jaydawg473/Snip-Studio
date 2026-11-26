@@ -311,7 +311,7 @@ enum StudioFreeformMask {
         var errorDescription: String? {
             switch self {
             case .invalidOutline: "Draw around a visible area and try again."
-            case .renderFailed: "Snip Studio could not prepare the freeform capture."
+            case .renderFailed: "Snip Desk could not prepare the freeform capture."
             case .fixtureMismatch: "The freeform capture fixture did not preserve the expected pixels."
             }
         }

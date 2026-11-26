@@ -71,7 +71,7 @@ enum StudioFileExport {
 
         let view = SnipPrintView(image: image, frame: pageBounds(for: image))
         let operation = NSPrintOperation(view: view, printInfo: info)
-        operation.jobTitle = "Snip Studio"
+        operation.jobTitle = "Snip Desk"
         operation.showsPrintPanel = true
         operation.showsProgressPanel = true
 
@@ -212,7 +212,7 @@ private enum StudioFileExportError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .invalidDestination: "Choose a destination for the exported image."
-        case .encodeFailed(let format): "Snip Studio could not encode the image as \(format.title)."
+        case .encodeFailed(let format): "Snip Desk could not encode the image as \(format.title)."
         case .printInProgress: "Wait for the current print job to finish before starting another."
         }
     }

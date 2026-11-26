@@ -171,7 +171,7 @@ enum StudioScrollCaptureSource {
 
         var errorDescription: String? {
             switch self {
-            case .permissionRequired: "Allow Snip Studio under System Settings → Privacy & Security → Screen & System Audio Recording. Reopen the app if macOS asks."
+            case .permissionRequired: "Allow Snip Desk under System Settings → Privacy & Security → Screen & System Audio Recording. Reopen the app if macOS asks."
             case .noDisplays: "No active displays are available for scrolling capture."
             case .displayChanged: "The display changed. Select its scrolling area again."
             case .invalidArea: "Select a scrolling area inside the display."

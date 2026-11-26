@@ -19,7 +19,13 @@ if [[ "$#" -ne 1 ]]; then
 fi
 
 destination="$(mkdir -p "$1" && cd "$1" && pwd -P)"
-output="$destination/SnipStudio-0.1.0-macOS-arm64-trial.dmg"
+display_name="$(plutil -extract CFBundleDisplayName raw -o - "$project/Info.plist")"
+version="$(plutil -extract CFBundleShortVersionString raw -o - "$project/Info.plist")"
+if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo 'The trial needs a three-part bundle version.' >&2
+    exit 1
+fi
+output="$destination/SnipDesk-$version-macOS-arm64-trial.dmg"
 if [[ -e "$output" || -L "$output" ]]; then
     echo "An item already exists at $output." >&2
     exit 1
@@ -28,7 +34,7 @@ fi
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 stage="$work/image"
-bundle="$stage/Snip Studio.app"
+bundle="$stage/$display_name.app"
 mkdir "$stage"
 bash "$project/stage-app.sh" "$bundle"
 
@@ -38,7 +44,7 @@ codesign --verify --strict --verbose=2 "$bundle"
 "$bundle/Contents/MacOS/SnipStudioMac" --self-check
 
 dmg="$work/trial.dmg"
-hdiutil create -volname "Snip Studio" -srcfolder "$stage" -format UDZO "$dmg"
+hdiutil create -volname "$display_name" -srcfolder "$stage" -format UDZO "$dmg"
 codesign --timestamp --sign "$SNIPSTUDIO_SIGNING_IDENTITY" "$dmg"
 notary_options=(--keychain-profile "$SNIPSTUDIO_NOTARY_PROFILE")
 if [[ -n "${SNIPSTUDIO_NOTARY_KEYCHAIN:-}" ]]; then

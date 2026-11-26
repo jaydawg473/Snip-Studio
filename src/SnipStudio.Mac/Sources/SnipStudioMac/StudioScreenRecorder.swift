@@ -464,7 +464,7 @@ private struct RecordingPaths {
         try files.createDirectory(at: workspace, withIntermediateDirectories: false, attributes: permissions)
         let timestamp = Date().ISO8601Format().replacingOccurrences(of: ":", with: "-")
         return Self(workspace: workspace, draft: workspace.appendingPathComponent("capture.mp4"),
-                    final: folder.appendingPathComponent("Snip Studio \(timestamp) \(id.uuidString).mp4"))
+                    final: folder.appendingPathComponent("Snip Desk \(timestamp) \(id.uuidString).mp4"))
     }
 
     func publish() throws -> URL {
@@ -489,8 +489,8 @@ private enum RecordingFailure: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .screenAccess: "Allow Snip Studio in System Settings under Privacy & Security → Screen & System Audio Recording. Then reopen it and try again."
-        case .microphoneAccess: "Allow Snip Studio to use the microphone in System Settings, or turn off Microphone and try again."
+        case .screenAccess: "Allow Snip Desk in System Settings under Privacy & Security → Screen & System Audio Recording. Then reopen it and try again."
+        case .microphoneAccess: "Allow Snip Desk to use the microphone in System Settings, or turn off Microphone and try again."
         case .microphoneUnavailable: "The microphone is unavailable. Choose an available input or turn off Microphone."
         case .sourceUnavailable: "The selected screen or window is unavailable. Refresh the list and choose it again."
         case .invalidArea: "Choose an area at least two points wide and high within the selected source."

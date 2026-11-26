@@ -87,7 +87,7 @@ struct StudioTranslationReview: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Snip Studio will send eligible text rows to \(requestedServer?.absoluteString ?? "the configured server"). The screenshot stays on this Mac.")
+            Text("Snip Desk will send eligible text rows to \(requestedServer?.absoluteString ?? "the configured server"). The screenshot stays on this Mac.")
         }
     }
 

@@ -27,7 +27,7 @@ enum MacUpdateChecker {
             var request = URLRequest(url: url)
             request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
             request.setValue("2026-03-10", forHTTPHeaderField: "X-GitHub-Api-Version")
-            request.setValue("SnipStudioMac/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+            request.setValue("SnipDesk/\(currentVersion)", forHTTPHeaderField: "User-Agent")
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse, http.url == url else { throw Failure.unexpectedResponse }
             guard http.statusCode == 200 else { throw Failure.serviceUnavailable(http.statusCode) }
@@ -82,9 +82,8 @@ enum MacUpdateChecker {
     }
 
     private static func macVersion(from name: String) -> Version? {
-        let prefix = "SnipStudio-"
         let normalized = name.lowercased()
-        guard normalized.hasPrefix(prefix.lowercased()),
+        guard let prefix = ["snipdesk-", "snipstudio-"].first(where: { normalized.hasPrefix($0) }),
               let suffix = ["-macos-arm64-trial.dmg", "-macos-arm64.dmg"].first(where: { normalized.hasSuffix($0) }),
               name.count > prefix.count + suffix.count else { return nil }
         return Version(String(name.dropFirst(prefix.count).dropLast(suffix.count)))
@@ -196,10 +195,10 @@ enum MacUpdateChecker {
 
         var errorDescription: String? {
             switch self {
-            case .invalidAppVersion: "Snip Studio could not read the installed app version."
-            case .unexpectedResponse: "GitHub returned a release list Snip Studio could not verify."
+            case .invalidAppVersion: "Snip Desk could not read the installed app version."
+            case .unexpectedResponse: "GitHub returned a release list Snip Desk could not verify."
             case .serviceUnavailable(let status): "GitHub could not provide the release list (HTTP \(status)). Try again later."
-            case .incompleteCatalog: "Snip Studio could not finish checking the release list. Try again later."
+            case .incompleteCatalog: "Snip Desk could not finish checking the release list. Try again later."
             }
         }
     }

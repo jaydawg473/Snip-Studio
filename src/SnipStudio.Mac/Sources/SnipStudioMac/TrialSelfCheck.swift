@@ -17,6 +17,7 @@ enum TrialSelfCheck {
             try StudioFreeformMask.selfCheck()
             try StudioOCRReplacement.selfCheck()
             try StudioTranslationServer.selfCheck()
+            try checkMacUpdateNames()
             if #available(macOS 15.0, *) {
                 try StudioTranslationReviewSelfCheck.run()
                 let crop = try StudioScreenRecorder.displayRect(
@@ -49,6 +50,29 @@ enum TrialSelfCheck {
             FileHandle.standardError.write(Data("Mac trial check failed: \(error)\n".utf8))
             return 1
         }
+    }
+
+    private static func checkMacUpdateNames() throws {
+        let page = "https://github.com/jaydawg473/Snip-Studio/releases/tag/mac-v0.2.0"
+        let downloads = "https://github.com/jaydawg473/Snip-Studio/releases/download/mac-v0.2.0"
+        guard let releasePage = URL(string: page) else { throw CheckFailure("create the Mac update page fixture") }
+
+        func resolve(asset name: String) throws -> MacUpdateChecker.Result {
+            let release: [String: Any] = [
+                "tag_name": "mac-v0.2.0", "html_url": page, "draft": false, "prerelease": false,
+                "assets": [["name": name, "state": "uploaded", "size": 100, "browser_download_url": "\(downloads)/\(name)"]]
+            ]
+            let data = try JSONSerialization.data(withJSONObject: [release])
+            return try MacUpdateChecker.resolve(releaseData: data, currentVersion: "0.1.0")
+        }
+
+        let expected = MacUpdateChecker.Result.available(version: "0.2.0", releasePage: releasePage)
+        let renamed = try resolve(asset: "SnipDesk-0.2.0-macOS-arm64-trial.dmg")
+        let legacy = try resolve(asset: "SnipStudio-0.2.0-macOS-arm64.dmg")
+        let windows = try resolve(asset: "SnipStudio-0.2.0-Setup.exe")
+        try require(renamed == expected && legacy == expected && windows == .noMacRelease,
+                    "Mac updates recognize both download names and ignore Windows installers")
+        print("PASS: Snip Desk and legacy Mac update naming")
     }
 
     private static func checkWindowsProjects() async throws {

@@ -188,7 +188,7 @@ private enum CaptureFailure: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permissionRequired:
-            "Allow Snip Studio in System Settings under Privacy & Security → Screen & System Audio Recording. Then reopen the app and try again."
+            "Allow Snip Desk in System Settings under Privacy & Security → Screen & System Audio Recording. Then reopen the app and try again."
         case .timedOut:
             "The capture selection timed out. Start a new capture to try again."
         case .systemFailure(let status):

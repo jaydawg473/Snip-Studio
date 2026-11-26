@@ -38,7 +38,7 @@ struct StudioSettingsBackup {
     private enum Failure: LocalizedError {
         case invalidArchive
 
-        var errorDescription: String? { "This file is not a complete Snip Studio Mac settings backup." }
+        var errorDescription: String? { "Choose a complete Mac settings backup exported from the app." }
     }
 }
 
@@ -55,7 +55,7 @@ struct StudioSettingsBackupSection: View {
             Text("Includes capture and editor preferences. macOS permissions and login items stay under System Settings.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
-        .alert("Snip Studio Settings", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
+        .alert("Snip Desk Settings", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
             Button("OK", role: .cancel) { message = nil }
         } message: {
             Text(message ?? "")
@@ -65,7 +65,7 @@ struct StudioSettingsBackupSection: View {
     private func save() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.json]
-        panel.nameFieldStringValue = "Snip Studio Settings.json"
+        panel.nameFieldStringValue = "Snip Desk Settings.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             try StudioSettingsBackup.save(to: url)

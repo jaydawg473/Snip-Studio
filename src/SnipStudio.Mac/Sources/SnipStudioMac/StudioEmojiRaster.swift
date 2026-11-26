@@ -116,7 +116,7 @@ enum StudioEmojiRaster {
             switch self {
             case .invalidSticker: "Choose one emoji sticker between 1 and 512 pixels."
             case .unavailableArtwork: "This Mac could not render the sticker in color. Choose another emoji."
-            case .allocation: "Snip Studio could not allocate the emoji image. Try a smaller sticker."
+            case .allocation: "Snip Desk could not allocate the emoji image. Try a smaller sticker."
             }
         }
     }

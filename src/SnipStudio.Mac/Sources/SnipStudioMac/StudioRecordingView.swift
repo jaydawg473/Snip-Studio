@@ -132,7 +132,7 @@ struct StudioRecordingView: View {
             }
         }
         .alert(
-            "Snip Studio Recording",
+            "Snip Desk Recording",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
         ) {
             Button("OK", role: .cancel) { errorMessage = nil }

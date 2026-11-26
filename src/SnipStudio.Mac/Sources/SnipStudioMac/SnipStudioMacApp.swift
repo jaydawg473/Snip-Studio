@@ -19,7 +19,7 @@ struct SnipStudioMacApp: App {
     @AppStorage(StudioDesktopIntegration.showInMenuBar) private var showInMenuBar = false
 
     var body: some Scene {
-        WindowGroup("Snip Studio", id: "studio", for: UUID.self) { $sessionID in
+        WindowGroup("Snip Desk", id: "studio", for: UUID.self) { $sessionID in
             StudioView(applicationDelegate: applicationDelegate, sessionID: sessionID)
                 .modifier(StudioGlobalCaptureRegistration(applicationDelegate: applicationDelegate, shortcut: shortcut))
         }
@@ -60,7 +60,7 @@ struct SnipStudioMacApp: App {
         .defaultSize(width: 840, height: 620)
         .windowResizability(.contentMinSize)
 
-        MenuBarExtra("Snip Studio", systemImage: "camera.viewfinder", isInserted: $showInMenuBar) {
+        MenuBarExtra("Snip Desk", systemImage: "camera.viewfinder", isInserted: $showInMenuBar) {
             StudioMenuBarContent(applicationDelegate: applicationDelegate)
         }
     }

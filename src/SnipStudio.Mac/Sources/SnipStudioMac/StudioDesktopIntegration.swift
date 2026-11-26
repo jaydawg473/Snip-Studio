@@ -43,7 +43,7 @@ struct StudioDesktopSettingsView: View {
 
     var body: some View {
         Section("Desktop") {
-            Toggle("Show Snip Studio in the menu bar", isOn: $showInMenuBar)
+            Toggle("Show Snip Desk in the menu bar", isOn: $showInMenuBar)
             Toggle("Enable the global capture shortcut", isOn: $shortcutEnabled)
             if shortcutEnabled {
                 Picker("Capture shortcut", selection: $shortcutChord) {
@@ -53,13 +53,13 @@ struct StudioDesktopSettingsView: View {
             if shortcutEnabled, let error = shortcut.errorMessage {
                 Text(error).font(.footnote).foregroundStyle(.secondary)
             }
-            Toggle("Open Snip Studio at login", isOn: Binding(
+            Toggle("Open Snip Desk at login", isOn: Binding(
                 get: { loginStatus == .enabled || loginStatus == .requiresApproval },
                 set: { requested in setLaunchAtLogin(requested) }
             ))
             if loginStatus == .requiresApproval {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Approve Snip Studio in System Settings to finish setting up launch at login.")
+                    Text("Approve Snip Desk in System Settings to finish setting up launch at login.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     Button("Open Login Items") { SMAppService.openSystemSettingsLoginItems() }
@@ -107,9 +107,9 @@ struct StudioMenuBarContent: View {
     var body: some View {
         Button("New Region Snip", action: captureRegion)
             .disabled(applicationDelegate.captureInProgress)
-        Button("Open Snip Studio", action: openStudio)
+        Button("Open Snip Desk", action: openStudio)
         Divider()
-        Button("Quit Snip Studio") { NSApp.terminate(nil) }
+        Button("Quit Snip Desk") { NSApp.terminate(nil) }
     }
 
     private func openStudio() {

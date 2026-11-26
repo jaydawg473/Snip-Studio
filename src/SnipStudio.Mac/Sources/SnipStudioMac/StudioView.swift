@@ -120,7 +120,7 @@ struct StudioView: View {
                 .accessibilityHidden(true)
         }
         .alert(
-            "Snip Studio",
+            "Snip Desk",
             isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })
         ) {
             Button("OK", role: .cancel) { errorMessage = nil }
@@ -128,7 +128,7 @@ struct StudioView: View {
             Text(errorMessage ?? "")
         }
         .alert(
-            "Snip Studio Updates",
+            "Snip Desk Updates",
             isPresented: Binding(get: { updateMessage != nil }, set: { if !$0 { updateMessage = nil } })
         ) {
             if let updateURL { Button("View release") { NSWorkspace.shared.open(updateURL) } }
@@ -153,7 +153,7 @@ struct StudioView: View {
             Button("Convert to text") { convertOCRSelection() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Snip Studio uses the recognized characters as shown. Undo restores the original image.")
+            Text("Snip Desk uses the recognized characters as shown. Undo restores the original image.")
         }
         .focusedSceneValue(\.studioNewSnip, startNew)
         .focusedSceneValue(\.studioHistory, StudioHistoryCommands(
@@ -371,7 +371,7 @@ struct StudioView: View {
             Divider()
             SettingsLink { Text("Settings…") }
             Button("Check for Updates…") { checkForUpdates() }.disabled(updateTask != nil)
-            Button("Snip Studio Help") { openHelp() }
+            Button("Snip Desk Help") { openHelp() }
         } label: {
             Image(systemName: "ellipsis").font(.system(size: 17))
                 .accessibilityLabel("More file actions")
@@ -1583,7 +1583,7 @@ struct StudioView: View {
 
     private func checkForUpdates() {
         guard updateTask == nil else { return }
-        status = "Checking for Snip Studio updates…"
+        status = "Checking for Snip Desk updates…"
         updateTask = Task { @MainActor in
             defer { updateTask = nil }
             do {
@@ -1591,11 +1591,11 @@ struct StudioView: View {
                 try Task.checkCancellation()
                 updateURL = nil
                 switch result {
-                case .noMacRelease: updateMessage = "There is no published Mac release on the Snip Studio repository yet."
-                case .upToDate: updateMessage = "This version of Snip Studio is up to date."
+                case .noMacRelease: updateMessage = "There is no published Snip Desk release yet."
+                case .upToDate: updateMessage = "This version of Snip Desk is up to date."
                 case let .available(version, releasePage):
                     updateURL = releasePage
-                    updateMessage = "Snip Studio \(version) is available for this Mac."
+                    updateMessage = "Snip Desk \(version) is available for this Mac."
                 }
                 status = "Update check complete."
             } catch is CancellationError {
@@ -1615,7 +1615,7 @@ private enum StudioError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .imageUnreadable: "Snip Studio could not read that image."
+        case .imageUnreadable: "Snip Desk could not read that image."
         case .noClipboardImage: "The clipboard doesn't contain an image."
         case .copyFailed: "The clipboard could not accept the result. Try copying again."
         case .externalEditorUnavailable: "macOS could not open the working copy in an image editor."

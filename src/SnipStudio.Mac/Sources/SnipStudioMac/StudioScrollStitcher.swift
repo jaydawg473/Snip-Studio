@@ -301,7 +301,7 @@ struct StudioScrollStitcher: Sendable {
         var errorDescription: String? {
             switch self {
             case .areaTooSmall: "Choose a scrolling area at least 32 pixels wide and 64 pixels tall."
-            case .cannotRender: "Snip Studio could not render the scrolling capture."
+            case .cannotRender: "Snip Desk could not render the scrolling capture."
             }
         }
     }

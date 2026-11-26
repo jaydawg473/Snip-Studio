@@ -1,4 +1,4 @@
-# Snip Studio for macOS
+# Snip Desk for macOS
 
 The first trial targets Apple Silicon with macOS 14 or later. It uses Snip Studio's Windows layout for the launcher, capture controls, editor tools, contextual options, and zoom footer. It supports rectangle, window, full-screen, and all-monitor capture, image open and paste, pen, highlighter, shapes, erasing, Undo and Redo, on-device OCR through Vision, image and text clipboard copy, printing, and PNG, JPEG, BMP, and PDF export. [Windows feature checklist and Mac acceptance tests](PARITY.md)
 
@@ -8,7 +8,7 @@ From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certifi
 
 ## First-trial checks
 
-- Install from the signed disk image and open Snip Studio. Grant screen capture access when macOS asks.
+- Install `Snip Desk.app` from the signed `SnipDesk-<version>-macOS-arm64-trial.dmg`. If you installed an earlier local Mac build, replace its `Snip Studio.app` bundle. Grant Snip Desk screen capture access when macOS asks.
 - Capture a Retina region and a window, then check full-screen and multi-display captures. Check dimensions and display placement. Cancel a capture with Escape and make sure the current image stays open.
 - Draw near the top-left, add and erase a shape, then undo and redo. Check Fit and 100% at Retina scale, copy the image, and reopen each export format. Check Print Preview without submitting a physical job.
 - Run Text Actions on multiple lines including a filename with leading zeros. Check the overlay and paste copied text and a table into their intended apps. Test automatic copy and original saving with each option enabled and disabled.

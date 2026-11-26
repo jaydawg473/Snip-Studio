@@ -36,6 +36,9 @@ xcrun otool -l "$executable" | awk '
     END { if (!found || wrong) exit 1 }
 ' || { echo 'Translation must be weak-linked for the macOS 14 trial.' >&2; exit 1; }
 plutil -lint "$project/Info.plist"
+test "$(plutil -extract CFBundleDisplayName raw -o - "$project/Info.plist")" = 'Snip Desk'
+test "$(plutil -extract CFBundleName raw -o - "$project/Info.plist")" = 'Snip Desk'
+test "$(plutil -extract CFBundleIdentifier raw -o - "$project/Info.plist")" = com.automationforge.snipstudio
 test "$(plutil -extract CFBundleExecutable raw -o - "$project/Info.plist")" = SnipStudioMac
 test "$(plutil -extract LSMinimumSystemVersion raw -o - "$project/Info.plist")" = 14.0
 test "$(plutil -extract CFBundleIconFile raw -o - "$project/Info.plist")" = SnipStudio.icns

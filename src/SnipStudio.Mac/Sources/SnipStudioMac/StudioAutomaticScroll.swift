@@ -122,10 +122,10 @@ enum StudioAutomaticScroll {
             switch self {
             case .displayChanged: "The display or selected area changed. Select the area again."
             case .noWindow: "Select an area fully inside one visible app window for automatic scrolling."
-            case .eventPermission: "Allow Snip Studio in System Settings under Privacy & Security → Accessibility to use automatic scrolling."
+            case .eventPermission: "Allow Snip Desk in System Settings under Privacy & Security → Accessibility to use automatic scrolling."
             case .windowChanged: "The selected window moved, resized, closed, or became covered."
             case .windowNotActive: "The selected app is no longer active. Bring it forward before restarting automatic capture."
-            case .noScrollEvent: "Snip Studio could not prepare a scroll for this selection."
+            case .noScrollEvent: "Snip Desk could not prepare a scroll for this selection."
             case .invalidFixture: "Automatic scroll geometry did not pass its self-check."
             }
         }
