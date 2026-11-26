@@ -2,9 +2,9 @@
 
 The first trial targets Apple Silicon with macOS 14 or later. It supports region and window capture, opening images, pen annotations with Undo, on-device OCR through Vision, image and text clipboard copy, and PNG save.
 
-GitHub Actions builds the trial branch on macOS. For a signed trial disk image, use a Mac with Xcode, a Developer ID Application identity in its keychain, and a notarization credential configured in a local `notarytool` keychain profile.
+GitHub Actions builds the trial branch on macOS and verifies the app bundle layout, Apple Silicon architecture, macOS 14 minimum, and icon. For a signed trial disk image, use the GitHub signing job below or a Mac with Xcode, a Developer ID Application identity in its keychain, and a notarization credential configured in a local `notarytool` keychain profile.
 
-From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certificate name and `SNIPSTUDIO_NOTARY_PROFILE` to the local profile name. Run `bash src/SnipStudio.Mac/package-trial.sh <output-directory>`. The script builds and signs the app and disk image, waits for Apple notarization, staples the ticket, and verifies the disk image before copying it to the output directory.
+From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certificate name and `SNIPSTUDIO_NOTARY_PROFILE` to the local profile name. Run `bash src/SnipStudio.Mac/package-trial.sh <output-directory>`. The script signs the app and runs checks for full-resolution PNG export, ink positioning, Undo, OCR row ordering, and native Vision recognition. It then signs and notarizes the disk image, staples the ticket, and verifies the disk image before copying it to the output directory.
 
 ## First-trial checks
 

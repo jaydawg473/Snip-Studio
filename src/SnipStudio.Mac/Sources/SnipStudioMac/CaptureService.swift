@@ -36,7 +36,24 @@ struct CaptureService {
             withIntermediateDirectories: false,
             attributes: [.posixPermissions: NSNumber(value: 0o700)]
         )
-        defer { try? files.removeItem(at: workspace) }
+        let capture = Process()
+        var launched = false
+        defer {
+            if launched && capture.isRunning {
+                // Termination is asynchronous. Let the selector finish with its files first.
+                capture.terminationHandler = { _ in
+                    try? FileManager.default.removeItem(at: workspace)
+                }
+                if capture.isRunning {
+                    capture.terminate()
+                } else {
+                    // The process may have exited before the handler was registered.
+                    try? files.removeItem(at: workspace)
+                }
+            } else {
+                try? files.removeItem(at: workspace)
+            }
+        }
 
         let output = workspace.appendingPathComponent("capture.png")
         let diagnostic = workspace.appendingPathComponent("capture.log")
@@ -44,7 +61,6 @@ struct CaptureService {
         let diagnosticWriter = try FileHandle(forWritingTo: diagnostic)
         defer { try? diagnosticWriter.close() }
 
-        let capture = Process()
         capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
         let selectionFlags = mode == .region ? ["-s"] : ["-w", "-o"]
         capture.arguments = ["-i", "-x", "-t", "png"] + selectionFlags + [output.path]
@@ -52,9 +68,7 @@ struct CaptureService {
         capture.standardOutput = FileHandle.nullDevice
         capture.standardError = diagnosticWriter
         try capture.run()
-        defer {
-            if capture.isRunning { capture.terminate() }
-        }
+        launched = true
 
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .seconds(120))
@@ -71,7 +85,7 @@ struct CaptureService {
             let reader = try FileHandle(forReadingFrom: diagnostic)
             defer { try? reader.close() }
             let outputErrors = try reader.read(upToCount: 4096) ?? Data()
-            guard status == 0 || (status == 1 && outputErrors.isEmpty) else {
+            guard (status == 0 || status == 1) && outputErrors.isEmpty else {
                 throw CaptureFailure.systemFailure(status)
             }
             return nil

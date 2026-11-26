@@ -2,8 +2,10 @@ import AppKit
 import Combine
 import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
-struct InkStroke {
+struct InkStroke: Sendable {
     let color: CGColor
     let width: CGFloat
     var points: [CGPoint]
@@ -100,8 +102,55 @@ final class EditorDocument: ObservableObject {
         annotationRevision += 1
     }
 
-    func renderedImage() throws -> CGImage {
+    func pngSnapshot() throws -> PngSnapshot {
         guard let image else { throw EditorDocumentError.noImage }
+        return PngSnapshot(image: image, strokes: strokes, annotationRevision: annotationRevision)
+    }
+
+    func pngData() async throws -> Data {
+        try await pngSnapshot().pngData()
+    }
+}
+
+struct PngSnapshot: Sendable {
+    fileprivate let image: CGImage
+    fileprivate let strokes: [InkStroke]
+    let annotationRevision: Int
+
+    func pngData() async throws -> Data {
+        try await encodePNG { $0 }
+    }
+
+    func writePNG(to url: URL) async throws {
+        try await encodePNG { try $0.write(to: url, options: .atomic) }
+    }
+
+    private func encodePNG<Result: Sendable>(_ consume: @escaping @Sendable (Data) throws -> Result) async throws -> Result {
+        try Task.checkCancellation()
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let raster = try self.renderedImage()
+            try Task.checkCancellation()
+
+            guard let encoded = CFDataCreateMutable(nil, 0),
+                  let destination = CGImageDestinationCreateWithData(encoded, UTType.png.identifier as CFString, 1, nil) else {
+                throw EditorDocumentError.encodeFailed
+            }
+            CGImageDestinationAddImage(destination, raster, nil)
+            guard CGImageDestinationFinalize(destination) else { throw EditorDocumentError.encodeFailed }
+
+            let png = encoded as Data
+            try Task.checkCancellation()
+            return try consume(png)
+        }
+        return try await withTaskCancellationHandler {
+            try await worker.value
+        } onCancel: {
+            worker.cancel()
+        }
+    }
+
+    private func renderedImage() throws -> CGImage {
         guard !strokes.isEmpty else { return image }
         guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(
@@ -117,19 +166,12 @@ final class EditorDocument: ObservableObject {
         context.translateBy(x: 0, y: CGFloat(image.height))
         context.scaleBy(x: 1, y: -1)
         for stroke in strokes {
+            try Task.checkCancellation()
             context.setFillColor(stroke.color)
             context.addPath(stroke.outline)
             context.fillPath()
         }
         guard let rendered = context.makeImage() else { throw EditorDocumentError.renderFailed }
         return rendered
-    }
-
-    func pngData() throws -> Data {
-        let bitmap = NSBitmapImageRep(cgImage: try renderedImage())
-        guard let data = bitmap.representation(using: .png, properties: [:]) else {
-            throw EditorDocumentError.encodeFailed
-        }
-        return data
     }
 }

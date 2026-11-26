@@ -2,7 +2,6 @@
 set -euo pipefail
 
 project="$(cd "$(dirname "$0")" && pwd -P)"
-repo="$(cd "$project/../.." && pwd -P)"
 if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
     echo 'The trial package needs an Apple Silicon Mac with Xcode.' >&2
     exit 1
@@ -30,26 +29,12 @@ work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
 stage="$work/image"
 bundle="$stage/Snip Studio.app"
-icons="$work/SnipStudio.iconset"
-mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources" "$icons"
-
-swift build --package-path "$project" --configuration release
-binaries="$(swift build --package-path "$project" --configuration release --show-bin-path)"
-install -m 755 "$binaries/SnipStudioMac" "$bundle/Contents/MacOS/SnipStudioMac"
-cp "$project/Info.plist" "$bundle/Contents/Info.plist"
-plutil -lint "$bundle/Contents/Info.plist"
-
-for size in 16 32 128 256; do
-    name="icon_${size}x${size}"
-    sips -z "$size" "$size" "$repo/assets/app-512.png" --out "$icons/$name.png" >/dev/null
-    doubled=$((size * 2))
-    sips -z "$doubled" "$doubled" "$repo/assets/app-512.png" --out "$icons/${name}@2x.png" >/dev/null
-done
-cp "$repo/assets/app-512.png" "$icons/icon_512x512.png"
-iconutil -c icns "$icons" -o "$bundle/Contents/Resources/SnipStudio.icns"
+mkdir "$stage"
+bash "$project/stage-app.sh" "$bundle"
 
 codesign --options runtime --timestamp --sign "$SNIPSTUDIO_SIGNING_IDENTITY" "$bundle"
 codesign --verify --strict --verbose=2 "$bundle"
+"$bundle/Contents/MacOS/SnipStudioMac" --self-check
 
 dmg="$work/trial.dmg"
 hdiutil create -volname "Snip Studio" -srcfolder "$stage" -format UDZO "$dmg"

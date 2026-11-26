@@ -9,12 +9,13 @@ struct StudioView: View {
     @State private var inkWidth: CGFloat = 4
     @State private var captureInProgress = false
     @State private var recognitionInProgress = false
+    @State private var exportTask: Task<Void, Never>?
     @State private var recognizedText: String?
     @State private var savedAnnotationRevision = 0
     @State private var status = "Capture a region or window to start."
     @State private var errorMessage: String?
 
-    private var busy: Bool { captureInProgress || recognitionInProgress }
+    private var busy: Bool { captureInProgress || recognitionInProgress || exportTask != nil }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -71,11 +72,11 @@ struct StudioView: View {
                 Button("Recognize Text", systemImage: "text.viewfinder") { recognizeText() }
                     .disabled(busy || !document.hasImage)
 
-                Button("Copy Image", systemImage: "doc.on.doc") { copyImage() }
-                    .disabled(!document.hasImage)
+                Button("Copy Image", systemImage: "doc.on.doc") { exportImage() }
+                    .disabled(busy || !document.hasImage)
 
                 Button("Save PNG", systemImage: "square.and.arrow.down") { saveImage() }
-                    .disabled(!document.hasImage)
+                    .disabled(busy || !document.hasImage)
             }
         }
         .alert(
@@ -86,6 +87,7 @@ struct StudioView: View {
         } message: {
             Text(errorMessage ?? "")
         }
+        .onDisappear { exportTask?.cancel() }
     }
 
     private var canvas: some View {
@@ -121,7 +123,7 @@ struct StudioView: View {
                     .textSelection(.enabled)
             }
             Button("Copy Text", systemImage: "doc.on.doc") { copyText(text) }
-                .disabled(text.isEmpty)
+                .disabled(text.isEmpty || exportTask != nil)
         }
         .padding(14)
     }
@@ -190,16 +192,6 @@ struct StudioView: View {
         }
     }
 
-    private func copyImage() {
-        do {
-            let png = try document.pngData()
-            let item = NSPasteboardItem()
-            guard item.setData(png, forType: .png) else { throw StudioError.copyFailed }
-            try copy(item)
-            status = "Image copied."
-        } catch { report(error) }
-    }
-
     private func copyText(_ text: String) {
         do {
             let item = NSPasteboardItem()
@@ -216,14 +208,43 @@ struct StudioView: View {
     }
 
     private func saveImage() {
+        guard !busy, document.hasImage else { return }
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.png]
         panel.nameFieldStringValue = "Snip.png"
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        exportImage(to: url)
+    }
+
+    private func exportImage(to url: URL? = nil) {
+        guard !busy, document.hasImage else { return }
         do {
-            try document.pngData().write(to: url, options: .atomic)
-            savedAnnotationRevision = document.annotationRevision
-            status = "Saved \(url.lastPathComponent)."
+            let snapshot = try document.pngSnapshot()
+            status = url == nil ? "Preparing image for the clipboard…" : "Saving PNG…"
+            exportTask = Task { @MainActor in
+                defer { exportTask = nil }
+                do {
+                    if let url {
+                        try await snapshot.writePNG(to: url)
+                        savedAnnotationRevision = snapshot.annotationRevision
+                        status = "Saved \(url.lastPathComponent)."
+                        if document.annotationRevision != snapshot.annotationRevision {
+                            status += " Newer edits are unsaved."
+                        }
+                    } else {
+                        let png = try await snapshot.pngData()
+                        try Task.checkCancellation()
+                        let item = NSPasteboardItem()
+                        guard item.setData(png, forType: .png) else { throw StudioError.copyFailed }
+                        try copy(item)
+                        status = "Image copied."
+                    }
+                } catch is CancellationError {
+                    status = "Image export canceled."
+                } catch {
+                    report(error)
+                }
+            }
         } catch { report(error) }
     }
 
