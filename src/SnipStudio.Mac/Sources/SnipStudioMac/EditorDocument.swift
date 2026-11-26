@@ -6,6 +6,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 struct InkStroke: Sendable {
+    let revision = UUID()
     let color: CGColor
     let width: CGFloat
     var points: [CGPoint]
@@ -50,13 +51,16 @@ final class EditorDocument: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var strokes: [InkStroke] = []
     @Published private(set) var draftStroke: InkStroke?
-    private(set) var annotationRevision = 0
+    private var imageRevision = UUID()
+    private var savedRevision: UUID?
 
     var hasImage: Bool { image != nil }
     var canUndo: Bool { !strokes.isEmpty }
     var isDrawing: Bool { draftStroke != nil }
+    var hasUnsavedChanges: Bool { hasImage && savedRevision != revision }
+    private var revision: UUID { strokes.last?.revision ?? imageRevision }
 
-    func replaceImage(_ source: NSImage) throws {
+    func replaceImage(_ source: NSImage, alreadySaved: Bool) throws {
         // Prefer the full raster representation so Retina captures retain their native pixels.
         let nativeRaster = source.representations
             .compactMap { ($0 as? NSBitmapImageRep)?.cgImage }
@@ -70,8 +74,9 @@ final class EditorDocument: ObservableObject {
         }
         draftStroke = nil
         strokes.removeAll()
+        imageRevision = UUID()
+        savedRevision = alreadySaved ? imageRevision : nil
         image = raster
-        annotationRevision = 0
     }
 
     func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
@@ -88,7 +93,6 @@ final class EditorDocument: ObservableObject {
         guard let stroke = draftStroke else { return }
         strokes.append(stroke)
         draftStroke = nil
-        annotationRevision += 1
     }
 
     func cancelStroke() {
@@ -99,12 +103,16 @@ final class EditorDocument: ObservableObject {
         cancelStroke()
         guard !strokes.isEmpty else { return }
         strokes.removeLast()
-        annotationRevision += 1
+    }
+
+    func markSaved(_ snapshot: PngSnapshot) {
+        guard snapshot.imageRevision == imageRevision else { return }
+        savedRevision = snapshot.revision
     }
 
     func pngSnapshot() throws -> PngSnapshot {
         guard let image else { throw EditorDocumentError.noImage }
-        return PngSnapshot(image: image, strokes: strokes, annotationRevision: annotationRevision)
+        return PngSnapshot(image: image, strokes: strokes, imageRevision: imageRevision, revision: revision)
     }
 
     func pngData() async throws -> Data {
@@ -115,7 +123,8 @@ final class EditorDocument: ObservableObject {
 struct PngSnapshot: Sendable {
     fileprivate let image: CGImage
     fileprivate let strokes: [InkStroke]
-    let annotationRevision: Int
+    fileprivate let imageRevision: UUID
+    fileprivate let revision: UUID
 
     func pngData() async throws -> Data {
         try await encodePNG { $0 }

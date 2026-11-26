@@ -4,6 +4,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 struct StudioView: View {
+    let applicationDelegate: StudioApplicationDelegate
     @StateObject private var document = EditorDocument()
     @State private var inkColor = Color.red
     @State private var inkWidth: CGFloat = 4
@@ -11,7 +12,6 @@ struct StudioView: View {
     @State private var recognitionInProgress = false
     @State private var exportTask: Task<Void, Never>?
     @State private var recognizedText: String?
-    @State private var savedAnnotationRevision = 0
     @State private var status = "Capture a region or window to start."
     @State private var errorMessage: String?
 
@@ -54,6 +54,11 @@ struct StudioView: View {
             .padding(.vertical, 9)
         }
         .frame(minWidth: 650, minHeight: 390)
+        .background {
+            StudioCloseProtection(document: document, applicationDelegate: applicationDelegate)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .toolbar {
             ToolbarItemGroup(placement: .automatic) {
                 Menu("Capture", systemImage: "camera.viewfinder") {
@@ -129,14 +134,14 @@ struct StudioView: View {
     }
 
     private func capture(_ mode: CaptureMode) {
-        guard !busy, confirmImageReplacement() else { return }
+        guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
         captureInProgress = true
         status = "Select the area to capture."
         Task { @MainActor in
             defer { captureInProgress = false }
             do {
                 if let image = try await CaptureService.capture(mode) {
-                    try load(image)
+                    try load(image, alreadySaved: false)
                 } else {
                     status = "Capture canceled."
                 }
@@ -147,7 +152,7 @@ struct StudioView: View {
     }
 
     private func openImage() {
-        guard !busy, confirmImageReplacement() else { return }
+        guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
@@ -156,24 +161,13 @@ struct StudioView: View {
             report(StudioError.imageUnreadable)
             return
         }
-        do { try load(image) } catch { report(error) }
+        do { try load(image, alreadySaved: true) } catch { report(error) }
     }
 
-    private func load(_ image: NSImage) throws {
-        try document.replaceImage(image)
+    private func load(_ image: NSImage, alreadySaved: Bool) throws {
+        try document.replaceImage(image, alreadySaved: alreadySaved)
         recognizedText = nil
-        savedAnnotationRevision = 0
         status = "Screenshot ready."
-    }
-
-    private func confirmImageReplacement() -> Bool {
-        guard document.annotationRevision != savedAnnotationRevision else { return true }
-        let alert = NSAlert()
-        alert.messageText = "Replace the current screenshot?"
-        alert.informativeText = "Save or copy the edited screenshot first if you want to keep it."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Replace")
-        return alert.runModal() == .alertSecondButtonReturn
     }
 
     private func recognizeText() {
@@ -226,9 +220,9 @@ struct StudioView: View {
                 do {
                     if let url {
                         try await snapshot.writePNG(to: url)
-                        savedAnnotationRevision = snapshot.annotationRevision
+                        document.markSaved(snapshot)
                         status = "Saved \(url.lastPathComponent)."
-                        if document.annotationRevision != snapshot.annotationRevision {
+                        if document.hasUnsavedChanges {
                             status += " Newer edits are unsaved."
                         }
                     } else {

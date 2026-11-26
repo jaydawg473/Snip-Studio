@@ -13,9 +13,11 @@ enum SnipStudioMacEntry {
 }
 
 struct SnipStudioMacApp: App {
+    @NSApplicationDelegateAdaptor private var applicationDelegate: StudioApplicationDelegate
+
     var body: some Scene {
         Window("Snip Studio", id: "studio") {
-            StudioView()
+            StudioView(applicationDelegate: applicationDelegate)
         }
         .defaultSize(width: 850, height: 600)
     }

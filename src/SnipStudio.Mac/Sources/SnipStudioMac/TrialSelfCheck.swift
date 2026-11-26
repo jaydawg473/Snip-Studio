@@ -22,13 +22,16 @@ enum TrialSelfCheck {
         let background = try whiteBitmap(width: 120, height: 80)
         guard let source = background.makeImage() else { throw CheckFailure("create editor fixture") }
         let document = EditorDocument()
-        try document.replaceImage(NSImage(cgImage: source, size: NSSize(width: 60, height: 40)))
+        let image = NSImage(cgImage: source, size: NSSize(width: 60, height: 40))
+        try document.replaceImage(image, alreadySaved: true)
+        try require(!document.hasUnsavedChanges, "an opened image starts clean")
 
         let red = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
         document.beginStroke(at: CGPoint(x: 20, y: 12), color: red, width: 14)
         document.extendStroke(to: CGPoint(x: 28, y: 12))
         document.finishStroke()
         try require(document.canUndo, "completed stroke is undoable")
+        try require(document.hasUnsavedChanges, "drawing makes an opened snip dirty")
 
         let rendered = try await decodedPNG(from: document)
         try require(rendered.width == 120 && rendered.height == 80, "PNG retains original pixels at Retina scale")
@@ -41,8 +44,24 @@ enum TrialSelfCheck {
         let restored = try await decodedPNG(from: document)
         let restoredTop = try pixel(in: restored, x: 22, y: 12)
         try require(!document.canUndo, "Undo removes the only stroke")
+        try require(!document.hasUnsavedChanges, "Undo to the opened image clears the dirty state")
         try require(restoredTop.prefix(3).allSatisfy { $0 > 235 }, "Undo restores the underlying pixels")
         print("PASS: native raster size, top-left ink export, and Undo")
+
+        try document.replaceImage(image, alreadySaved: false)
+        try require(document.hasUnsavedChanges, "a new capture is unsaved even without ink")
+        let captured = try document.pngSnapshot()
+        document.beginStroke(at: CGPoint(x: 16, y: 12), color: red, width: 4)
+        document.finishStroke()
+        document.markSaved(captured)
+        try require(document.hasUnsavedChanges, "saving an older snapshot preserves the dirty state of a newer edit")
+
+        document.undo()
+        try require(!document.hasUnsavedChanges, "Undo back to the saved snapshot clears the dirty state")
+        try document.replaceImage(image, alreadySaved: false)
+        document.markSaved(captured)
+        try require(document.hasUnsavedChanges, "an older capture cannot mark its replacement as saved")
+        print("PASS: unsaved capture and annotation state across saves, Undo, and replacement")
     }
 
     private static func checkRowOrder() throws {
