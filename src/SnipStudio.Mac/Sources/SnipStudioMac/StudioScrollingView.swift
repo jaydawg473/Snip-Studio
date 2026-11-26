@@ -156,9 +156,11 @@ struct StudioScrollingView: View {
         }
     }
 
-    private func appendScreen(_ display: StudioScrollDisplay, region: CGRect) async throws -> StudioScrollStitcher.Outcome {
+    private func appendScreen(_ display: StudioScrollDisplay, region: CGRect,
+                              verifying target: StudioAutomaticScroll.Target? = nil) async throws -> StudioScrollStitcher.Outcome {
         let frame = try await StudioScrollCaptureSource.snapshot(display: display, region: region)
         try Task.checkCancellation()
+        if let target { try StudioAutomaticScroll.validate(target) }
         let result = try await session.append(frame)
         acceptedFrames = result.count
         outputHeight = result.height
@@ -177,18 +179,18 @@ struct StudioScrollingView: View {
                         try await Task.sleep(for: .seconds(1))
                     }
                     try StudioAutomaticScroll.validate(target)
-                    if acceptedFrames == 0 { _ = try await appendScreen(display, region: region) }
+                    if acceptedFrames == 0 { _ = try await appendScreen(display, region: region, verifying: target) }
                     for _ in 0..<24 {
                         try Task.checkCancellation()
                         status = "Capturing and stitching the next view…"
                         try StudioAutomaticScroll.scroll(target, regionHeight: region.height)
                         try await Task.sleep(for: .milliseconds(360))
                         try StudioAutomaticScroll.validate(target)
-                        var result = try await appendScreen(display, region: region)
+                        var result = try await appendScreen(display, region: region, verifying: target)
                         if result == .repeated {
                             try await Task.sleep(for: .milliseconds(260))
                             try StudioAutomaticScroll.validate(target)
-                            result = try await appendScreen(display, region: region)
+                            result = try await appendScreen(display, region: region, verifying: target)
                         }
                         switch result {
                         case .firstFrame, .appended:

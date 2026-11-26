@@ -10,7 +10,7 @@ enum StudioSettings {
 struct StudioSettingsView: View {
     let shortcut: StudioGlobalShortcut
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
-    @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
+    @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = false
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
     @AppStorage(StudioSettings.resizeToSnip) private var resizeToSnip = true
     @AppStorage(StudioTranslationServer.preferenceKey) private var translationServer = ""

@@ -153,8 +153,7 @@ final class StudioScreenRecorder: ObservableObject {
                 guard let self, let recording, self.session === recording else { return }
                 recording.fail(error)
                 if self.state == .recording {
-                    self.lastError = error.localizedDescription
-                    self.reset(recording, keepingFile: false)
+                    self.lastError = self.keepDraft(recording, after: error).localizedDescription
                 }
             }
             session = recording
@@ -187,9 +186,15 @@ final class StudioScreenRecorder: ObservableObject {
                 throw RecordingFailure.publishFailed(recording.paths.draft, error)
             }
         } catch {
-            if session === recording { reset(recording, keepingFile: false) }
+            if session === recording { throw keepDraft(recording, after: error) }
             throw error
         }
+    }
+
+    private func keepDraft(_ active: RecordingSession, after error: Error) -> RecordingFailure {
+        active.cancel(removeDraft: false)
+        reset(active, keepingFile: true)
+        return .unfinishedDraft(active.paths.draft, error)
     }
 
     func cancel() async {
@@ -373,11 +378,11 @@ private final class RecordingSession {
         finished.resolve(.failure(error))
     }
 
-    func cancel() {
+    func cancel(removeDraft: Bool = true) {
         abandoned = true
         fail(CancellationError())
         if calledStart { stream.stopCapture(completionHandler: nil) }
-        paths.removeDraft()
+        if removeDraft { paths.removeDraft() }
     }
 }
 
@@ -480,6 +485,7 @@ private enum RecordingFailure: LocalizedError {
     case sourceUnavailable, invalidArea, selectionChanged, windowAdjustment, unsupportedFormat
     case busy, notRecording, sourcesTimedOut, previewTimedOut, startTimedOut, stopTimedOut, noVideo
     case publishFailed(URL, Error)
+    case unfinishedDraft(URL, Error)
 
     var errorDescription: String? {
         switch self {
@@ -500,6 +506,8 @@ private enum RecordingFailure: LocalizedError {
         case .noVideo: "No video was recorded. Start a new recording and let it run before stopping."
         case let .publishFailed(file, cause):
             "The recording could not be moved to the Movies folder. The original is at \(file.path). \(cause.localizedDescription)"
+        case let .unfinishedDraft(file, cause):
+            "The recording didn’t finish. Any recoverable video was left at \(file.path). \(cause.localizedDescription)"
         }
     }
 }

@@ -3,8 +3,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct StudioSettingsBackup {
-    private static let keys = [StudioSettings.autoCopy, StudioSettings.saveOriginals, StudioSettings.fitOnLoad,
-                               StudioSettings.resizeToSnip]
+    private static let valuesByKey = [StudioSettings.autoCopy: true, StudioSettings.saveOriginals: false,
+                                      StudioSettings.fitOnLoad: true, StudioSettings.resizeToSnip: true]
 
     private struct Archive: Codable {
         let version: Int
@@ -13,7 +13,9 @@ struct StudioSettingsBackup {
 
     @MainActor
     static func save(_ defaults: UserDefaults = .standard, to url: URL) throws {
-        let values = Dictionary(uniqueKeysWithValues: keys.map { ($0, defaults.object(forKey: $0) as? Bool ?? true) })
+        let values = Dictionary(uniqueKeysWithValues: valuesByKey.map { key, fallback in
+            (key, defaults.object(forKey: key) as? Bool ?? fallback)
+        })
         let data = try JSONEncoder().encode(Archive(version: 1, preferences: values))
         try data.write(to: url, options: .atomic)
     }
@@ -29,7 +31,7 @@ struct StudioSettingsBackup {
         let data = try input.read(upToCount: 65_537) ?? Data()
         guard data.count <= 65_536,
               let archive = try? JSONDecoder().decode(Archive.self, from: data), archive.version == 1,
-              Set(archive.preferences.keys) == Set(keys) else { throw Failure.invalidArchive }
+              Set(archive.preferences.keys) == Set(valuesByKey.keys) else { throw Failure.invalidArchive }
         for (key, value) in archive.preferences { defaults.set(value, forKey: key) }
     }
 

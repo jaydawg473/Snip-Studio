@@ -1,5 +1,13 @@
 import SwiftUI
 
+struct StudioRedactionSnapshot: Identifiable {
+    let id = UUID()
+    let image: CGImage
+    let contacts: [OCRContact]
+    let revision: UUID
+    let containsAnnotations: Bool
+}
+
 extension OCRContact {
     func pixelRegion(in size: CGSize) -> CGRect {
         let raw = CGRect(x: bounds.minX * size.width, y: (1 - bounds.maxY) * size.height,
@@ -11,6 +19,7 @@ extension OCRContact {
 struct StudioRedactionReview: View {
     let image: CGImage
     let contacts: [OCRContact]
+    let containsAnnotations: Bool
     let apply: ([OCRContact]) -> Void
 
     @Environment(\.dismiss) private var dismiss
@@ -21,6 +30,10 @@ struct StudioRedactionReview: View {
             Text("Review quick redactions").font(.headline)
             Text("Check that the marked areas cover the information you want to hide.")
                 .font(.callout).foregroundStyle(.secondary)
+            if containsAnnotations {
+                Text("Applying redactions flattens annotations. Undo restores the editable original.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
             GeometryReader { viewport in
                 let size = CGSize(width: image.width, height: image.height)
                 let scale = min(viewport.size.width / size.width, viewport.size.height / size.height)

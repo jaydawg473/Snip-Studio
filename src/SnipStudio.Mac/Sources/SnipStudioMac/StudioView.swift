@@ -9,7 +9,7 @@ struct StudioView: View {
     @Environment(\.openWindow) private var openWindow
     @StateObject private var document = EditorDocument()
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
-    @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
+    @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = false
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
     @AppStorage(StudioSettings.resizeToSnip) private var resizeToSnip = true
     @State private var captureMode = CaptureMode.region
@@ -50,8 +50,7 @@ struct StudioView: View {
     @State private var selectedOCRIndices: Set<Int> = []
     @State private var selectsOCRWords = false
     @State private var reviewText = false
-    @State private var reviewedContacts: [OCRContact] = []
-    @State private var reviewRedactions = false
+    @State private var redactionReview: StudioRedactionSnapshot?
     @State private var confirmOCRConversion = false
     @State private var translationLines: [RecognizedLine] = []
     @State private var translationRevision: UUID?
@@ -137,12 +136,9 @@ struct StudioView: View {
         .sheet(isPresented: $reviewText) {
             textReview
         }
-        .sheet(isPresented: $reviewRedactions) {
-            if let image = document.image {
-                StudioRedactionReview(image: image, contacts: reviewedContacts) { contacts in
-                    let size = CGSize(width: image.width, height: image.height)
-                    patchRaster(contacts.map { $0.pixelRegion(in: size) }, opaque: true)
-                }
+        .sheet(item: $redactionReview) { review in
+            StudioRedactionReview(image: review.image, contacts: review.contacts, containsAnnotations: review.containsAnnotations) { contacts in
+                applyRedaction(contacts, from: review)
             }
         }
         .sheet(isPresented: $reviewTranslation) {
@@ -382,6 +378,13 @@ struct StudioView: View {
     }
 
     private var editingBar: some View {
+        GeometryReader { geometry in editingRow(compact: geometry.size.width < 590) }
+            .frame(height: 36)
+            .background(StudioColors.toolbar)
+            .disabled(textDraft != nil)
+    }
+
+    private func editingRow(compact: Bool) -> some View {
         HStack(spacing: 2) {
             toolButton(.move, label: "Move view", symbol: "arrow.up.and.down.and.arrow.left.and.right")
             toolButton(.pen, label: "Pen", symbol: "pencil.tip", color: inkColor)
@@ -418,15 +421,17 @@ struct StudioView: View {
             iconButton("Text actions", symbol: "wand.and.stars", selected: tool == .textActions, action: toggleTextActions)
                 .disabled(busy)
             Divider().frame(height: 20).padding(.horizontal, 4)
-            Button { editInApp() } label: { Label("Edit in app", systemImage: "pencil") }
-                .buttonStyle(StudioButtonStyle())
-                .disabled(busy)
+            if compact {
+                iconButton("Edit in app", symbol: "pencil", action: editInApp).disabled(busy)
+            } else {
+                Button { editInApp() } label: { Label("Edit in app", systemImage: "pencil") }
+                    .buttonStyle(StudioButtonStyle())
+                    .disabled(busy)
+            }
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
-        .frame(height: 36)
-        .background(StudioColors.toolbar)
-        .disabled(textDraft != nil)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
     }
 
     @ViewBuilder
@@ -622,7 +627,7 @@ struct StudioView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .disabled(recognizedText.isEmpty || busy)
+            .disabled(busy)
             iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
                 .disabled(recognizedText.isEmpty)
             Menu {
@@ -1029,12 +1034,13 @@ struct StudioView: View {
     }
 
     private func openProject(_ url: URL) {
+        let revision = document.contentRevision
         status = "Opening editable Mac snip…"
         exportTask = Task { @MainActor in
             defer { exportTask = nil }
             do {
                 let contents = try await StudioProjectFile.load(from: url)
-                try await document.openProject(contents)
+                try await document.openProject(contents, replacing: revision)
                 presentLoadedImage(alreadySaved: true)
                 recordRecent(url)
             } catch is CancellationError {
@@ -1280,12 +1286,50 @@ struct StudioView: View {
     }
 
     private func redactContacts(kind: OCRContact.Kind? = nil) {
-        reviewedContacts = (recognizedLines?.flatMap(\.contacts) ?? []).filter { kind == nil || $0.kind == kind }
-        guard !reviewedContacts.isEmpty else {
-            status = "No matching email addresses or phone numbers were recognized."
-            return
+        guard !busy, !document.isDrawing else { return }
+        do {
+            let snapshot = try document.pngSnapshot()
+            let stamp = document.contentRevision
+            let containsAnnotations = !document.strokes.isEmpty
+            let cached = containsAnnotations ? nil : recognizedLines
+            status = "Looking for email addresses and phone numbers in the visible snip…"
+            exportTask = Task { @MainActor in
+                defer { exportTask = nil }
+                do {
+                    let rendered = try await Task.detached(priority: .userInitiated) { try snapshot.rasterForExport() }.value
+                    let lines: [RecognizedLine]
+                    if let cached { lines = cached } else { lines = try await TextRecognition.recognizeLines(rendered) }
+                    try Task.checkCancellation()
+                    guard document.contentRevision == stamp, !document.isDrawing else { throw EditorDocumentError.rasterChanged }
+                    let contacts = lines.flatMap(\.contacts).filter { kind == nil || $0.kind == kind }
+                    if contacts.isEmpty {
+                        status = "No matching email addresses or phone numbers were recognized."
+                    } else {
+                        redactionReview = StudioRedactionSnapshot(image: rendered, contacts: contacts, revision: stamp,
+                                                                  containsAnnotations: containsAnnotations)
+                        status = "Review the proposed redactions."
+                    }
+                } catch is CancellationError {
+                    return
+                } catch { report(error) }
+            }
+        } catch { report(error) }
+    }
+
+    private func applyRedaction(_ contacts: [OCRContact], from review: StudioRedactionSnapshot) {
+        guard !busy, !contacts.isEmpty else { return }
+        let size = CGSize(width: review.image.width, height: review.image.height)
+        let regions = contacts.map { $0.pixelRegion(in: size) }
+        exportTask = Task { @MainActor in
+            defer { exportTask = nil }
+            do {
+                try await document.applyRedactions(regions, to: review.image, expectedRevision: review.revision)
+                selectTool(.pen)
+                status = "Redactions applied. Review the screenshot before sharing."
+            } catch is CancellationError {
+                return
+            } catch { report(error) }
         }
-        reviewRedactions = true
     }
 
     private func patchRaster(_ regions: [CGRect], opaque: Bool) {

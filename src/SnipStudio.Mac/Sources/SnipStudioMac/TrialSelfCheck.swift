@@ -29,6 +29,7 @@ enum TrialSelfCheck {
             }
             try await StudioProjectFile.selfCheck()
             try await checkRasterPatches()
+            try await checkRedactionAndProjectReplacement()
             try await checkShapesAndEraser()
             try await checkCrop()
             try await checkObjectEditing()
@@ -66,6 +67,39 @@ enum TrialSelfCheck {
         let redacted = try pixel(in: exported, x: 4, y: 5)
         try require(redacted == [0, 0, 0, 255], "redaction overwrites the actual exported color and alpha channels")
         print("PASS: pixels removed and redacted in output and Undo restores source")
+    }
+
+    private static func checkRedactionAndProjectReplacement() async throws {
+        let bitmap = try whiteBitmap(width: 180, height: 80)
+        guard let original = bitmap.makeImage() else { throw CheckFailure("create editable redaction fixture") }
+        let document = EditorDocument()
+        try document.replaceImage(NSImage(cgImage: original, size: CGSize(width: 180, height: 80)), alreadySaved: true)
+        let openRevision = document.contentRevision
+        let note = StudioTextAnnotation(text: "test@example.com", fontName: "Menlo-Regular", pixelSize: 12)
+        try document.applyText(note, at: CGPoint(x: 12, y: 18), color: CGColor(gray: 0, alpha: 1), updating: nil)
+        guard let visible = document.strokes.first, visible.textNote?.text == note.text else {
+            throw CheckFailure("create editable contact text")
+        }
+        do {
+            try await document.openProject(StudioProjectContents(image: original, annotations: []), replacing: openRevision)
+            throw CheckFailure("project replacement must refuse newly added notes")
+        } catch EditorDocumentError.documentChangedDuringOpen {
+            try require(document.strokes.first?.id == visible.id, "new edits survive a conflicting project open")
+        }
+
+        let snapshot = try document.pngSnapshot()
+        let revision = document.contentRevision
+        let rendered = try await Task.detached { try snapshot.rasterForExport() }.value
+        let patch = visible.bounds.insetBy(dx: -1, dy: -1)
+        try await document.applyRedactions([patch], to: rendered, expectedRevision: revision)
+        try require(document.strokes.isEmpty, "the redacted document contains no recoverable text annotation")
+        let png = try await decodedPNG(from: document)
+        let fill = try pixel(in: png, x: Int(patch.midX), y: Int(patch.midY))
+        let outside = try pixel(in: png, x: 3, y: 3)
+        try require(fill == [0, 0, 0, 255] && outside == [255, 255, 255, 255], "redaction is opaque and limited to the approved area")
+        document.undo()
+        try require(document.strokes.first?.id == visible.id, "Undo restores editable work after Quick Redact")
+        print("PASS: installed projects respect newer edits and redaction removes recoverable note text")
     }
 
     private static func checkObjectEditing() async throws {

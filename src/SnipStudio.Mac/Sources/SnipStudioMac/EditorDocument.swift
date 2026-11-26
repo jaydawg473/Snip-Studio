@@ -340,6 +340,7 @@ enum EditorDocumentError: LocalizedError {
     case invalidProjectAnnotation
     case rasterChanged
     case overlappingOCRText
+    case documentChangedDuringOpen
 
     var errorDescription: String? {
         switch self {
@@ -353,6 +354,7 @@ enum EditorDocumentError: LocalizedError {
         case .invalidProjectAnnotation: "The editable snip contains an annotation that could not be restored safely."
         case .rasterChanged: "The screenshot changed before this action finished. Try again."
         case .overlappingOCRText: "The selected text overlaps another selection or annotation. Edit that annotation directly, or select a single line."
+        case .documentChangedDuringOpen: "This snip changed while the project was opening. Your edits are still here. Open the project again when you’re ready to replace this snip."
         }
     }
 }
@@ -388,11 +390,14 @@ final class EditorDocument: ObservableObject {
         try replace(raster: raster, annotations: [], alreadySaved: alreadySaved)
     }
 
-    func openProject(_ contents: StudioProjectContents) async throws {
+    func openProject(_ contents: StudioProjectContents, replacing revision: UUID? = nil) async throws {
         let annotations = try await Task.detached(priority: .userInitiated) {
             try contents.annotations.map(InkStroke.init(projectRecord:))
         }.value
         try Task.checkCancellation()
+        if let revision, contentRevision != revision || isDrawing || hasPendingTextChanges {
+            throw EditorDocumentError.documentChangedDuringOpen
+        }
         try replace(raster: contents.image, annotations: annotations, alreadySaved: true)
     }
 
@@ -481,6 +486,27 @@ final class EditorDocument: ObservableObject {
         let original = RasterState(image: source, revision: rasterRevision, strokes: strokes)
         let edited = RasterState(image: result, revision: UUID(), strokes: strokes + newNotes)
         commit(.raster(before: original, after: edited))
+    }
+
+    func applyRedactions(_ regions: [CGRect], to rendered: CGImage, expectedRevision: UUID) async throws {
+        guard let originalImage = image, contentRevision == expectedRevision, !isDrawing, !hasPendingTextChanges,
+              rendered.width == originalImage.width, rendered.height == originalImage.height else {
+            throw EditorDocumentError.rasterChanged
+        }
+        let bounds = CGRect(x: 0, y: 0, width: rendered.width, height: rendered.height)
+        let patches = regions.compactMap { region -> RasterPatch? in
+            let pixels = region.standardized.intersection(bounds).integral
+            guard !pixels.isEmpty, pixels.minX.isFinite, pixels.minY.isFinite,
+                  pixels.maxX.isFinite, pixels.maxY.isFinite else { return nil }
+            return RasterPatch(rect: pixels, color: CGColor(gray: 0, alpha: 1))
+        }
+        guard !patches.isEmpty else { return }
+        let redacted = try await Self.render(rendered, patches: patches)
+        try Task.checkCancellation()
+        guard contentRevision == expectedRevision, !isDrawing, !hasPendingTextChanges else { throw EditorDocumentError.rasterChanged }
+        let original = RasterState(image: originalImage, revision: rasterRevision, strokes: strokes)
+        // Black out the rendered image and discard recoverable annotation text from the current document.
+        commit(.raster(before: original, after: RasterState(image: redacted, revision: UUID(), strokes: [])))
     }
 
     private struct RasterPatch: Sendable {
