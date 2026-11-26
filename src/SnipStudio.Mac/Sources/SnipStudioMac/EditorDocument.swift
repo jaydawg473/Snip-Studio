@@ -1,0 +1,135 @@
+import AppKit
+import Combine
+import CoreGraphics
+import Foundation
+
+struct InkStroke {
+    let color: CGColor
+    let width: CGFloat
+    var points: [CGPoint]
+
+    // Both renderers consume the same image-space outline.
+    var outline: CGPath {
+        let path = CGMutablePath()
+        guard let first = points.first else { return path }
+        if points.count == 1 {
+            let radius = width / 2
+            path.addEllipse(in: CGRect(
+                x: first.x - radius, y: first.y - radius, width: width, height: width
+            ))
+            return path
+        }
+
+        path.addLines(between: points)
+        return path.copy(strokingWithWidth: width, lineCap: .round, lineJoin: .round, miterLimit: 1)
+    }
+}
+
+enum EditorDocumentError: LocalizedError {
+    case noImage
+    case unreadableImage
+    case imageTooLarge
+    case renderFailed
+    case encodeFailed
+
+    var errorDescription: String? {
+        switch self {
+        case .noImage: "Capture or open a snip first."
+        case .unreadableImage: "The image could not be opened."
+        case .imageTooLarge: "This image is too large to edit. Choose an image up to 64 million pixels."
+        case .renderFailed: "The edited snip could not be rendered."
+        case .encodeFailed: "The snip could not be encoded as a PNG."
+        }
+    }
+}
+
+@MainActor
+final class EditorDocument: ObservableObject {
+    @Published private(set) var image: CGImage?
+    @Published private(set) var strokes: [InkStroke] = []
+    @Published private(set) var draftStroke: InkStroke?
+    private(set) var annotationRevision = 0
+
+    var hasImage: Bool { image != nil }
+    var canUndo: Bool { !strokes.isEmpty }
+    var isDrawing: Bool { draftStroke != nil }
+
+    func replaceImage(_ source: NSImage) throws {
+        // Prefer the full raster representation so Retina captures retain their native pixels.
+        let nativeRaster = source.representations
+            .compactMap { ($0 as? NSBitmapImageRep)?.cgImage }
+            .max { lhs, rhs in Double(lhs.width) * Double(lhs.height) < Double(rhs.width) * Double(rhs.height) }
+        guard let raster = nativeRaster ?? source.cgImage(forProposedRect: nil, context: nil, hints: nil),
+              raster.width > 0, raster.height > 0 else {
+            throw EditorDocumentError.unreadableImage
+        }
+        guard raster.width <= 64_000_000 / raster.height else {
+            throw EditorDocumentError.imageTooLarge
+        }
+        draftStroke = nil
+        strokes.removeAll()
+        image = raster
+        annotationRevision = 0
+    }
+
+    func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
+        guard image != nil, !isDrawing, width.isFinite, width > 0 else { return }
+        draftStroke = InkStroke(color: color, width: width, points: [point])
+    }
+
+    func extendStroke(to point: CGPoint) {
+        guard let lastPoint = draftStroke?.points.last, lastPoint != point else { return }
+        draftStroke?.points.append(point)
+    }
+
+    func finishStroke() {
+        guard let stroke = draftStroke else { return }
+        strokes.append(stroke)
+        draftStroke = nil
+        annotationRevision += 1
+    }
+
+    func cancelStroke() {
+        if draftStroke != nil { draftStroke = nil }
+    }
+
+    func undo() {
+        cancelStroke()
+        guard !strokes.isEmpty else { return }
+        strokes.removeLast()
+        annotationRevision += 1
+    }
+
+    func renderedImage() throws -> CGImage {
+        guard let image else { throw EditorDocumentError.noImage }
+        guard !strokes.isEmpty else { return image }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(
+                  data: nil, width: image.width, height: image.height,
+                  bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else {
+            throw EditorDocumentError.renderFailed
+        }
+        context.draw(image, in: CGRect(x: 0, y: 0, width: CGFloat(image.width), height: CGFloat(image.height)))
+
+        // Ink uses the canvas's top-left origin. Only flip the annotation drawing.
+        context.translateBy(x: 0, y: CGFloat(image.height))
+        context.scaleBy(x: 1, y: -1)
+        for stroke in strokes {
+            context.setFillColor(stroke.color)
+            context.addPath(stroke.outline)
+            context.fillPath()
+        }
+        guard let rendered = context.makeImage() else { throw EditorDocumentError.renderFailed }
+        return rendered
+    }
+
+    func pngData() throws -> Data {
+        let bitmap = NSBitmapImageRep(cgImage: try renderedImage())
+        guard let data = bitmap.representation(using: .png, properties: [:]) else {
+            throw EditorDocumentError.encodeFailed
+        }
+        return data
+    }
+}
