@@ -100,6 +100,11 @@ struct StudioRecordingView: View {
         .padding(12)
         .frame(minWidth: 425)
         .background(StudioColors.toolbar)
+        .background {
+            StudioRecordingChrome(recordingFrame: recorder.recordingFrame, isActive: isActive)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
         .fixedSize(horizontal: false, vertical: true)
         .task { await reloadSources() }
         .onChange(of: selectedID) { _, _ in selectedArea = nil }

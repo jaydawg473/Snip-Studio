@@ -12,6 +12,8 @@ enum TrialSelfCheck {
             try StudioTextAnnotationSelfCheck.run()
             try StudioEmojiRasterSelfCheck.run()
             try StudioScrollStitcher.selfCheck()
+            try StudioAutomaticScroll.selfCheck()
+            try StudioRecordingChromeGeometry.selfCheck()
             try StudioFreeformMask.selfCheck()
             try StudioOCRReplacement.selfCheck()
             if #available(macOS 15.0, *) {

@@ -11,6 +11,7 @@ struct StudioView: View {
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
     @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
+    @AppStorage(StudioSettings.resizeToSnip) private var resizeToSnip = true
     @State private var captureMode = CaptureMode.region
     @State private var videoMode = false
     @State private var captureDelay = 0
@@ -110,7 +111,9 @@ struct StudioView: View {
         .background(StudioColors.canvas)
         .frame(minWidth: 520, minHeight: document.hasImage ? 320 : 260)
         .background {
-            StudioCloseProtection(document: document, applicationDelegate: applicationDelegate)
+            StudioCloseProtection(document: document, applicationDelegate: applicationDelegate,
+                                  imageSize: document.image.map { CGSize(width: $0.width, height: $0.height) },
+                                  resizeToSnip: resizeToSnip)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
         }

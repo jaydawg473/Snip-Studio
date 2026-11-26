@@ -4,6 +4,7 @@ enum StudioSettings {
     static let autoCopy = "autoCopyCapturesAndEdits"
     static let saveOriginals = "autoSaveOriginalCaptures"
     static let fitOnLoad = "fitSnipsOnOpen"
+    static let resizeToSnip = "resizeNewWindowsToSnip"
 }
 
 struct StudioSettingsView: View {
@@ -11,6 +12,7 @@ struct StudioSettingsView: View {
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
     @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
+    @AppStorage(StudioSettings.resizeToSnip) private var resizeToSnip = true
 
     var body: some View {
         Form {
@@ -35,11 +37,13 @@ struct StudioSettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
+                Toggle("Resize new windows to the snip", isOn: $resizeToSnip)
             }
             StudioDesktopSettingsView(shortcut: shortcut)
+            StudioSettingsBackupSection()
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
-        .frame(width: 520, height: 450)
+        .frame(width: 540, height: 510)
     }
 }

@@ -13,6 +13,7 @@ struct StudioScrollingView: View {
     @State private var acceptedFrames = 0
     @State private var outputHeight = 0
     @State private var busy = false
+    @State private var automaticTask: Task<Void, Never>?
     @State private var showsSelection = false
     @State private var confirmReset = false
     @State private var review: StitchReview?
@@ -20,6 +21,7 @@ struct StudioScrollingView: View {
     @State private var status = "Select the part of a display that you want to capture."
 
     private var display: StudioScrollDisplay? { displays.first { $0.id == displayID } }
+    private var working: Bool { busy || automaticTask != nil }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -28,26 +30,33 @@ struct StudioScrollingView: View {
                     if displays.isEmpty { Text("No display available").tag(nil as CGDirectDisplayID?) }
                     ForEach(displays) { display in Text(display.title).tag(Optional(display.id)) }
                 }
-                .disabled(busy || acceptedFrames > 0)
+                .disabled(working || acceptedFrames > 0)
                 Button("Select area…") { showsSelection = true }
-                    .disabled(display == nil || busy || acceptedFrames > 0)
+                    .disabled(display == nil || working || acceptedFrames > 0)
             }
             HStack(spacing: 8) {
                 Button(acceptedFrames == 0 ? "Capture first view" : "Capture next view") { capture() }
                     .buttonStyle(StudioButtonStyle(primary: true))
-                    .disabled(display == nil || selectedArea == nil || busy)
+                    .disabled(display == nil || selectedArea == nil || working)
+                if let automaticTask {
+                    Button("Stop") { automaticTask.cancel() }
+                        .buttonStyle(StudioButtonStyle(primary: true))
+                } else {
+                    Button("Start auto scroll") { startAutomaticCapture() }
+                        .disabled(display == nil || selectedArea == nil || working)
+                }
                 Button("Review capture…") { finish() }
-                    .disabled(acceptedFrames == 0 || busy)
+                    .disabled(acceptedFrames == 0 || working)
                 Spacer()
                 Button("Restart…") { confirmReset = true }
-                    .disabled(acceptedFrames == 0 || busy)
+                    .disabled(acceptedFrames == 0 || working)
             }
             if acceptedFrames > 0 {
                 Text("\(acceptedFrames) captured views · \(outputHeight) px high")
                     .monospacedDigit().font(.caption).foregroundStyle(.secondary)
             }
             HStack(alignment: .top, spacing: 6) {
-                if busy { ProgressView().controlSize(.small).accessibilityLabel("Working") }
+                if working { ProgressView().controlSize(.small).accessibilityLabel("Working") }
                 Text(status).font(.callout).fixedSize(horizontal: false, vertical: true)
             }
             .frame(minHeight: 38, alignment: .topLeading)
@@ -56,6 +65,12 @@ struct StudioScrollingView: View {
         .padding(16)
         .frame(minWidth: 480, minHeight: 190)
         .background(StudioColors.toolbar)
+        .background {
+            StudioRecordingChrome(recordingFrame: nil, isActive: automaticTask != nil)
+                .frame(width: 0, height: 0)
+                .accessibilityHidden(true)
+        }
+        .onDisappear { automaticTask?.cancel() }
         .task {
             do {
                 displays = try await StudioScrollCaptureSource.displays()
@@ -118,17 +133,14 @@ struct StudioScrollingView: View {
     }
 
     private func capture() {
-        guard let display, let selectedArea, !busy else { return }
+        guard let display, let selectedArea, !working else { return }
         busy = true
         status = "Capturing this view…"
         Task { @MainActor in
             defer { busy = false }
             do {
-                let frame = try await StudioScrollCaptureSource.snapshot(display: display, region: selectedArea)
-                let result = try await session.append(frame)
-                acceptedFrames = result.count
-                outputHeight = result.height
-                switch result.outcome {
+                let outcome = try await appendScreen(display, region: selectedArea)
+                switch outcome {
                 case .firstFrame, .appended:
                     status = "Scroll down within the source window, keep part of the last view visible, then capture the next view."
                 case .repeated:
@@ -144,8 +156,64 @@ struct StudioScrollingView: View {
         }
     }
 
+    private func appendScreen(_ display: StudioScrollDisplay, region: CGRect) async throws -> StudioScrollStitcher.Outcome {
+        let frame = try await StudioScrollCaptureSource.snapshot(display: display, region: region)
+        try Task.checkCancellation()
+        let result = try await session.append(frame)
+        acceptedFrames = result.count
+        outputHeight = result.height
+        return result.outcome
+    }
+
+    private func startAutomaticCapture() {
+        guard let display, let region = selectedArea, !working else { return }
+        do {
+            let target = try StudioAutomaticScroll.target(display: display, region: region)
+            automaticTask = Task { @MainActor in
+                defer { automaticTask = nil }
+                do {
+                    for second in (1...3).reversed() {
+                        status = "Bring \(target.title) to the front. Auto scroll starts in \(second)s."
+                        try await Task.sleep(for: .seconds(1))
+                    }
+                    try StudioAutomaticScroll.validate(target)
+                    if acceptedFrames == 0 { _ = try await appendScreen(display, region: region) }
+                    for _ in 0..<24 {
+                        try Task.checkCancellation()
+                        status = "Capturing and stitching the next view…"
+                        try StudioAutomaticScroll.scroll(target, regionHeight: region.height)
+                        try await Task.sleep(for: .milliseconds(360))
+                        try StudioAutomaticScroll.validate(target)
+                        var result = try await appendScreen(display, region: region)
+                        if result == .repeated {
+                            try await Task.sleep(for: .milliseconds(260))
+                            try StudioAutomaticScroll.validate(target)
+                            result = try await appendScreen(display, region: region)
+                        }
+                        switch result {
+                        case .firstFrame, .appended:
+                            continue
+                        case .repeated:
+                            status = "The source stopped moving. Review the captured views."
+                        case .noMatch, .ambiguous:
+                            status = "The next view didn’t align. Review the accepted views, or restore overlap and continue manually."
+                        case .sizeLimit:
+                            status = "The capture reached its size limit. Review the accepted views."
+                        }
+                        return
+                    }
+                    status = "Automatic capture paused after 24 steps. Review the captured views or continue."
+                } catch is CancellationError {
+                    status = "Automatic capture stopped. The accepted views are ready to review."
+                } catch {
+                    status = error.localizedDescription
+                }
+            }
+        } catch { status = error.localizedDescription }
+    }
+
     private func finish() {
-        guard !busy else { return }
+        guard !working else { return }
         busy = true
         Task { @MainActor in
             defer { busy = false }

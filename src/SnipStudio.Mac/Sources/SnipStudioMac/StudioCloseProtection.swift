@@ -95,19 +95,24 @@ final class StudioApplicationDelegate: NSObject, NSApplicationDelegate {
 struct StudioCloseProtection: NSViewRepresentable {
     let document: EditorDocument
     let applicationDelegate: StudioApplicationDelegate
+    var imageSize: CGSize? = nil
+    var resizeToSnip = true
 
     func makeNSView(context: Context) -> StudioCloseProtectionView {
         StudioCloseProtectionView(document: document, applicationDelegate: applicationDelegate)
     }
 
     func updateNSView(_ view: StudioCloseProtectionView, context: Context) {
-        view.install()
+        view.update(imageSize: imageSize, resizeToSnip: resizeToSnip)
     }
 }
 
 @MainActor
 final class StudioCloseProtectionView: NSView {
     private let closeDelegate: StudioWindowDelegate
+    private var imageSize: CGSize?
+    private var pendingImageSize: CGSize?
+    private var resizeScheduled = false
 
     init(document: EditorDocument, applicationDelegate: StudioApplicationDelegate) {
         closeDelegate = StudioWindowDelegate(document: document, applicationDelegate: applicationDelegate)
@@ -127,9 +132,33 @@ final class StudioCloseProtectionView: NSView {
         Task { @MainActor [weak self] in self?.install() }
     }
 
-    func install() {
+    func update(imageSize: CGSize?, resizeToSnip: Bool) {
+        if self.imageSize != imageSize {
+            self.imageSize = imageSize
+            pendingImageSize = imageSize
+        }
+        if !resizeToSnip { pendingImageSize = nil }
+        install()
+    }
+
+    private func install() {
         guard let window else { return }
         closeDelegate.install(on: window)
+        scheduleResize()
+    }
+
+    private func scheduleResize() {
+        guard pendingImageSize != nil, !resizeScheduled else { return }
+        resizeScheduled = true
+        Task { @MainActor [weak self] in
+            // Set the native frame after SwiftUI has applied the editor's content minimum.
+            await Task.yield()
+            guard let self else { return }
+            self.resizeScheduled = false
+            guard let imageSize = self.pendingImageSize, self.window != nil else { return }
+            self.pendingImageSize = nil
+            self.closeDelegate.resizeToFit(imageSize)
+        }
     }
 }
 
@@ -139,6 +168,9 @@ fileprivate final class StudioWindowDelegate: NSObject, NSWindowDelegate {
     private(set) weak var window: NSWindow?
     private weak var applicationDelegate: StudioApplicationDelegate?
     private weak var originalDelegate: (any NSWindowDelegate)?
+    private var liveResizeStartSize: CGSize?
+    private var wasResizedManually = false
+    private var lastAutomaticFrame: CGRect?
 
     init(document: EditorDocument, applicationDelegate: StudioApplicationDelegate) {
         self.document = document
@@ -169,9 +201,60 @@ fileprivate final class StudioWindowDelegate: NSObject, NSWindowDelegate {
         originalDelegate?.windowWillClose?(notification)
     }
 
+    func windowWillStartLiveResize(_ notification: Notification) {
+        liveResizeStartSize = window?.frame.size
+        originalDelegate?.windowWillStartLiveResize?(notification)
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        if let startSize = liveResizeStartSize, let window, window.frame.size != startSize {
+            wasResizedManually = true
+        }
+        liveResizeStartSize = nil
+        originalDelegate?.windowDidEndLiveResize?(notification)
+    }
+
+    func resizeToFit(_ imageSize: CGSize) {
+        guard let window, !wasResizedManually, liveResizeStartSize == nil, !window.inLiveResize,
+              !window.isMiniaturized, !window.styleMask.contains(.fullScreen),
+              let workArea = (window.screen ?? NSScreen.main)?.visibleFrame,
+              imageSize.width.isFinite, imageSize.height.isFinite,
+              imageSize.width > 0, imageSize.height > 0, workArea.width > 0, workArea.height > 0 else { return }
+
+        let currentFrame = window.frame
+        // AppKit also reports zoomed if an earlier automatic frame filled the work area.
+        guard !window.isZoomed || lastAutomaticFrame == currentFrame else { return }
+        let contentFrame = window.contentRect(forFrameRect: currentFrame)
+        let frameWidth = max(0, currentFrame.width - contentFrame.width)
+        let frameHeight = max(0, currentFrame.height - contentFrame.height)
+        let padding: CGFloat = 48
+        // Capture, editor, tool options and status rows are measured in points.
+        let controlHeight: CGFloat = 54 + 36 + 40 + 34
+        let displayScale = max(1, window.backingScaleFactor)
+        let nativeWidth = imageSize.width / displayScale
+        let nativeHeight = imageSize.height / displayScale
+        let fit = min(1, max(1, workArea.width - frameWidth - padding) / nativeWidth,
+                      max(1, workArea.height - frameHeight - controlHeight - padding) / nativeHeight)
+
+        let minimumWidth = max(520, window.contentMinSize.width) + frameWidth
+        let minimumHeight = max(320, window.contentMinSize.height) + frameHeight
+        let width = min(workArea.width, max(minimumWidth, ceil(nativeWidth * fit + padding + frameWidth)))
+        let height = min(workArea.height, max(minimumHeight, ceil(nativeHeight * fit + padding + frameHeight + controlHeight)))
+        let frame = CGRect(
+            x: max(workArea.minX, min(currentFrame.minX, workArea.maxX - width)),
+            y: max(workArea.minY, min(currentFrame.maxY - height, workArea.maxY - height)),
+            width: width, height: height
+        )
+        if frame != currentFrame {
+            window.setFrame(frame, display: true)
+            lastAutomaticFrame = window.frame
+        }
+    }
+
     private func unregisterWindow() {
         applicationDelegate?.unregister(self)
         window = nil
+        liveResizeStartSize = nil
     }
 
     // Preserve SwiftUI's optional window delegate callbacks.

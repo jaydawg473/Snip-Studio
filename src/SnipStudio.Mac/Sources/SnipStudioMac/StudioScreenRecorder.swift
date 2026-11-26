@@ -35,6 +35,7 @@ final class StudioScreenRecorder: ObservableObject {
 
     @Published private(set) var state: State = .idle
     @Published private(set) var lastError: String?
+    @Published private(set) var recordingFrame: CGRect?
     private var attempt: UUID?
     private var session: RecordingSession?
 
@@ -160,6 +161,7 @@ final class StudioScreenRecorder: ObservableObject {
             try recording.start()
             try await recording.started.wait(seconds: 15, onTimeout: .startTimedOut)
             try checkAttempt(id)
+            recordingFrame = target.fixedDesktopFrame
             state = .recording
         } catch {
             if attempt == id { reset(session, keepingFile: false) }
@@ -202,6 +204,7 @@ final class StudioScreenRecorder: ObservableObject {
     private func reset(_ active: RecordingSession?, keepingFile: Bool) {
         attempt = nil
         session = nil
+        recordingFrame = nil
         state = .idle
         if !keepingFile { active?.cancel() }
     }
@@ -240,8 +243,9 @@ final class StudioScreenRecorder: ObservableObject {
             }
             if area != nil && display.frame.size != source.size { throw RecordingFailure.selectionChanged }
             let selected = try recordingRect(area, within: display.frame.size)
+            let boundary = excluded.isEmpty || area == nil ? nil : selected.offsetBy(dx: display.frame.minX, dy: display.frame.minY)
             return ScreenTarget(filter: filter, size: selected.size, sourceRect: area == nil ? nil : selected,
-                                isolatesWindow: false)
+                                isolatesWindow: false, fixedDesktopFrame: boundary)
         case .window:
             guard let window = content.windows.first(where: {
                 $0.windowID == source.captureID && $0.isOnScreen && $0.windowLayer == 0 &&
@@ -249,7 +253,8 @@ final class StudioScreenRecorder: ObservableObject {
             }), hasArea(window.frame.size) else { throw RecordingFailure.sourceUnavailable }
             guard let area else {
                 let filter = SCContentFilter(desktopIndependentWindow: window)
-                return ScreenTarget(filter: filter, size: window.frame.size, sourceRect: nil, isolatesWindow: true)
+                return ScreenTarget(filter: filter, size: window.frame.size, sourceRect: nil,
+                                    isolatesWindow: true, fixedDesktopFrame: nil)
             }
             guard let displayID = source.adjustmentDisplayID else { throw RecordingFailure.windowAdjustment }
             guard let display = content.displays.first(where: { $0.displayID == displayID }),
@@ -259,7 +264,9 @@ final class StudioScreenRecorder: ObservableObject {
             }
             guard let filter = adjustedWindowFilter(window, on: display) else { throw RecordingFailure.windowAdjustment }
             let displayRect = try displayRect(for: area, windowFrame: window.frame, displayFrame: display.frame)
-            return ScreenTarget(filter: filter, size: displayRect.size, sourceRect: displayRect, isolatesWindow: true)
+            let boundary = displayRect.offsetBy(dx: display.frame.minX, dy: display.frame.minY)
+            return ScreenTarget(filter: filter, size: displayRect.size, sourceRect: displayRect,
+                                isolatesWindow: true, fixedDesktopFrame: boundary)
         }
     }
 
@@ -300,6 +307,7 @@ final class StudioScreenRecorder: ObservableObject {
         let size: CGSize
         let sourceRect: CGRect?
         let isolatesWindow: Bool
+        let fixedDesktopFrame: CGRect?
 
         func configureGeometry(_ config: SCStreamConfiguration) {
             if isolatesWindow {
