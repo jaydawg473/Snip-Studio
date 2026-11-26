@@ -6,6 +6,9 @@ import UniformTypeIdentifiers
 struct StudioView: View {
     let applicationDelegate: StudioApplicationDelegate
     @StateObject private var document = EditorDocument()
+    @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
+    @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
+    @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
     @State private var captureMode = CaptureMode.region
     @State private var captureDelay = 0
     @State private var captureTask: Task<Void, Never>?
@@ -14,11 +17,17 @@ struct StudioView: View {
     @State private var inkWidth: CGFloat = 4
     @State private var highlightColor = Color.yellow
     @State private var highlightWidth: CGFloat = 14
+    @State private var shape = SnipShape.rectangle
+    @State private var lineStyle = SnipLineStyle.solid
+    @State private var shapeColor = Color.red
+    @State private var shapeWidth: CGFloat = 3
     @State private var showOptions = true
     @State private var zoomPercent: Int?
     @State private var displayedZoom = 100
     @State private var recognitionInProgress = false
     @State private var exportTask: Task<Void, Never>?
+    @State private var automaticClipboardTask: Task<Void, Never>?
+    @State private var openedImageRevision: UUID?
     @State private var recognizedLines: [RecognizedLine]?
     @State private var reviewText = false
     @State private var status = "Ready."
@@ -26,8 +35,21 @@ struct StudioView: View {
 
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
-    private var drawingColor: Color { tool == .highlight ? highlightColor.opacity(0.42) : inkColor }
-    private var drawingWidth: CGFloat { tool == .highlight ? highlightWidth : inkWidth }
+    private var drawingColor: Color {
+        switch tool {
+        case .highlight: highlightColor.opacity(0.42)
+        case .shape: shapeColor
+        default: inkColor
+        }
+    }
+
+    private var drawingWidth: CGFloat {
+        switch tool {
+        case .highlight: highlightWidth
+        case .shape: shapeWidth
+        default: inkWidth
+        }
+    }
     private static let zoomPresets = [25, 50, 75, 100, 125, 150, 200, 300, 400]
 
     var body: some View {
@@ -41,7 +63,10 @@ struct StudioView: View {
                     inkColor: drawingColor,
                     inkWidth: drawingWidth,
                     zoom: zoomPercent.map { CGFloat($0) / 100 },
-                    allowsDrawing: tool == .pen || tool == .highlight,
+                    allowsDrawing: tool != .move && tool != .textActions,
+                    activeShape: tool == .shape ? shape : nil,
+                    lineStyle: lineStyle,
+                    erasesAnnotations: tool == .eraser,
                     recognizedLines: tool == .textActions ? recognizedLines ?? [] : []
                 ) { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
             } else {
@@ -72,6 +97,13 @@ struct StudioView: View {
         .onDisappear {
             captureTask?.cancel()
             exportTask?.cancel()
+            automaticClipboardTask?.cancel()
+        }
+        .onChange(of: document.contentRevision) { _, revision in
+            scheduleAutomaticCopy(revision)
+        }
+        .onChange(of: autoCopy) { _, enabled in
+            if !enabled { automaticClipboardTask?.cancel() }
         }
     }
 
@@ -130,6 +162,24 @@ struct StudioView: View {
                 .disabled(busy || !document.hasImage)
             iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
                 .disabled(busy || !document.hasImage)
+            Menu {
+                Menu("Save image as…") {
+                    ForEach(StudioFileFormat.allCases, id: \.self) { format in
+                        Button(format.title) { saveImage(as: format) }
+                    }
+                }
+                .disabled(busy || !document.hasImage)
+                Button("Print image…") { printImage() }.disabled(busy || !document.hasImage)
+                Divider()
+                SettingsLink { Text("Settings…") }
+            } label: {
+                Image(systemName: "ellipsis").font(.system(size: 17))
+                    .accessibilityLabel("More file actions")
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("More file actions")
         }
         .padding(.horizontal, 12)
         .frame(height: 54)
@@ -141,6 +191,25 @@ struct StudioView: View {
             toolButton(.move, label: "Move view", symbol: "arrow.up.and.down.and.arrow.left.and.right")
             toolButton(.pen, label: "Pen", symbol: "pencil.tip", color: inkColor)
             toolButton(.highlight, label: "Highlighter", symbol: "highlighter", color: highlightColor)
+            Menu {
+                ForEach(SnipShape.allCases, id: \.self) { selected in
+                    Button {
+                        shape = selected
+                        selectTool(.shape)
+                    } label: {
+                        Label(selected.rawValue.capitalized, systemImage: selected.icon)
+                    }
+                }
+            } label: {
+                Image(systemName: shape.icon).font(.system(size: 17))
+                    .padding(4)
+                    .background(tool == .shape ? StudioColors.selected : .clear, in: RoundedRectangle(cornerRadius: 5))
+                    .accessibilityLabel("Shapes")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Shapes")
+            toolButton(.eraser, label: "Eraser", symbol: "eraser")
             Divider().frame(height: 20).padding(.horizontal, 4)
             iconButton("Undo annotation", symbol: "arrow.uturn.backward", action: document.undo)
                 .disabled(!document.canUndo)
@@ -160,17 +229,27 @@ struct StudioView: View {
         switch tool {
         case .move:
             EmptyView()
-        case .pen, .highlight:
+        case .pen, .highlight, .shape:
             HStack(spacing: 10) {
-                ColorPicker("Ink color", selection: tool == .highlight ? $highlightColor : $inkColor, supportsOpacity: false)
+                ColorPicker("Ink color", selection: tool == .shape ? $shapeColor : (tool == .highlight ? $highlightColor : $inkColor), supportsOpacity: false)
                     .labelsHidden()
                     .help("Ink color")
-                Stepper(value: tool == .highlight ? $highlightWidth : $inkWidth, in: 1...30, step: 1) {
+                Stepper(value: tool == .shape ? $shapeWidth : (tool == .highlight ? $highlightWidth : $inkWidth), in: 1...30, step: 1) {
                     Text("\(Int(drawingWidth)) px").monospacedDigit()
                 }
                 .fixedSize()
                 .accessibilityLabel("Ink width")
                 StudioStrokeSample(color: drawingColor, width: drawingWidth)
+                if tool == .shape {
+                    Picker("Line style", selection: $lineStyle) {
+                        ForEach(SnipLineStyle.allCases, id: \.self) { style in
+                            Text(style.rawValue.capitalized).tag(style)
+                        }
+                    }
+                    .labelsHidden()
+                    .fixedSize()
+                    .help("Line style")
+                }
                 Spacer(minLength: 0)
                 iconButton("Hide options", symbol: "xmark") { showOptions = false }
             }
@@ -184,6 +263,11 @@ struct StudioView: View {
                 }
                 .buttonStyle(StudioButtonStyle())
                 .disabled(recognizedText.isEmpty || exportTask != nil)
+                Button { copyRecognizedTable() } label: {
+                    Label("Copy as table", systemImage: "tablecells")
+                }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(recognizedText.isEmpty || exportTask != nil)
                 Button { reviewText = true } label: {
                     Label("Review text…", systemImage: "text.alignleft")
                 }
@@ -191,6 +275,16 @@ struct StudioView: View {
                 .disabled(recognizedText.isEmpty)
                 Spacer(minLength: 0)
                 iconButton("Close text actions", symbol: "xmark") { selectTool(.pen) }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(StudioColors.options)
+        case .eraser:
+            HStack {
+                Text("Click or drag over an annotation to erase it.")
+                    .font(.system(size: 12))
+                Spacer(minLength: 0)
+                iconButton("Hide options", symbol: "xmark") { showOptions = false }
             }
             .padding(.horizontal, 12)
             .frame(height: 40)
@@ -287,6 +381,8 @@ struct StudioView: View {
         case .move: status = "Scroll to move around a zoomed screenshot."
         case .pen: status = "Draw on the screenshot."
         case .highlight: status = "Drag to highlight an area."
+        case .shape: status = "Drag to draw a \(shape.rawValue)."
+        case .eraser: status = "Erase annotations. Use Undo to restore them."
         case .textActions: break
         }
     }
@@ -312,6 +408,7 @@ struct StudioView: View {
                 status = mode == .region || mode == .window ? "Select what to capture." : "Capturing the screen…"
                 if let image = try await CaptureService.capture(mode) {
                     try load(image, alreadySaved: false)
+                    if saveOriginals { saveOriginalCapture() }
                 } else {
                     status = "Capture canceled."
                 }
@@ -347,8 +444,9 @@ struct StudioView: View {
 
     private func load(_ image: NSImage, alreadySaved: Bool) throws {
         try document.replaceImage(image, alreadySaved: alreadySaved)
+        openedImageRevision = alreadySaved ? document.contentRevision : nil
         recognizedLines = nil
-        zoomPercent = nil
+        zoomPercent = fitOnLoad ? nil : 100
         selectTool(.pen)
         status = "Screenshot ready."
     }
@@ -380,11 +478,21 @@ struct StudioView: View {
     }
 
     private func copyText(_ text: String) {
+        automaticClipboardTask?.cancel()
         do {
             let item = NSPasteboardItem()
             guard item.setString(text, forType: .string) else { throw StudioError.copyFailed }
             try copy(item)
             status = "Text copied."
+        } catch { report(error) }
+    }
+
+    private func copyRecognizedTable() {
+        guard let recognizedLines, !recognizedLines.isEmpty else { return }
+        automaticClipboardTask?.cancel()
+        do {
+            let result = try OCRTableClipboard.write(recognizedLines)
+            status = "Copied \(result.rowCount) rows × \(result.columnCount) columns."
         } catch { report(error) }
     }
 
@@ -394,25 +502,92 @@ struct StudioView: View {
         guard clipboard.writeObjects([item]) else { throw StudioError.copyFailed }
     }
 
-    private func saveImage() {
-        guard !busy, document.hasImage else { return }
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = [.png]
-        panel.nameFieldStringValue = "Snip.png"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        exportImage(to: url)
+    private func scheduleAutomaticCopy(_ revision: UUID) {
+        automaticClipboardTask?.cancel()
+        if revision == openedImageRevision {
+            openedImageRevision = nil
+            return
+        }
+        guard autoCopy, let snapshot = try? document.pngSnapshot() else { return }
+        let expectedChangeCount = NSPasteboard.general.changeCount
+        automaticClipboardTask = Task { @MainActor in
+            do {
+                try await Task.sleep(for: .milliseconds(160))
+                let png = try await snapshot.pngData()
+                try Task.checkCancellation()
+                guard document.contentRevision == revision,
+                      NSPasteboard.general.changeCount == expectedChangeCount else { return }
+                try copyPNG(png)
+            } catch is CancellationError {
+                return
+            } catch {
+                if document.contentRevision == revision { status = "Automatic clipboard copy failed. Use Copy image to retry." }
+            }
+        }
     }
 
-    private func exportImage(to url: URL? = nil) {
+    private func saveOriginalCapture() {
+        guard let snapshot = try? document.pngSnapshot() else { return }
+        let revision = document.contentRevision
+        Task { @MainActor in
+            do {
+                try await StudioOriginalCapture.save(snapshot)
+            } catch {
+                if document.contentRevision == revision {
+                    status = "Original capture could not be saved to Pictures/Snip Studio. Use Save to keep it."
+                }
+            }
+        }
+    }
+
+    private func copyPNG(_ png: Data) throws {
+        let item = NSPasteboardItem()
+        guard item.setData(png, forType: .png) else { throw StudioError.copyFailed }
+        try copy(item)
+    }
+
+    private func saveImage() {
+        saveImage(as: .png)
+    }
+
+    private func saveImage(as format: StudioFileFormat) {
+        guard !busy, document.hasImage else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [format.contentType]
+        panel.nameFieldStringValue = "Snip.\(format.filenameExtension)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        exportImage(to: url, format: format)
+    }
+
+    private func printImage() {
         guard !busy, document.hasImage else { return }
         do {
             let snapshot = try document.pngSnapshot()
-            status = url == nil ? "Preparing image for the clipboard…" : "Saving PNG…"
+            status = "Preparing print preview…"
+            exportTask = Task { @MainActor in
+                defer { exportTask = nil }
+                do {
+                    status = try await StudioFileExport.print(snapshot) ? "Print job submitted." : "Printing did not finish."
+                } catch is CancellationError {
+                    status = "Printing canceled."
+                } catch {
+                    report(error)
+                }
+            }
+        } catch { report(error) }
+    }
+
+    private func exportImage(to url: URL? = nil, format: StudioFileFormat = .png) {
+        guard !busy, document.hasImage else { return }
+        if url == nil { automaticClipboardTask?.cancel() }
+        do {
+            let snapshot = try document.pngSnapshot()
+            status = url == nil ? "Preparing image for the clipboard…" : "Saving \(format.title)…"
             exportTask = Task { @MainActor in
                 defer { exportTask = nil }
                 do {
                     if let url {
-                        try await snapshot.writePNG(to: url)
+                        try await StudioFileExport.write(snapshot, as: format, to: url)
                         document.markSaved(snapshot)
                         status = "Saved \(url.lastPathComponent)."
                         if document.hasUnsavedChanges {
@@ -421,9 +596,7 @@ struct StudioView: View {
                     } else {
                         let png = try await snapshot.pngData()
                         try Task.checkCancellation()
-                        let item = NSPasteboardItem()
-                        guard item.setData(png, forType: .png) else { throw StudioError.copyFailed }
-                        try copy(item)
+                        try copyPNG(png)
                         status = "Image copied."
                     }
                 } catch is CancellationError {

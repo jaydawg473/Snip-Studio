@@ -1,6 +1,6 @@
 # Snip Studio for macOS
 
-The first trial targets Apple Silicon with macOS 14 or later. It supports region and window capture, opening images, pen annotations with Undo, on-device OCR through Vision, image and text clipboard copy, and PNG save.
+The first trial targets Apple Silicon with macOS 14 or later. It uses Snip Studio's Windows layout for the launcher, capture controls, editor tools, contextual options, and zoom footer. It supports rectangle, window, full-screen, and all-monitor capture, image open and paste, pen, highlighter, shapes, erasing, Undo and Redo, on-device OCR through Vision, image and text clipboard copy, printing, and PNG, JPEG, BMP, and PDF export. [Windows feature checklist and Mac acceptance tests](PARITY.md)
 
 GitHub Actions builds the trial branch on macOS and verifies the app bundle layout, Apple Silicon architecture, macOS 14 minimum, and icon. For a signed trial disk image, use the GitHub signing job below or a Mac with Xcode, a Developer ID Application identity in its keychain, and a notarization credential configured in a local `notarytool` keychain profile.
 
@@ -9,9 +9,9 @@ From the repository root, set `SNIPSTUDIO_SIGNING_IDENTITY` to the exact certifi
 ## First-trial checks
 
 - Install from the signed disk image and open Snip Studio. Grant screen capture access when macOS asks.
-- Capture a Retina region, capture a window, and cancel a capture with Escape. Check the dimensions and that cancellation preserves the current image.
-- Draw near the top-left of a screenshot and undo one stroke. Copy and save a PNG, then check that the saved image matches the editor at full resolution.
-- Run OCR on a screenshot with multiple lines and a filename with leading zeros. Check what Vision recognized and paste the copied text into another app.
+- Capture a Retina region and a window, then check full-screen and multi-display captures. Check dimensions and display placement. Cancel a capture with Escape and make sure the current image stays open.
+- Draw near the top-left, add and erase a shape, then undo and redo. Check Fit and 100% at Retina scale, copy the image, and reopen each export format. Check Print Preview without submitting a physical job.
+- Run Text Actions on multiple lines including a filename with leading zeros. Check the overlay and paste copied text and a table into their intended apps. Test automatic copy and original saving with each option enabled and disabled.
 
 Screen and audio recording, scrolling capture, and editable Windows projects are outside this trial.
 

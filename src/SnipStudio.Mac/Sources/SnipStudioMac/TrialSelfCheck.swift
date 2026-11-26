@@ -9,15 +9,97 @@ enum TrialSelfCheck {
     static func run() async -> Int32 {
         do {
             try await checkEditor()
+            try await checkShapesAndEraser()
             try checkViewport()
             try checkRowOrder()
+            try checkOCRTable()
             try await checkVision()
+            try await StudioFileExportSelfCheck.run()
             return 0
         } catch {
             FileHandle.standardError.write(Data("Mac trial check failed: \(error)\n".utf8))
             return 1
         }
     }
+
+    private static func checkShapesAndEraser() async throws {
+        let bitmap = try whiteBitmap(width: 160, height: 120)
+        guard let source = bitmap.makeImage() else { throw CheckFailure("create shape fixture") }
+        let document = EditorDocument()
+        let image = NSImage(cgImage: source, size: NSSize(width: 160, height: 120))
+        try document.replaceImage(image, alreadySaved: true)
+        let red = CGColor(red: 1, green: 0, blue: 0, alpha: 1)
+        let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
+
+        document.beginShape(at: CGPoint(x: 10, y: 24), color: red, width: 4, shape: .arrow, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 76, y: 38))
+        document.extendStroke(to: CGPoint(x: 110, y: 24))
+        let head = CGPoint(x: 94, y: 20)
+        try require(document.draftStroke?.outline.contains(head) == true, "arrowhead is visible before the drag ends")
+        try require(document.draftStroke?.points.count == 2, "a shape drag only retains its endpoints")
+        document.finishStroke()
+
+        document.beginShape(at: CGPoint(x: 10, y: 48), color: red, width: 4, shape: .line, lineStyle: .dashed)
+        document.extendStroke(to: CGPoint(x: 110, y: 48))
+        document.finishStroke()
+        document.beginShape(at: CGPoint(x: 10, y: 62), color: red, width: 4, shape: .line, lineStyle: .dotted)
+        document.extendStroke(to: CGPoint(x: 110, y: 62))
+        document.finishStroke()
+
+        document.beginShape(at: CGPoint(x: 144, y: 108), color: red, width: 4, shape: .rectangle, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 86, y: 78))
+        document.finishStroke()
+        document.beginShape(at: CGPoint(x: 12, y: 78), color: red, width: 4, shape: .ellipse, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 68, y: 108))
+        document.finishStroke()
+
+        let exported = try await decodedPNG(from: document)
+        for (x, y) in [(94, 20), (14, 48), (10, 62), (92, 78), (40, 78)] {
+            let rgba = try pixel(in: exported, x: x, y: y)
+            try require(isRed(rgba), "red shape ink is visible at (\(x), \(y))")
+        }
+        for (x, y) in [(28, 48), (15, 62), (112, 92), (40, 94)] {
+            let rgba = try pixel(in: exported, x: x, y: y)
+            try require(isWhite(rgba), "shape gap or interior stays clear at (\(x), \(y))")
+        }
+
+        let testPoint = CGPoint(x: 42, y: 24)
+        document.beginShape(at: CGPoint(x: 34, y: 24), color: blue, width: 6, shape: .line, lineStyle: .solid)
+        document.extendStroke(to: CGPoint(x: 64, y: 24))
+        document.finishStroke()
+        document.markSaved(try document.pngSnapshot())
+        let saved = document.contentRevision
+        try require(!document.eraseAnnotation(at: CGPoint(x: 112, y: 92), tolerance: 0), "eraser ignores the empty interior of an outline")
+        try require(document.contentRevision == saved, "an eraser miss preserves the content revision")
+        try require(document.eraseAnnotation(at: testPoint, tolerance: 0), "eraser removes the uppermost visible shape")
+        let erased = try await decodedPNG(from: document)
+        let erasedPixel = try pixel(in: erased, x: 42, y: 24)
+        let erasedRevision = document.contentRevision
+        try require(isRed(erasedPixel), "erasing the blue line reveals the underlying red arrow")
+        try require(document.hasUnsavedChanges, "erasing a saved shape makes the snip dirty")
+        document.undo()
+        try require(!document.hasUnsavedChanges && document.contentRevision == saved, "Undo restores the saved shape layer and revision")
+        let restored = try await decodedPNG(from: document)
+        let restoredPixel = try pixel(in: restored, x: 42, y: 24)
+        try require(restoredPixel[0] < 20 && restoredPixel[1] < 20 && restoredPixel[2] > 235, "Undo restores the blue top layer")
+        document.redo()
+        try require(document.contentRevision == erasedRevision, "Redo restores the erase revision")
+        try require(document.eraseAnnotation(at: CGPoint(x: 42, y: 28), tolerance: 3), "eraser can hit a nearby visible edge")
+        let erasedBoth = try await decodedPNG(from: document)
+        let backgroundPixel = try pixel(in: erasedBoth, x: 42, y: 24)
+        try require(isWhite(backgroundPixel), "erasing both layers restores the original image")
+        try require(document.strokes.count == 4, "erasing overlapping arrows and lines retains unrelated shapes")
+
+        try document.replaceImage(image, alreadySaved: true)
+        document.beginStroke(at: testPoint, color: blue, width: 4)
+        document.finishStroke()
+        try require(document.eraseAnnotation(at: testPoint, tolerance: 0), "eraser removes the sole mark")
+        try require(document.strokes.isEmpty && document.canUndo, "erasing the last visible mark remains undoable")
+        print("PASS: shape preview and raster, dashed and dotted strokes, and reversible annotation erasure")
+    }
+
+    private static func isRed(_ rgba: [UInt8]) -> Bool { rgba[0] > 235 && rgba[1] < 20 && rgba[2] < 20 }
+    private static func isWhite(_ rgba: [UInt8]) -> Bool { rgba.prefix(3).allSatisfy { $0 > 235 } }
 
     private static func checkEditor() async throws {
         let background = try whiteBitmap(width: 120, height: 80)
@@ -118,6 +200,27 @@ enum TrialSelfCheck {
         try require(regions[1].maxY < regions[2].minY, "Vision's bottom-left origin maps to top-first canvas rows")
         try require(regions.allSatisfy { frame.contains($0) }, "OCR regions stay within the snip border")
         print("PASS: OCR row order, spacing, leading zeros, and canvas geometry")
+    }
+
+    private static func checkOCRTable() throws {
+        let input = [
+            RecognizedLine(text: "0001", bounds: CGRect(x: 0.65, y: 0.8, width: 0.14, height: 0.05)),
+            RecognizedLine(text: "Missing", bounds: CGRect(x: 0.10, y: 0.4, width: 0.34, height: 0.05)),
+            RecognizedLine(text: "Part", bounds: CGRect(x: 0.10, y: 0.6, width: 0.34, height: 0.05)),
+            RecognizedLine(text: "0007", bounds: CGRect(x: 0.65, y: 0.6, width: 0.14, height: 0.05)),
+            RecognizedLine(text: "Part", bounds: CGRect(x: 0.10, y: 0.8, width: 0.34, height: 0.05))
+        ]
+        let table = OCRTableClipboard.makeTable(from: input)
+        try require(table?.cells == [["Part", "0001"], ["Part", "0007"], ["Missing", ""]],
+                    "Copy as Table keeps row order, duplicate labels, leading zeros, and blank cells")
+        try require(table?.tabSeparatedText == "Part\t0001\nPart\t0007\nMissing\t",
+                    "plain-table output uses a tab for every column and one line per row")
+        let formula = OCRTable(cells: [["0007", "  \u{200B}=1+1"]])
+        try require(formula.tabSeparatedText == nil, "plain-table output refuses formula-like text")
+        let markup = OCRTable(cells: [["<a&\">\n next"]])
+        try require(markup.tabSeparatedText == nil && markup.html.contains("&lt;a&amp;&quot;&gt;"),
+                    "rich-table output escapes cell markup and the plain form refuses embedded separators")
+        print("PASS: OCR table alignment, exact cell content, and clipboard encoding")
     }
 
     private static func checkViewport() throws {

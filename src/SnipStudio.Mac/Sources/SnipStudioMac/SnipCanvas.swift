@@ -8,20 +8,29 @@ struct SnipCanvas: View {
     let inkWidth: CGFloat
     let zoom: CGFloat?
     let allowsDrawing: Bool
+    let activeShape: SnipShape?
+    let lineStyle: SnipLineStyle
+    let erasesAnnotations: Bool
     let recognizedLines: [RecognizedLine]
     let onZoomChanged: (CGFloat) -> Void
 
     @Environment(\.displayScale) private var displayScale
     @GestureState private var dragActive = false
+    @State private var lastEraseLocation: CGPoint?
     @Namespace private var viewport
 
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
-         allowsDrawing: Bool = true, recognizedLines: [RecognizedLine] = [], onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
+         allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid,
+         erasesAnnotations: Bool = false, recognizedLines: [RecognizedLine] = [],
+         onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
         self.inkWidth = inkWidth
         self.zoom = zoom
         self.allowsDrawing = allowsDrawing
+        self.activeShape = activeShape
+        self.lineStyle = lineStyle
+        self.erasesAnnotations = erasesAnnotations
         self.recognizedLines = recognizedLines
         self.onZoomChanged = onZoomChanged
     }
@@ -59,7 +68,10 @@ struct SnipCanvas: View {
             guard !active else { return }
             // A drag cancelled by the system may have no onEnded callback.
             Task { @MainActor in
-                if !dragActive { document.cancelStroke() }
+                if !dragActive {
+                    document.cancelStroke()
+                    lastEraseLocation = nil
+                }
             }
         }
         .onDisappear { document.cancelStroke() }
@@ -113,12 +125,21 @@ struct SnipCanvas: View {
         DragGesture(minimumDistance: 0)
             .updating($dragActive) { _, active, _ in active = true }
             .onChanged { event in
-                addInk(for: event, in: frame, layout: layout)
+                if erasesAnnotations {
+                    eraseAnnotations(for: event, in: frame, layout: layout)
+                } else {
+                    addInk(for: event, in: frame, layout: layout)
+                }
             }
             .onEnded { event in
                 // A click can complete without a distinct drag update.
-                addInk(for: event, in: frame, layout: layout)
-                document.finishStroke()
+                if erasesAnnotations {
+                    eraseAnnotations(for: event, in: frame, layout: layout)
+                    lastEraseLocation = nil
+                } else {
+                    addInk(for: event, in: frame, layout: layout)
+                    document.finishStroke()
+                }
             }
     }
 
@@ -126,9 +147,23 @@ struct SnipCanvas: View {
         if !document.isDrawing {
             guard frame.contains(event.startLocation) else { return }
             let color = NSColor(inkColor).usingColorSpace(.sRGB)?.cgColor ?? NSColor.systemRed.cgColor
-            document.beginStroke(at: layout.imagePoint(event.startLocation, in: frame), color: color, width: inkWidth)
+            let start = layout.imagePoint(event.startLocation, in: frame)
+            if let activeShape {
+                document.beginShape(at: start, color: color, width: inkWidth, shape: activeShape, lineStyle: lineStyle)
+            } else {
+                document.beginStroke(at: start, color: color, width: inkWidth)
+            }
         }
         document.extendStroke(to: layout.imagePoint(event.location, in: frame))
+    }
+
+    private func eraseAnnotations(for event: DragGesture.Value, in frame: CGRect, layout: SnipViewportLayout) {
+        guard frame.contains(event.location), frame.contains(event.startLocation) else { return }
+        if let lastEraseLocation, hypot(event.location.x - lastEraseLocation.x, event.location.y - lastEraseLocation.y) < 4 {
+            return
+        }
+        lastEraseLocation = event.location
+        document.eraseAnnotation(at: layout.imagePoint(event.location, in: frame), tolerance: 4 / layout.scale)
     }
 }
 

@@ -2,7 +2,18 @@ import AppKit
 import SwiftUI
 
 enum StudioTool {
-    case move, pen, highlight, textActions
+    case move, pen, highlight, shape, eraser, textActions
+}
+
+extension SnipShape {
+    var icon: String {
+        switch self {
+        case .rectangle: "rectangle"
+        case .ellipse: "oval"
+        case .line: "line.diagonal"
+        case .arrow: "arrow.up.right"
+        }
+    }
 }
 
 extension CaptureMode {
