@@ -49,17 +49,24 @@ enum TextRecognition {
     }
 
     static func recognizeLines(_ image: CGImage) async throws -> [RecognizedLine] {
-        try await Task.detached(priority: .userInitiated) {
-            let request = VNRecognizeTextRequest()
-            request.recognitionLevel = .accurate
-            request.usesLanguageCorrection = false
+        try Task.checkCancellation()
+        let scan = VisionScan()
+        let worker = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let request = scan.request
 
             let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
-            try handler.perform([request])
+            do { try handler.perform([request]) }
+            catch {
+                try Task.checkCancellation()
+                throw error
+            }
+            try Task.checkCancellation()
 
             let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue |
                                                 NSTextCheckingResult.CheckingType.phoneNumber.rawValue)
-            let lines = (request.results ?? []).compactMap { observation -> RecognizedLine? in
+            let lines = try (request.results ?? []).compactMap { observation -> RecognizedLine? in
+                try Task.checkCancellation()
                 guard let candidate = observation.topCandidates(1).first else { return nil }
                 let text = candidate.string
                 return RecognizedLine(text: text, bounds: observation.boundingBox,
@@ -67,7 +74,25 @@ enum TextRecognition {
                                       words: words(in: text, candidate: candidate))
             }
             return orderRows(lines)
-        }.value
+        }
+        return try await withTaskCancellationHandler {
+            let lines = try await worker.value
+            try Task.checkCancellation()
+            return lines
+        } onCancel: {
+            worker.cancel()
+            scan.request.cancel()
+        }
+    }
+
+    // The worker owns recognition and result access. Cancellation is the only cross-task operation.
+    private final class VisionScan: @unchecked Sendable {
+        let request = VNRecognizeTextRequest()
+
+        init() {
+            request.recognitionLevel = .accurate
+            request.usesLanguageCorrection = false
+        }
     }
 
     private static func contacts(in text: String, candidate: VNRecognizedText, with detector: NSDataDetector) -> [OCRContact] {

@@ -41,7 +41,8 @@ struct StudioView: View {
     @State private var showOptions = true
     @State private var zoomPercent: Int?
     @State private var displayedZoom = 100
-    @State private var recognitionInProgress = false
+    @State private var recognitionTask: Task<Void, Never>?
+    @State private var recognitionGeneration = UUID()
     @State private var ocrConversionInProgress = false
     @State private var exportTask: Task<Void, Never>?
     @State private var automaticClipboardTask: Task<Void, Never>?
@@ -64,6 +65,7 @@ struct StudioView: View {
     @State private var recentFiles = NSDocumentController.shared.recentDocumentURLs
 
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
+    private var recognitionInProgress: Bool { recognitionTask != nil }
     private var fileActionsDisabled: Bool { busy || textDraft != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
     private var ocrSelectionUnits: [StudioOCRSelection.Unit] {
@@ -165,6 +167,7 @@ struct StudioView: View {
         .onDisappear {
             captureTask?.cancel()
             exportTask?.cancel()
+            cancelRecognition()
             automaticClipboardTask?.cancel()
             updateTask?.cancel()
         }
@@ -178,6 +181,7 @@ struct StudioView: View {
             if !enabled { automaticClipboardTask?.cancel() }
         }
         .onChange(of: document.rasterRevision) { _, _ in
+            cancelRecognition()
             recognizedLines = nil
             snapWordRegions = []
             selectedOCRIndices.removeAll()
@@ -420,7 +424,7 @@ struct StudioView: View {
             iconButton("Redo annotation", symbol: "arrow.uturn.forward", action: document.redo)
                 .disabled(!document.canRedo)
             iconButton("Text actions", symbol: "wand.and.stars", selected: tool == .textActions, action: toggleTextActions)
-                .disabled(busy)
+                .disabled(captureTask != nil || exportTask != nil)
             Divider().frame(height: 20).padding(.horizontal, 4)
             if compact {
                 iconButton("Edit in app", symbol: "pencil", action: editInApp).disabled(busy)
@@ -465,7 +469,12 @@ struct StudioView: View {
                     Toggle("Snap to text", isOn: $snapHighlightToText)
                         .toggleStyle(.checkbox)
                         .onChange(of: snapHighlightToText) { _, enabled in
-                            if enabled { startRecognitionIfNeeded(forTextActions: false) }
+                            if enabled {
+                                startRecognitionIfNeeded(forTextActions: false)
+                            } else {
+                                cancelRecognition()
+                                status = "Drag to highlight freehand."
+                            }
                         }
                         .help("Hold Shift to highlight freehand")
                     Slider(value: $highlightOpacity, in: 0.1...0.9) { Text("Opacity") }
@@ -837,6 +846,8 @@ struct StudioView: View {
 
     private func selectTool(_ value: StudioTool) {
         document.cancelStroke()
+        let usesRecognition = value == .textActions || (value == .highlight && snapHighlightToText)
+        if !usesRecognition { cancelRecognition() }
         tool = value
         if value != .move { selectedAnnotationID = nil }
         showOptions = true
@@ -1126,10 +1137,14 @@ struct StudioView: View {
             selectTool(.pen)
             return
         }
-        guard !busy, document.hasImage else { return }
+        guard captureTask == nil, exportTask == nil, document.hasImage else { return }
         selectTool(.textActions)
         if let recognizedLines {
             status = recognizedLines.isEmpty ? "No text found." : "Text ready to copy."
+            return
+        }
+        if recognitionInProgress {
+            status = "Recognizing text on this Mac…"
             return
         }
         startRecognitionIfNeeded(forTextActions: true)
@@ -1138,14 +1153,15 @@ struct StudioView: View {
     private func startRecognitionIfNeeded(forTextActions: Bool) {
         guard (forTextActions || snapHighlightToText), recognizedLines == nil,
               !recognitionInProgress, let image = document.image else { return }
-        recognitionInProgress = true
+        let generation = UUID()
+        recognitionGeneration = generation
         status = forTextActions ? "Recognizing text on this Mac…" : "Preparing text snapping…"
         let revision = document.rasterRevision
-        Task { @MainActor in
-            defer { recognitionInProgress = false }
+        recognitionTask = Task { @MainActor in
+            defer { if recognitionGeneration == generation { recognitionTask = nil } }
             do {
                 let lines = try await TextRecognition.recognizeLines(image)
-                guard document.rasterRevision == revision else { return }
+                guard recognitionGeneration == generation, document.rasterRevision == revision else { return }
                 recognizedLines = lines
                 let frame = CGRect(x: 0, y: 0, width: image.width, height: image.height)
                 snapWordRegions = lines.flatMap { line -> [CGRect] in
@@ -1157,11 +1173,21 @@ struct StudioView: View {
                 }
                 if tool == .textActions { status = lines.isEmpty ? "No text found." : "Text ready to copy." }
                 if tool == .highlight { status = "Drag across text to highlight it. Hold Shift for freehand." }
+            } catch is CancellationError {
+                return
             } catch {
-                if forTextActions { report(error) }
+                guard recognitionGeneration == generation, document.rasterRevision == revision else { return }
+                if tool == .textActions { report(error) }
                 else if tool == .highlight { status = "Text snapping is unavailable. Freehand highlighting is ready." }
             }
         }
+    }
+
+    private func cancelRecognition() {
+        guard let recognitionTask else { return }
+        recognitionGeneration = UUID()
+        recognitionTask.cancel()
+        self.recognitionTask = nil
     }
 
     private func copyText(_ text: String) {

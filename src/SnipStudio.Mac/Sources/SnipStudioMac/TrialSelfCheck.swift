@@ -41,6 +41,7 @@ enum TrialSelfCheck {
             try StudioOCRSelection.selfCheck()
             try checkOCRTable()
             try await checkVision()
+            try await checkDenseVision()
             try await StudioFileExportSelfCheck.run()
             return 0
         } catch {
@@ -617,13 +618,52 @@ enum TrialSelfCheck {
             CTLineDraw(line, bitmap)
         }
         guard let fixture = bitmap.makeImage() else { throw CheckFailure("create Vision fixture") }
+        let cancelled = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await TextRecognition.recognizeLines(fixture)
+        }
+        do {
+            _ = try await cancelled.value
+            throw CheckFailure("a cancelled OCR caller must not receive a result")
+        } catch is CancellationError {}
         let result = try await TextRecognition.recognizeLines(fixture)
         let output = result.map(\.text).joined(separator: "\n")
         try require(output == "SNIP STUDIO\nFILE 0027", "Vision returns both fixture lines in order, including leading zeros")
         let words = result[1].words
         try require(words.map(\.text) == ["FILE", "0027"] && words[0].bounds.maxX <= words[1].bounds.minX,
                     "native word snapping separates the filename label and zero-padded token")
-        print("PASS: on-device Vision recognition")
+        print("PASS: on-device Vision recognition and a pre-cancelled OCR request")
+    }
+
+    private static func checkDenseVision() async throws {
+        let expected = ["SNIP STUDIO LIVE TEST", "RX000021-CATALOG.pdf", "DRAFT_0007.txt",
+                        "C:\\Windows\\System32\\cmd.exe", "PART 000042", "PART 000042", "QTY 0007"]
+        let width = 800
+        let height = 356
+        let clock = ContinuousClock()
+        for dark in [false, true] {
+            let bitmap = try rgbBitmap(width: width, height: height)
+            bitmap.setFillColor(CGColor(gray: dark ? 0.08 : 1, alpha: 1))
+            bitmap.fill(CGRect(x: 0, y: 0, width: width, height: height))
+            let font = CTFontCreateWithName("Menlo-Regular" as CFString, 30, nil)
+            let attributes: [NSAttributedString.Key: Any] = [
+                NSAttributedString.Key(kCTFontAttributeName as String): font,
+                NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: dark ? 1 : 0, alpha: 1)
+            ]
+            for (index, text) in expected.enumerated() {
+                let line = CTLineCreateWithAttributedString(NSAttributedString(string: text, attributes: attributes))
+                bitmap.textPosition = CGPoint(x: 32, y: 309 - index * 45)
+                CTLineDraw(line, bitmap)
+            }
+            guard let fixture = bitmap.makeImage() else { throw CheckFailure("create the seven-line Vision fixture") }
+            let start = clock.now
+            let lines = try await TextRecognition.recognizeLines(fixture)
+            let elapsed = start.duration(to: clock.now)
+            let theme = dark ? "dark" : "light"
+            let actual = lines.map(\.text)
+            try require(actual == expected, "Vision OCR for the \(theme) seven-line fixture returned \(actual)")
+            print("PASS: \(theme) \(width)×\(height) OCR fixture kept all seven exact lines in \(elapsed)")
+        }
     }
 
     private static func decodedPNG(from document: EditorDocument) async throws -> CGImage {
