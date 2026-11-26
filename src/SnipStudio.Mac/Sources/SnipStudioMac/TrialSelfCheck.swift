@@ -9,6 +9,7 @@ enum TrialSelfCheck {
     static func run() async -> Int32 {
         do {
             try await checkEditor()
+            try checkViewport()
             try checkRowOrder()
             try await checkVision()
             return 0
@@ -40,15 +41,51 @@ enum TrialSelfCheck {
         try require(top[0] > 235 && top[1] < 20 && top[2] < 20, "ink exports in the upper-left region")
         try require(bottom.prefix(3).allSatisfy { $0 > 235 }, "export leaves opposite edge intact")
 
+        let annotated = try document.pngSnapshot()
         document.undo()
         let restored = try await decodedPNG(from: document)
         let restoredTop = try pixel(in: restored, x: 22, y: 12)
         try require(!document.canUndo, "Undo removes the only stroke")
+        try require(document.canRedo, "Undo puts the stroke in redo history")
         try require(!document.hasUnsavedChanges, "Undo to the opened image clears the dirty state")
         try require(restoredTop.prefix(3).allSatisfy { $0 > 235 }, "Undo restores the underlying pixels")
-        print("PASS: native raster size, top-left ink export, and Undo")
+
+        let blue = CGColor(red: 0, green: 0, blue: 1, alpha: 1)
+        document.beginStroke(at: CGPoint(x: 22, y: 12), color: blue, width: 8)
+        document.cancelStroke()
+        try require(document.canRedo, "a cancelled draft leaves redo history intact")
+        document.redo()
+        let reapplied = try await decodedPNG(from: document)
+        let reappliedTop = try pixel(in: reapplied, x: 22, y: 12)
+        try require(reappliedTop == top, "Redo restores the exact exported ink pixel")
+        try require(document.canUndo && !document.canRedo, "Redo consumes the only undone stroke")
+        document.markSaved(annotated)
+        try require(!document.hasUnsavedChanges, "Redo restores the annotated revision recorded in the saved snapshot")
+
+        document.beginStroke(at: CGPoint(x: 22, y: 12), color: blue, width: 8)
+        document.finishStroke()
+        document.undo()
+        document.undo()
+        try require(!document.canUndo && document.hasUnsavedChanges, "Undo before the saved revision makes the snip dirty")
+        document.redo()
+        try require(!document.hasUnsavedChanges, "the first Redo returns to the saved revision")
+        document.redo()
+        let layered = try await decodedPNG(from: document)
+        let layeredTop = try pixel(in: layered, x: 22, y: 12)
+        try require(layeredTop[0] < 20 && layeredTop[1] < 20 && layeredTop[2] > 235,
+                    "repeated Redo restores the original layer order")
+        try require(document.hasUnsavedChanges, "Redo after the saved revision makes the snip dirty")
+
+        document.undo()
+        document.beginStroke(at: CGPoint(x: 32, y: 12), color: blue, width: 8)
+        document.finishStroke()
+        try require(!document.canRedo, "a newly committed stroke clears redo history")
+        document.undo()
+        try require(document.canRedo, "the replacement stroke can be redone after Undo")
+        print("PASS: native raster size, top-left ink export, and Undo/Redo")
 
         try document.replaceImage(image, alreadySaved: false)
+        try require(!document.canUndo && !document.canRedo, "replacing the image clears stroke history")
         try require(document.hasUnsavedChanges, "a new capture is unsaved even without ink")
         let captured = try document.pngSnapshot()
         document.beginStroke(at: CGPoint(x: 16, y: 12), color: red, width: 4)
@@ -72,7 +109,34 @@ enum TrialSelfCheck {
         ]
         let order = TextRecognition.orderRows(observations).map(\.text)
         try require(order == ["LEFT  0027", "RIGHT 0007", "BOTTOM"], "same-row words read left to right with original spacing")
-        print("PASS: OCR row order, spacing, and leading zeros")
+        let frame = CGRect(x: 10, y: 20, width: 200, height: 100)
+        let regions = OCRRegionOverlay.revealRegions(observations, in: frame)
+        try require(regions.count == 3, "each OCR result is visible on the image")
+        try require(regions[0].maxX < regions[1].minX, "regions stay in their original columns")
+        try require(regions[0].minY == regions[1].minY && regions[0].height == regions[1].height,
+                    "tall and short text on a row use matching reveals")
+        try require(regions[1].maxY < regions[2].minY, "Vision's bottom-left origin maps to top-first canvas rows")
+        try require(regions.allSatisfy { frame.contains($0) }, "OCR regions stay within the snip border")
+        print("PASS: OCR row order, spacing, leading zeros, and canvas geometry")
+    }
+
+    private static func checkViewport() throws {
+        let viewport = CGSize(width: 480, height: 280)
+        let raster = CGSize(width: 1200, height: 800)
+        guard let fit = SnipViewportLayout(imageSize: raster, viewport: viewport, zoom: nil, displayScale: 2),
+              let actual = SnipViewportLayout(imageSize: raster, viewport: viewport, zoom: 1, displayScale: 2) else {
+            throw CheckFailure("set up a Retina viewport")
+        }
+        let fittedFrame = fit.imageFrame(surfaceOrigin: .zero, viewportOrigin: .zero)
+        try require(abs(fittedFrame.midX - 240) < 0.001 && abs(fittedFrame.midY - 140) < 0.001 &&
+                    abs(fittedFrame.height - 232) < 0.001,
+                    "Fit centers the raster and leaves its 24-point margins")
+        try require(actual.surfaceSize == CGSize(width: 648, height: 448) && actual.usesNativePixels,
+                    "100 percent on Retina maps one source pixel per backing pixel and scrolls both axes")
+        let imageFrame = actual.imageFrame(surfaceOrigin: CGPoint(x: -80, y: -20), viewportOrigin: .zero)
+        try require(actual.imagePoint(CGPoint(x: 44, y: 54), in: imageFrame) == CGPoint(x: 200, y: 100),
+                    "Panning and zoom map a pen gesture back to the source pixel")
+        print("PASS: Fit, native-pixel zoom, and scrolled ink coordinates")
     }
 
     private static func checkVision() async throws {

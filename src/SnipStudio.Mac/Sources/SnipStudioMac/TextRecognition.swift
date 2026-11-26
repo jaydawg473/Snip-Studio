@@ -1,13 +1,18 @@
 import CoreGraphics
 import Vision
 
-struct RecognizedLine {
+struct RecognizedLine: Sendable {
     let text: String
     let bounds: CGRect
 }
 
 enum TextRecognition {
     static func recognize(_ image: CGImage) async throws -> String {
+        let lines = try await recognizeLines(image)
+        return lines.map(\.text).joined(separator: "\n")
+    }
+
+    static func recognizeLines(_ image: CGImage) async throws -> [RecognizedLine] {
         try await Task.detached(priority: .userInitiated) {
             let request = VNRecognizeTextRequest()
             request.recognitionLevel = .accurate
@@ -20,11 +25,15 @@ enum TextRecognition {
                 guard let text = observation.topCandidates(1).first?.string else { return nil }
                 return RecognizedLine(text: text, bounds: observation.boundingBox)
             }
-            return orderRows(lines).map(\.text).joined(separator: "\n")
+            return orderRows(lines)
         }.value
     }
 
     static func orderRows(_ lines: [RecognizedLine]) -> [RecognizedLine] {
+        groupRows(lines).flatMap { $0 }
+    }
+
+    static func groupRows(_ lines: [RecognizedLine]) -> [[RecognizedLine]] {
         // Vision coordinates begin at the bottom left. Sort bands from top to bottom,
         // then read across each band even when the boxes have different heights.
         let verticalOrder = lines.sorted { $0.bounds.midY > $1.bounds.midY }
@@ -36,7 +45,7 @@ enum TextRecognition {
                 rows.append([line])
             }
         }
-        return rows.flatMap { row in row.sorted { $0.bounds.minX < $1.bounds.minX } }
+        return rows.map { row in row.sorted { $0.bounds.minX < $1.bounds.minX } }
     }
 
     private static func sharesRow(_ box: CGRect, _ anchor: CGRect) -> Bool {

@@ -19,6 +19,7 @@ struct SnipStudioMacApp: App {
         Window("Snip Studio", id: "studio") {
             StudioView(applicationDelegate: applicationDelegate)
         }
-        .defaultSize(width: 850, height: 600)
+        .defaultSize(width: 540, height: 310)
+        .windowResizability(.contentMinSize)
     }
 }

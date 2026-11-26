@@ -22,5 +22,7 @@
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>Snip Studio captures your screen when you select New. Captures stay on this Mac.</string>
 </dict>
 </plist>

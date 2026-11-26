@@ -51,11 +51,13 @@ final class EditorDocument: ObservableObject {
     @Published private(set) var image: CGImage?
     @Published private(set) var strokes: [InkStroke] = []
     @Published private(set) var draftStroke: InkStroke?
+    private var undoneStrokes: [InkStroke] = []
     private var imageRevision = UUID()
     private var savedRevision: UUID?
 
     var hasImage: Bool { image != nil }
     var canUndo: Bool { !strokes.isEmpty }
+    var canRedo: Bool { !undoneStrokes.isEmpty }
     var isDrawing: Bool { draftStroke != nil }
     var hasUnsavedChanges: Bool { hasImage && savedRevision != revision }
     private var revision: UUID { strokes.last?.revision ?? imageRevision }
@@ -73,6 +75,7 @@ final class EditorDocument: ObservableObject {
             throw EditorDocumentError.imageTooLarge
         }
         draftStroke = nil
+        undoneStrokes.removeAll()
         strokes.removeAll()
         imageRevision = UUID()
         savedRevision = alreadySaved ? imageRevision : nil
@@ -91,6 +94,7 @@ final class EditorDocument: ObservableObject {
 
     func finishStroke() {
         guard let stroke = draftStroke else { return }
+        undoneStrokes.removeAll()
         strokes.append(stroke)
         draftStroke = nil
     }
@@ -101,8 +105,15 @@ final class EditorDocument: ObservableObject {
 
     func undo() {
         cancelStroke()
-        guard !strokes.isEmpty else { return }
+        guard let stroke = strokes.last else { return }
+        undoneStrokes.append(stroke)
         strokes.removeLast()
+    }
+
+    func redo() {
+        cancelStroke()
+        guard let stroke = undoneStrokes.popLast() else { return }
+        strokes.append(stroke)
     }
 
     func markSaved(_ snapshot: PngSnapshot) {

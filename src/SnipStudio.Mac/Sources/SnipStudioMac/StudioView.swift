@@ -6,83 +6,57 @@ import UniformTypeIdentifiers
 struct StudioView: View {
     let applicationDelegate: StudioApplicationDelegate
     @StateObject private var document = EditorDocument()
+    @State private var captureMode = CaptureMode.region
+    @State private var captureDelay = 0
+    @State private var captureTask: Task<Void, Never>?
+    @State private var tool = StudioTool.pen
     @State private var inkColor = Color.red
     @State private var inkWidth: CGFloat = 4
-    @State private var captureInProgress = false
+    @State private var highlightColor = Color.yellow
+    @State private var highlightWidth: CGFloat = 14
+    @State private var showOptions = true
+    @State private var zoomPercent: Int?
+    @State private var displayedZoom = 100
     @State private var recognitionInProgress = false
     @State private var exportTask: Task<Void, Never>?
-    @State private var recognizedText: String?
-    @State private var status = "Capture a region or window to start."
+    @State private var recognizedLines: [RecognizedLine]?
+    @State private var reviewText = false
+    @State private var status = "Ready."
     @State private var errorMessage: String?
 
-    private var busy: Bool { captureInProgress || recognitionInProgress || exportTask != nil }
+    private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
+    private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
+    private var drawingColor: Color { tool == .highlight ? highlightColor.opacity(0.42) : inkColor }
+    private var drawingWidth: CGFloat { tool == .highlight ? highlightWidth : inkWidth }
+    private static let zoomPresets = [25, 50, 75, 100, 125, 150, 200, 300, 400]
 
     var body: some View {
         VStack(spacing: 0) {
+            captureBar
             if document.hasImage {
-                if let recognizedText {
-                    HSplitView {
-                        canvas.frame(minWidth: 360)
-                        textPanel(recognizedText).frame(minWidth: 220, idealWidth: 260)
-                    }
-                } else {
-                    canvas
-                }
+                editingBar
+                if showOptions { optionsBar }
+                SnipCanvas(
+                    document: document,
+                    inkColor: drawingColor,
+                    inkWidth: drawingWidth,
+                    zoom: zoomPercent.map { CGFloat($0) / 100 },
+                    allowsDrawing: tool == .pen || tool == .highlight,
+                    recognizedLines: tool == .textActions ? recognizedLines ?? [] : []
+                ) { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
             } else {
-                ContentUnavailableView(
-                    "No Screenshot",
-                    systemImage: "camera.viewfinder",
-                    description: Text("Capture a region or window, or open an image.")
-                )
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Text("Press ⌘N to take a screenshot.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-
-            Divider()
-            HStack(spacing: 8) {
-                if busy {
-                    ProgressView().controlSize(.small).accessibilityLabel("Working")
-                }
-                Text(status).lineLimit(1)
-                Spacer()
-                if let image = document.image {
-                    Text("\(image.width) × \(image.height) px").monospacedDigit()
-                }
-            }
-            .font(.footnote)
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 9)
+            statusBar
         }
-        .frame(minWidth: 650, minHeight: 390)
+        .background(StudioColors.canvas)
+        .frame(minWidth: 520, minHeight: document.hasImage ? 320 : 260)
         .background {
             StudioCloseProtection(document: document, applicationDelegate: applicationDelegate)
                 .frame(width: 0, height: 0)
                 .accessibilityHidden(true)
-        }
-        .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                Menu("Capture", systemImage: "camera.viewfinder") {
-                    Button("Capture Region") { capture(.region) }
-                        .keyboardShortcut("n", modifiers: [.command, .shift])
-                    Button("Capture Window") { capture(.window) }
-                }
-                .disabled(busy)
-
-                Button("Open Image", systemImage: "folder") { openImage() }
-                    .disabled(busy)
-
-                Button("Undo Annotation", systemImage: "arrow.uturn.backward") { document.undo() }
-                    .disabled(!document.canUndo)
-
-                Button("Recognize Text", systemImage: "text.viewfinder") { recognizeText() }
-                    .disabled(busy || !document.hasImage)
-
-                Button("Copy Image", systemImage: "doc.on.doc") { exportImage() }
-                    .disabled(busy || !document.hasImage)
-
-                Button("Save PNG", systemImage: "square.and.arrow.down") { saveImage() }
-                    .disabled(busy || !document.hasImage)
-            }
         }
         .alert(
             "Snip Studio",
@@ -92,59 +66,257 @@ struct StudioView: View {
         } message: {
             Text(errorMessage ?? "")
         }
-        .onDisappear { exportTask?.cancel() }
-    }
-
-    private var canvas: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 12) {
-                ColorPicker("Pen", selection: $inkColor, supportsOpacity: false)
-                    .fixedSize()
-                Slider(value: $inkWidth, in: 1...30, step: 1) { Text("Pen width") }
-                    .frame(width: 96)
-                Text("\(Int(inkWidth)) px").monospacedDigit()
-                Spacer()
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 8)
-            Divider()
-            SnipCanvas(document: document, inkColor: inkColor, inkWidth: inkWidth)
-                .padding(14)
-                .background(Color(nsColor: .controlBackgroundColor))
+        .sheet(isPresented: $reviewText) {
+            textReview
+        }
+        .onDisappear {
+            captureTask?.cancel()
+            exportTask?.cancel()
         }
     }
 
-    private func textPanel(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Recognized Text").font(.headline)
-                Spacer()
-                Button("Close Text", systemImage: "xmark") { recognizedText = nil }
-                    .labelStyle(.iconOnly)
+    private var captureBar: some View {
+        HStack(spacing: 6) {
+            Button { capture() } label: {
+                Label("New", systemImage: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 86, alignment: .leading)
             }
+            .buttonStyle(StudioButtonStyle(primary: true))
+            .keyboardShortcut("n", modifiers: .command)
+            .disabled(busy)
+            .help("New snip (⌘N)")
+
+            Menu {
+                Picker("Capture mode", selection: $captureMode) {
+                    ForEach([CaptureMode.region, .window, .fullScreen, .allDisplays], id: \.self) { mode in
+                        Label(mode.title, systemImage: mode.icon).tag(mode)
+                    }
+                }
+            } label: {
+                Label(captureMode.title, systemImage: captureMode.icon)
+                    .font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Capture shape")
+            .disabled(busy)
+
+            Menu {
+                Picker("Capture delay", selection: $captureDelay) {
+                    Text("Off").tag(0)
+                    ForEach([3, 5, 10], id: \.self) { seconds in
+                        Text("\(seconds) seconds").tag(seconds)
+                    }
+                }
+            } label: {
+                Label(captureDelay == 0 ? "Off" : "\(captureDelay)s", systemImage: "clock")
+                    .font(.system(size: 12))
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Capture delay")
+            .disabled(busy)
+
+            Spacer(minLength: 2)
+            iconButton("Open image (⌘O)", symbol: "folder", action: openImage)
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(busy)
+            iconButton("Paste image (⌘V)", symbol: "doc.on.clipboard", action: pasteImage)
+                .keyboardShortcut("v", modifiers: .command)
+                .disabled(busy)
+            iconButton("Save PNG (⌘S)", symbol: "square.and.arrow.down", action: saveImage)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(busy || !document.hasImage)
+            iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
+                .disabled(busy || !document.hasImage)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 54)
+        .background(StudioColors.toolbar)
+    }
+
+    private var editingBar: some View {
+        HStack(spacing: 2) {
+            toolButton(.move, label: "Move view", symbol: "arrow.up.and.down.and.arrow.left.and.right")
+            toolButton(.pen, label: "Pen", symbol: "pencil.tip", color: inkColor)
+            toolButton(.highlight, label: "Highlighter", symbol: "highlighter", color: highlightColor)
+            Divider().frame(height: 20).padding(.horizontal, 4)
+            iconButton("Undo annotation", symbol: "arrow.uturn.backward", action: document.undo)
+                .disabled(!document.canUndo)
+            iconButton("Redo annotation", symbol: "arrow.uturn.forward", action: document.redo)
+                .disabled(!document.canRedo)
+            iconButton("Text actions", symbol: "wand.and.stars", selected: tool == .textActions, action: toggleTextActions)
+                .disabled(busy)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background(StudioColors.toolbar)
+    }
+
+    @ViewBuilder
+    private var optionsBar: some View {
+        switch tool {
+        case .move:
+            EmptyView()
+        case .pen, .highlight:
+            HStack(spacing: 10) {
+                ColorPicker("Ink color", selection: tool == .highlight ? $highlightColor : $inkColor, supportsOpacity: false)
+                    .labelsHidden()
+                    .help("Ink color")
+                Stepper(value: tool == .highlight ? $highlightWidth : $inkWidth, in: 1...30, step: 1) {
+                    Text("\(Int(drawingWidth)) px").monospacedDigit()
+                }
+                .fixedSize()
+                .accessibilityLabel("Ink width")
+                StudioStrokeSample(color: drawingColor, width: drawingWidth)
+                Spacer(minLength: 0)
+                iconButton("Hide options", symbol: "xmark") { showOptions = false }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(StudioColors.options)
+        case .textActions:
+            HStack(spacing: 6) {
+                Button { copyText(recognizedText) } label: {
+                    Label("Copy all text", systemImage: "doc.on.doc")
+                }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(recognizedText.isEmpty || exportTask != nil)
+                Button { reviewText = true } label: {
+                    Label("Review text…", systemImage: "text.alignleft")
+                }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(recognizedText.isEmpty)
+                Spacer(minLength: 0)
+                iconButton("Close text actions", symbol: "xmark") { selectTool(.pen) }
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 40)
+            .background(StudioColors.options)
+        }
+    }
+
+    private var statusBar: some View {
+        HStack(spacing: 6) {
+            if busy {
+                ProgressView().controlSize(.small).accessibilityLabel("Working")
+            }
+            Text(status).lineLimit(1).truncationMode(.tail)
+                .help(status)
+            Spacer(minLength: 4)
+            if captureTask != nil {
+                Button("Cancel") { captureTask?.cancel() }
+                    .controlSize(.small)
+            }
+            if let image = document.image {
+                Text("\(image.width) × \(image.height) px").monospacedDigit().fixedSize()
+                iconButton("Zoom out", symbol: "minus") { stepZoom(increasing: false) }
+                    .disabled((zoomPercent ?? displayedZoom) <= (Self.zoomPresets.first ?? 25))
+                Button("Fit") { zoomPercent = nil }
+                    .buttonStyle(StudioButtonStyle(selected: zoomPercent == nil))
+                    .help("Fit screenshot to window")
+                Menu {
+                    ForEach(Self.zoomPresets, id: \.self) { percent in
+                        Button("\(percent)%") { zoomPercent = percent }
+                    }
+                } label: {
+                    Text("\(zoomPercent ?? displayedZoom)%").monospacedDigit()
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Zoom percentage")
+                iconButton("Zoom in", symbol: "plus") { stepZoom(increasing: true) }
+                    .disabled(zoomPercent == Self.zoomPresets.last)
+            }
+        }
+        .font(.system(size: 12))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 12)
+        .frame(height: 34)
+        .background(StudioColors.toolbar)
+    }
+
+    private func iconButton(
+        _ title: String,
+        symbol: String,
+        selected: Bool = false,
+        color: Color? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 17))
+                .foregroundStyle(color ?? .primary)
+                .frame(width: 20, height: 22)
+        }
+        .buttonStyle(StudioButtonStyle(selected: selected))
+        .help(title)
+        .accessibilityLabel(title)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    private func toolButton(_ value: StudioTool, label: String, symbol: String, color: Color? = nil) -> some View {
+        iconButton(label, symbol: symbol, selected: tool == value, color: color) { selectTool(value) }
+    }
+
+    private var textReview: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recognized text").font(.headline)
             ScrollView {
-                Text(text.isEmpty ? "No text found." : text)
+                Text(recognizedText)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)
             }
-            Button("Copy Text", systemImage: "doc.on.doc") { copyText(text) }
-                .disabled(text.isEmpty || exportTask != nil)
+            HStack {
+                Button("Copy all text") { copyText(recognizedText) }
+                Spacer()
+                Button("Done") { reviewText = false }.keyboardShortcut(.cancelAction)
+            }
         }
-        .padding(14)
+        .padding(18)
+        .frame(minWidth: 420, minHeight: 280)
     }
 
-    private func capture(_ mode: CaptureMode) {
+    private func selectTool(_ value: StudioTool) {
+        document.cancelStroke()
+        tool = value
+        showOptions = true
+        switch value {
+        case .move: status = "Scroll to move around a zoomed screenshot."
+        case .pen: status = "Draw on the screenshot."
+        case .highlight: status = "Drag to highlight an area."
+        case .textActions: break
+        }
+    }
+
+    private func stepZoom(increasing: Bool) {
+        let current = zoomPercent ?? displayedZoom
+        zoomPercent = increasing
+            ? Self.zoomPresets.first(where: { $0 > current }) ?? Self.zoomPresets.last
+            : Self.zoomPresets.last(where: { $0 < current }) ?? Self.zoomPresets.first
+    }
+
+    private func capture() {
         guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
-        captureInProgress = true
-        status = "Select the area to capture."
-        Task { @MainActor in
-            defer { captureInProgress = false }
+        let mode = captureMode
+        let delay = captureDelay
+        captureTask = Task { @MainActor in
+            defer { captureTask = nil }
             do {
+                for seconds in (0..<delay).reversed() {
+                    status = "Capture starts in \(seconds + 1)s."
+                    try await Task.sleep(for: .seconds(1))
+                }
+                status = mode == .region || mode == .window ? "Select what to capture." : "Capturing the screen…"
                 if let image = try await CaptureService.capture(mode) {
                     try load(image, alreadySaved: false)
                 } else {
                     status = "Capture canceled."
                 }
+            } catch is CancellationError {
+                status = "Capture canceled."
             } catch {
                 report(error)
             }
@@ -164,22 +336,43 @@ struct StudioView: View {
         do { try load(image, alreadySaved: true) } catch { report(error) }
     }
 
+    private func pasteImage() {
+        guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
+        guard let clipboardImage = NSImage(pasteboard: .general) else {
+            report(StudioError.noClipboardImage)
+            return
+        }
+        do { try load(clipboardImage, alreadySaved: false) } catch { report(error) }
+    }
+
     private func load(_ image: NSImage, alreadySaved: Bool) throws {
         try document.replaceImage(image, alreadySaved: alreadySaved)
-        recognizedText = nil
+        recognizedLines = nil
+        zoomPercent = nil
+        selectTool(.pen)
         status = "Screenshot ready."
     }
 
-    private func recognizeText() {
+    private func toggleTextActions() {
+        if tool == .textActions {
+            selectTool(.pen)
+            return
+        }
         guard !busy, let image = document.image else { return }
+        selectTool(.textActions)
+        if let recognizedLines {
+            status = recognizedLines.isEmpty ? "No text found." : "Text ready to copy."
+            return
+        }
+
         recognitionInProgress = true
         status = "Recognizing text on this Mac…"
         Task { @MainActor in
             defer { recognitionInProgress = false }
             do {
-                let result = try await TextRecognition.recognize(image)
-                recognizedText = result
-                status = result.isEmpty ? "No text found." : "Text ready to copy."
+                let lines = try await TextRecognition.recognizeLines(image)
+                recognizedLines = lines
+                if tool == .textActions { status = lines.isEmpty ? "No text found." : "Text ready to copy." }
             } catch {
                 report(error)
             }
@@ -249,11 +442,12 @@ struct StudioView: View {
 }
 
 private enum StudioError: LocalizedError {
-    case imageUnreadable, copyFailed
+    case imageUnreadable, noClipboardImage, copyFailed
 
     var errorDescription: String? {
         switch self {
         case .imageUnreadable: "Snip Studio could not read that image."
+        case .noClipboardImage: "The clipboard doesn't contain an image."
         case .copyFailed: "The clipboard could not accept the result. Try copying again."
         }
     }

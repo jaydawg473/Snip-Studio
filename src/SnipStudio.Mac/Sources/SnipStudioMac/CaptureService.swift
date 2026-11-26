@@ -1,10 +1,13 @@
 import AppKit
 import CoreGraphics
 import Foundation
+import ScreenCaptureKit
 
 enum CaptureMode: Hashable {
     case region
     case window
+    case fullScreen
+    case allDisplays
 }
 
 struct CaptureService {
@@ -26,6 +29,20 @@ struct CaptureService {
         }
         try await Task.sleep(for: .milliseconds(150))
 
+        switch mode {
+        case .region:
+            return try await captureWithSystemTool(options: ["-i", "-s"], interactive: true)
+        case .window:
+            return try await captureWithSystemTool(options: ["-i", "-w", "-o"], interactive: true)
+        case .fullScreen:
+            return try await captureWithSystemTool(options: ["-m"], interactive: false)
+        case .allDisplays:
+            return try await captureAllDisplays()
+        }
+    }
+
+    @MainActor
+    private static func captureWithSystemTool(options: [String], interactive: Bool) async throws -> NSImage? {
         let files = FileManager.default
         let workspace = files.temporaryDirectory.appendingPathComponent(
             "SnipStudioCapture-\(UUID().uuidString)",
@@ -62,8 +79,7 @@ struct CaptureService {
         defer { try? diagnosticWriter.close() }
 
         capture.executableURL = URL(fileURLWithPath: "/usr/sbin/screencapture")
-        let selectionFlags = mode == .region ? ["-s"] : ["-w", "-o"]
-        capture.arguments = ["-i", "-x", "-t", "png"] + selectionFlags + [output.path]
+        capture.arguments = ["-x", "-t", "png"] + options + [output.path]
         capture.standardInput = FileHandle.nullDevice
         capture.standardOutput = FileHandle.nullDevice
         capture.standardError = diagnosticWriter
@@ -85,7 +101,7 @@ struct CaptureService {
             let reader = try FileHandle(forReadingFrom: diagnostic)
             defer { try? reader.close() }
             let outputErrors = try reader.read(upToCount: 4096) ?? Data()
-            guard (status == 0 || status == 1) && outputErrors.isEmpty else {
+            guard interactive, (status == 0 || status == 1), outputErrors.isEmpty else {
                 throw CaptureFailure.systemFailure(status)
             }
             return nil
@@ -98,6 +114,66 @@ struct CaptureService {
         }
         return image
     }
+
+    @MainActor
+    private static func captureAllDisplays() async throws -> NSImage {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let displays = content.displays.filter {
+            CGDisplayIsActive($0.displayID) != 0 && CGDisplayMirrorsDisplay($0.displayID) == kCGNullDirectDisplay
+        }
+        guard !displays.isEmpty else { throw CaptureFailure.noDisplays }
+
+        let appProcessID = ProcessInfo.processInfo.processIdentifier
+        let excludedApps = content.applications.filter { $0.processID == appProcessID }
+        let sources = displays.map { display in
+            (
+                id: display.displayID,
+                frame: CGDisplayBounds(display.displayID),
+                filter: SCContentFilter(display: display, excludingApplications: excludedApps, exceptingWindows: [])
+            )
+        }
+        guard sources.allSatisfy({ !$0.frame.isInfinite && !$0.frame.isEmpty && $0.filter.pointPixelScale > 0 }) else {
+            throw CaptureFailure.displayLayoutChanged
+        }
+
+        let layout = sources.reduce(CGRect.null) { $0.union($1.frame) }
+        let scale = sources.map { CGFloat($0.filter.pointPixelScale) }.max() ?? 1
+        let width = (layout.width * scale).rounded()
+        let height = (layout.height * scale).rounded()
+        guard width >= 1, height >= 1, width * height <= 64_000_000 else {
+            throw CaptureFailure.displayCaptureTooLarge
+        }
+        guard let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let bitmap = CGContext(
+                  data: nil, width: Int(width), height: Int(height), bitsPerComponent: 8,
+                  bytesPerRow: 0, space: colorSpace,
+                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+              ) else { throw CaptureFailure.unreadableImage }
+
+        for source in sources {
+            try Task.checkCancellation()
+            let configuration = SCStreamConfiguration()
+            let nativeScale = CGFloat(source.filter.pointPixelScale)
+            configuration.width = max(1, Int((source.frame.width * nativeScale).rounded()))
+            configuration.height = max(1, Int((source.frame.height * nativeScale).rounded()))
+            configuration.showsCursor = false
+            let image = try await SCScreenshotManager.captureImage(contentFilter: source.filter, configuration: configuration)
+
+            // Global display coordinates start at the top. CGContext uses a bottom-left origin.
+            let left = ((source.frame.minX - layout.minX) * scale).rounded()
+            let right = ((source.frame.maxX - layout.minX) * scale).rounded()
+            let bottom = ((layout.maxY - source.frame.maxY) * scale).rounded()
+            let top = ((layout.maxY - source.frame.minY) * scale).rounded()
+            bitmap.draw(image, in: CGRect(x: left, y: bottom, width: right - left, height: top - bottom))
+        }
+
+        try Task.checkCancellation()
+        guard sources.allSatisfy({ CGDisplayBounds($0.id) == $0.frame }) else {
+            throw CaptureFailure.displayLayoutChanged
+        }
+        guard let image = bitmap.makeImage() else { throw CaptureFailure.unreadableImage }
+        return NSImage(cgImage: image, size: layout.size)
+    }
 }
 
 private enum CaptureFailure: LocalizedError {
@@ -105,6 +181,9 @@ private enum CaptureFailure: LocalizedError {
     case timedOut
     case systemFailure(Int32)
     case unreadableImage
+    case noDisplays
+    case displayLayoutChanged
+    case displayCaptureTooLarge
 
     var errorDescription: String? {
         switch self {
@@ -116,6 +195,12 @@ private enum CaptureFailure: LocalizedError {
             "macOS could not complete the capture (status \(status))."
         case .unreadableImage:
             "The captured image could not be opened."
+        case .noDisplays:
+            "macOS did not report an active display to capture."
+        case .displayLayoutChanged:
+            "The display arrangement changed during capture. Try again when the displays are ready."
+        case .displayCaptureTooLarge:
+            "The combined capture exceeds 64 million pixels. Capture one display or a region instead."
         }
     }
 }
