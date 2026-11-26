@@ -35,9 +35,10 @@ struct StudioSettingsView: View {
                     }
                 }
             }
+            StudioDesktopSettingsView()
         }
         .formStyle(.grouped)
         .toggleStyle(.switch)
-        .frame(width: 520, height: 290)
+        .frame(width: 520, height: 450)
     }
 }

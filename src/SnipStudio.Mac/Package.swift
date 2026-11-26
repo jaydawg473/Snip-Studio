@@ -5,5 +5,10 @@ let package = Package(
     name: "SnipStudioMac",
     platforms: [.macOS(.v14)],
     products: [.executable(name: "SnipStudioMac", targets: ["SnipStudioMac"])],
-    targets: [.executableTarget(name: "SnipStudioMac")]
+    targets: [
+        .executableTarget(
+            name: "SnipStudioMac",
+            linkerSettings: [.unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "Translation"])]
+        )
+    ]
 )

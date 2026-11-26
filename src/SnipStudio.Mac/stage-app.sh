@@ -27,6 +27,14 @@ binaries="$(swift build --package-path "$project" --configuration release --show
 executable="$binaries/SnipStudioMac"
 test "$(lipo -archs "$executable")" = arm64
 test "$(xcrun vtool -show-build "$executable" | awk '$1 == "minos" { print $2 }')" = 14.0
+xcrun otool -l "$executable" | awk '
+    $1 == "cmd" { command = $2 }
+    $1 == "name" && $2 ~ /\/Translation\.framework\// {
+        found = 1
+        if (command != "LC_LOAD_WEAK_DYLIB") { wrong = 1 }
+    }
+    END { if (!found || wrong) exit 1 }
+' || { echo 'Translation must be weak-linked for the macOS 14 trial.' >&2; exit 1; }
 plutil -lint "$project/Info.plist"
 test "$(plutil -extract CFBundleExecutable raw -o - "$project/Info.plist")" = SnipStudioMac
 test "$(plutil -extract LSMinimumSystemVersion raw -o - "$project/Info.plist")" = 14.0

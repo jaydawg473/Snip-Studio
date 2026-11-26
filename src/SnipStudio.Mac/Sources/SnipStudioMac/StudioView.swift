@@ -41,6 +41,10 @@ struct StudioView: View {
     @State private var reviewText = false
     @State private var reviewedContacts: [OCRContact] = []
     @State private var reviewRedactions = false
+    @State private var confirmOCRConversion = false
+    @State private var translationLines: [RecognizedLine] = []
+    @State private var translationRevision: UUID?
+    @State private var reviewTranslation = false
     @State private var status = "Ready."
     @State private var errorMessage: String?
     @State private var updateTask: Task<Void, Never>?
@@ -110,6 +114,17 @@ struct StudioView: View {
                     patchRaster(contacts.map { $0.pixelRegion(in: size) }, opaque: true)
                 }
             }
+        }
+        .sheet(isPresented: $reviewTranslation) {
+            if #available(macOS 15.0, *) {
+                StudioTranslationReview(lines: translationLines, apply: applyTranslation)
+            }
+        }
+        .confirmationDialog("Convert the selected screenshot text into editable annotations?", isPresented: $confirmOCRConversion) {
+            Button("Convert to text") { convertOCRSelection() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Snip Studio uses the recognized characters as shown. Undo restores the original image.")
         }
         .focusedSceneValue(\.studioNewSnip, startNew)
         .task {
@@ -298,6 +313,7 @@ struct StudioView: View {
             .disabled(fileActionsDisabled || !document.hasImage)
             Button("Save editable Mac snip…") { saveProject() }.disabled(fileActionsDisabled || !document.hasImage)
             Button("Print image…") { printImage() }.disabled(fileActionsDisabled || !document.hasImage)
+            Button("Toggle full screen") { NSApp.keyWindow?.toggleFullScreen(nil) }
             Button("Import external editor copy…") { importWorkingCopy() }.disabled(fileActionsDisabled || externalWorkingCopy == nil)
             Divider()
             SettingsLink { Text("Settings…") }
@@ -465,6 +481,8 @@ struct StudioView: View {
                     ForEach(Self.zoomPresets, id: \.self) { percent in
                         Button("\(percent)%") { zoomPercent = percent }
                     }
+                    Divider()
+                    Button("Custom zoom…") { setCustomZoom() }
                 } label: {
                     Text("\(zoomPercent ?? displayedZoom)%").monospacedDigit()
                 }
@@ -472,7 +490,7 @@ struct StudioView: View {
                 .fixedSize()
                 .help("Zoom percentage")
                 iconButton("Zoom in", symbol: "plus") { stepZoom(increasing: true) }
-                    .disabled(zoomPercent == Self.zoomPresets.last)
+                    .disabled((zoomPercent ?? displayedZoom) >= 800)
             }
         }
         .font(.system(size: 12))
@@ -504,6 +522,16 @@ struct StudioView: View {
             .disabled(recognizedText.isEmpty || busy)
             iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
                 .disabled(recognizedText.isEmpty)
+            Menu {
+                Button("Edit line…") { editOCRLine() }.disabled(selectedOCRLines.count != 1 || busy)
+                Button("Convert to text…") { confirmOCRConversion = true }.disabled(selectedOCRLines.isEmpty || busy)
+                Button("Translate…") { translateOCR() }.disabled(recognizedText.isEmpty || busy)
+            } label: {
+                Image(systemName: "square.and.pencil").accessibilityLabel("Edit recognized text")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Edit recognized text")
             iconButton("Delete selected text pixels", symbol: "trash", action: deleteOCRSelection)
                 .keyboardShortcut(.delete, modifiers: [])
                 .disabled(selectedOCRLines.isEmpty || busy)
@@ -553,9 +581,10 @@ struct StudioView: View {
             Spacer(minLength: 0)
             if textDraft != nil {
                 iconButton("Apply text", symbol: "checkmark", action: applyText)
-                    .disabled(note.text.isEmpty)
+                    .disabled(note.text.isEmpty || busy)
                 iconButton("Cancel text", symbol: "xmark", action: cancelText)
                     .keyboardShortcut(.cancelAction)
+                    .disabled(busy)
             }
         }
         .padding(.horizontal, 12)
@@ -698,6 +727,10 @@ struct StudioView: View {
 
     private func applyText() {
         guard let draft = textDraft, let color = NSColor(draft.color).usingColorSpace(.sRGB)?.cgColor else { return }
+        if let proposal = draft.replacement, let stamp = draft.sourceRevision {
+            applyOCRText([StudioOCRTextEdit(proposal: proposal, note: draft.note, foreground: color)], revision: stamp)
+            return
+        }
         do {
             try document.applyText(draft.note, at: draft.origin, color: color, updating: draft.annotationID)
             textStyle = draft.note
@@ -730,8 +763,26 @@ struct StudioView: View {
     private func stepZoom(increasing: Bool) {
         let current = zoomPercent ?? displayedZoom
         zoomPercent = increasing
-            ? Self.zoomPresets.first(where: { $0 > current }) ?? Self.zoomPresets.last
+            ? Self.zoomPresets.first(where: { $0 > current }) ?? min(800, current + 50)
             : Self.zoomPresets.last(where: { $0 < current }) ?? Self.zoomPresets.first
+    }
+
+    private func setCustomZoom() {
+        let alert = NSAlert()
+        alert.messageText = "Custom zoom"
+        alert.informativeText = "Enter a percentage from 25 to 800."
+        let field = NSTextField(string: "\(zoomPercent ?? displayedZoom)")
+        field.frame = CGRect(x: 0, y: 0, width: 115, height: 24)
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        alert.addButton(withTitle: "Set zoom")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        guard let value = Int(field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)), (25...800).contains(value) else {
+            status = "Enter a zoom percentage from 25 to 800."
+            return
+        }
+        zoomPercent = value
     }
 
     private func capture() {
@@ -945,6 +996,99 @@ struct StudioView: View {
         let frame = CGRect(x: 0, y: 0, width: image.width, height: image.height)
         let regions = selectedOCRLines.map { OCRRegionOverlay.displayBounds(for: $0, in: frame).insetBy(dx: -2, dy: -2) }
         patchRaster(regions, opaque: false)
+    }
+
+    private func editOCRLine() {
+        guard selectedOCRLines.count == 1, let line = selectedOCRLines.first else { return }
+        prepareOCRText([line]) { proposals, stamp in
+            guard let proposal = proposals.first else { return }
+            selectTool(.text)
+            textDraft = StudioTextDraft(annotationID: nil, origin: proposal.origin, note: proposal.note,
+                                        color: Color(cgColor: proposal.foreground), replacement: proposal, sourceRevision: stamp)
+            document.hasPendingTextChanges = true
+            status = "Review the text and appearance, then apply or cancel."
+        }
+    }
+
+    private func convertOCRSelection() {
+        let lines = selectedOCRLines
+        prepareOCRText(lines) { proposals, stamp in
+            let edits = proposals.map { StudioOCRTextEdit(proposal: $0, note: $0.note, foreground: $0.foreground) }
+            applyOCRText(edits, revision: stamp)
+        }
+    }
+
+    private func prepareOCRText(_ lines: [RecognizedLine], completion: @escaping ([StudioOCRReplacement], UUID) -> Void) {
+        guard !busy, !lines.isEmpty, let source = document.image else { return }
+        guard lines.count <= 256 else {
+            status = "Select up to 256 recognized lines at a time."
+            return
+        }
+        let stamp = document.rasterRevision
+        status = "Checking text size, color and surrounding pixels…"
+        exportTask = Task { @MainActor in
+            do {
+                let proposals = try await Task.detached(priority: .userInitiated) {
+                    try lines.map { try StudioOCRReplacement.prepare($0, in: source) }
+                }.value
+                try Task.checkCancellation()
+                guard document.rasterRevision == stamp else { throw EditorDocumentError.rasterChanged }
+                exportTask = nil
+                completion(proposals, stamp)
+            } catch is CancellationError {
+                exportTask = nil
+            } catch {
+                exportTask = nil
+                report(error)
+            }
+        }
+    }
+
+    private func applyOCRText(_ edits: [StudioOCRTextEdit], revision: UUID) {
+        guard !busy, !edits.isEmpty else { return }
+        status = "Applying editable text to the screenshot…"
+        exportTask = Task { @MainActor in
+            defer { exportTask = nil }
+            do {
+                try await document.replaceOCRText(edits, expectedRevision: revision)
+                cancelText()
+                selectTool(.text)
+                status = "Text is editable. Click a converted line to edit it again."
+            } catch is CancellationError {
+                return
+            } catch { report(error) }
+        }
+    }
+
+    private func translateOCR() {
+        if #available(macOS 15.0, *) {
+            translationLines = selectedOCRIndices.isEmpty ? (recognizedLines ?? []) : selectedOCRLines
+            translationRevision = document.rasterRevision
+            reviewTranslation = !translationLines.isEmpty
+        } else {
+            errorMessage = "On-device translation requires macOS 15 or later."
+        }
+    }
+
+    private func applyTranslation(_ rows: [String]) async throws {
+        guard let source = document.image, let stamp = translationRevision,
+              document.rasterRevision == stamp, rows.count == translationLines.count else {
+            throw EditorDocumentError.rasterChanged
+        }
+        let changed = zip(translationLines, rows).filter { $0.0.text != $0.1 }
+        guard !changed.isEmpty else { return }
+        guard changed.count <= 256 else { throw EditorDocumentError.unsupportedText }
+        let edits = try await Task.detached(priority: .userInitiated) {
+            try changed.map { line, translation in
+                let proposal = try StudioOCRReplacement.prepare(line, in: source)
+                var note = proposal.note
+                note.text = translation
+                return StudioOCRTextEdit(proposal: proposal, note: note, foreground: proposal.foreground)
+            }
+        }.value
+        try await document.replaceOCRText(edits, expectedRevision: stamp)
+        selectTool(.text)
+        status = "Translation applied as editable text."
     }
 
     private func redactContacts(kind: OCRContact.Kind? = nil) {

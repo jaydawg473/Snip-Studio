@@ -14,6 +14,7 @@ enum SnipStudioMacEntry {
 
 struct SnipStudioMacApp: App {
     @NSApplicationDelegateAdaptor private var applicationDelegate: StudioApplicationDelegate
+    @AppStorage(StudioDesktopIntegration.showInMenuBar) private var showInMenuBar = false
 
     var body: some Scene {
         WindowGroup("Snip Studio", id: "studio", for: UUID.self) { $sessionID in
@@ -52,6 +53,10 @@ struct SnipStudioMacApp: App {
         }
         .defaultSize(width: 840, height: 620)
         .windowResizability(.contentMinSize)
+
+        MenuBarExtra("Snip Studio", systemImage: "camera.viewfinder", isInserted: $showInMenuBar) {
+            StudioMenuBarContent(applicationDelegate: applicationDelegate)
+        }
     }
 }
 

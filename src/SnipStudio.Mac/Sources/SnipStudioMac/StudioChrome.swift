@@ -10,6 +10,14 @@ struct StudioTextDraft {
     let origin: CGPoint
     var note: StudioTextAnnotation
     var color: Color
+    var replacement: StudioOCRReplacement? = nil
+    var sourceRevision: UUID? = nil
+}
+
+struct StudioOCRTextEdit: Sendable {
+    let proposal: StudioOCRReplacement
+    let note: StudioTextAnnotation
+    let foreground: CGColor
 }
 
 struct StudioInlineTextEditor: View {

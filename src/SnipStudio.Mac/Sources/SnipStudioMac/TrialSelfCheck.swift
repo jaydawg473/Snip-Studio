@@ -12,6 +12,8 @@ enum TrialSelfCheck {
             try StudioTextAnnotationSelfCheck.run()
             try StudioScrollStitcher.selfCheck()
             try StudioFreeformMask.selfCheck()
+            try StudioOCRReplacement.selfCheck()
+            if #available(macOS 15.0, *) { try StudioTranslationReviewSelfCheck.run() }
             try await StudioProjectFile.selfCheck()
             try await checkRasterPatches()
             try await checkShapesAndEraser()

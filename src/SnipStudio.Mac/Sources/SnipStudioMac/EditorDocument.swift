@@ -259,6 +259,7 @@ enum EditorDocumentError: LocalizedError {
     case unsupportedText
     case invalidProjectAnnotation
     case rasterChanged
+    case overlappingOCRText
 
     var errorDescription: String? {
         switch self {
@@ -271,6 +272,7 @@ enum EditorDocumentError: LocalizedError {
         case .unsupportedText: "Enter text that the selected font can display. Bitmap-only emoji and unsupported characters can’t be applied as editable text."
         case .invalidProjectAnnotation: "The editable snip contains an annotation that could not be restored safely."
         case .rasterChanged: "The screenshot changed before this action finished. Try again."
+        case .overlappingOCRText: "The selected text overlaps another selection or annotation. Edit that annotation directly, or select a single line."
         }
     }
 }
@@ -364,22 +366,8 @@ final class EditorDocument: ObservableObject {
             return clipped.integral
         }
         guard !rects.isEmpty else { return false }
-        let result = try await Task.detached(priority: .userInitiated) {
-            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-                  let context = CGContext(data: nil, width: source.width, height: source.height,
-                                          bitsPerComponent: 8, bytesPerRow: 0, space: space,
-                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-                throw EditorDocumentError.renderFailed
-            }
-            context.draw(source, in: bounds)
-            context.setFillColor(CGColor(gray: 0, alpha: 1))
-            for rect in rects {
-                let flipped = CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
-                if opaque { context.fill(flipped) } else { context.clear(flipped) }
-            }
-            guard let rendered = context.makeImage() else { throw EditorDocumentError.renderFailed }
-            return rendered
-        }.value
+        let color: CGColor? = opaque ? CGColor(gray: 0, alpha: 1) : nil
+        let result = try await Self.render(source, patches: rects.map { RasterPatch(rect: $0, color: color) })
         try Task.checkCancellation()
         guard rasterRevision == stamp else { throw EditorDocumentError.rasterChanged }
         cancelStroke()
@@ -387,6 +375,62 @@ final class EditorDocument: ObservableObject {
         let edited = RasterState(image: result, revision: UUID(), strokes: strokes)
         commit(.raster(before: original, after: edited))
         return true
+    }
+
+    func replaceOCRText(_ edits: [StudioOCRTextEdit], expectedRevision: UUID) async throws {
+        guard let source = image, rasterRevision == expectedRevision else { throw EditorDocumentError.rasterChanged }
+        guard !edits.isEmpty, edits.count <= 256 else { throw EditorDocumentError.unsupportedText }
+        var patches: [RasterPatch] = []
+        var newNotes: [InkStroke] = []
+        for edit in edits {
+            let proposal = edit.proposal
+            guard !strokes.contains(where: { $0.bounds.intersects(proposal.region) }),
+                  !patches.contains(where: { $0.rect.intersects(proposal.region) }) else {
+                throw EditorDocumentError.overlappingOCRText
+            }
+            var note = InkStroke(note: edit.note, color: edit.foreground, at: proposal.origin)
+            guard note.prepareForCommit() else { throw EditorDocumentError.unsupportedText }
+            patches.append(RasterPatch(rect: proposal.region, color: proposal.background))
+            newNotes.append(note)
+        }
+        let editorStamp = contentRevision
+        let result = try await Self.render(source, patches: patches)
+        try Task.checkCancellation()
+        guard rasterRevision == expectedRevision, contentRevision == editorStamp else { throw EditorDocumentError.rasterChanged }
+        cancelStroke()
+        let original = RasterState(image: source, revision: rasterRevision, strokes: strokes)
+        let edited = RasterState(image: result, revision: UUID(), strokes: strokes + newNotes)
+        commit(.raster(before: original, after: edited))
+    }
+
+    private struct RasterPatch: Sendable {
+        let rect: CGRect
+        let color: CGColor?
+    }
+
+    private nonisolated static func render(_ source: CGImage, patches: [RasterPatch]) async throws -> CGImage {
+        try await Task.detached(priority: .userInitiated) {
+            let bounds = CGRect(x: 0, y: 0, width: source.width, height: source.height)
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(data: nil, width: source.width, height: source.height,
+                                          bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw EditorDocumentError.renderFailed
+            }
+            context.draw(source, in: bounds)
+            for patch in patches {
+                let rect = patch.rect
+                let flipped = CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
+                if let color = patch.color {
+                    context.setFillColor(color)
+                    context.fill(flipped)
+                } else {
+                    context.clear(flipped)
+                }
+            }
+            guard let rendered = context.makeImage() else { throw EditorDocumentError.renderFailed }
+            return rendered
+        }.value
     }
 
     func eraseAllAnnotations() {
