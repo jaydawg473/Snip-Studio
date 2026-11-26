@@ -13,6 +13,8 @@ struct SnipCanvas: View {
     let erasesAnnotations: Bool
     let cropSelection: Binding<CGRect>?
     let annotationSelection: Binding<UUID?>?
+    let textDraft: Binding<StudioTextDraft?>?
+    let onTextTap: ((CGPoint) -> Void)?
     let recognizedLines: [RecognizedLine]
     let onZoomChanged: (CGFloat) -> Void
 
@@ -25,7 +27,8 @@ struct SnipCanvas: View {
     init(document: EditorDocument, inkColor: Color, inkWidth: CGFloat, zoom: CGFloat? = nil,
          allowsDrawing: Bool = true, activeShape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid,
          erasesAnnotations: Bool = false, cropSelection: Binding<CGRect>? = nil,
-         annotationSelection: Binding<UUID?>? = nil, recognizedLines: [RecognizedLine] = [],
+         annotationSelection: Binding<UUID?>? = nil, textDraft: Binding<StudioTextDraft?>? = nil,
+         onTextTap: ((CGPoint) -> Void)? = nil, recognizedLines: [RecognizedLine] = [],
          onZoomChanged: @escaping (CGFloat) -> Void = { _ in }) {
         _document = ObservedObject(wrappedValue: document)
         self.inkColor = inkColor
@@ -37,6 +40,8 @@ struct SnipCanvas: View {
         self.erasesAnnotations = erasesAnnotations
         self.cropSelection = cropSelection
         self.annotationSelection = annotationSelection
+        self.textDraft = textDraft
+        self.onTextTap = onTextTap
         self.recognizedLines = recognizedLines
         self.onZoomChanged = onZoomChanged
     }
@@ -101,6 +106,7 @@ struct SnipCanvas: View {
     }
 
     private func raster(_ image: CGImage, frame: CGRect, layout: SnipViewportLayout) -> some View {
+        let editedID = textDraft?.wrappedValue?.annotationID
         let strokes = document.strokes
         let draft = document.draftStroke
         let selected = annotationSelection?.wrappedValue
@@ -119,7 +125,7 @@ struct SnipCanvas: View {
                 ink.clip(to: framePath)
                 ink.translateBy(x: frame.minX, y: frame.minY)
                 ink.scaleBy(x: layout.scale, y: layout.scale)
-                for stroke in strokes {
+                for stroke in strokes where stroke.id != editedID {
                     let offset = drag?.id == stroke.id ? drag?.translation ?? .zero : .zero
                     var layer = ink
                     layer.translateBy(x: offset.width, y: offset.height)
@@ -144,6 +150,10 @@ struct SnipCanvas: View {
             .contentShape(Rectangle())
             .accessibilityLabel("Snip editor canvas")
             .gesture(inkGesture(in: frame, layout: layout), including: allowsDrawing || annotationSelection != nil ? .all : .none)
+            .gesture(SpatialTapGesture().onEnded { event in
+                guard frame.contains(event.location), textDraft?.wrappedValue == nil else { return }
+                onTextTap?(layout.imagePoint(event.location, in: frame))
+            }, including: onTextTap == nil ? .none : .all)
             .onContinuousHover { phase in
                 guard annotationSelection != nil else { return }
                 switch phase {
@@ -164,6 +174,19 @@ struct SnipCanvas: View {
             if let cropSelection {
                 StudioCropOverlay(bounds: cropSelection, imageFrame: frame,
                                   pixelSize: CGSize(width: image.width, height: image.height))
+            }
+            if let textDraft, let draft = Binding(textDraft) {
+                GeometryReader { viewport in
+                    let position = draft.wrappedValue.origin
+                    let note = draft.wrappedValue.note
+                    let lineHeight = max(20, note.pixelSize * layout.scale * 1.35)
+                    let rows = note.text.components(separatedBy: .newlines).count
+                    let width = min(400, viewport.size.width)
+                    let height = min(164, viewport.size.height, max(40, CGFloat(min(rows, 7)) * lineHeight + 14))
+                    let x = max(0, min(viewport.size.width - width, frame.minX + position.x * layout.scale))
+                    let y = max(0, min(viewport.size.height - height, frame.minY + position.y * layout.scale))
+                    StudioInlineTextEditor(draft: draft, frame: CGRect(x: x, y: y, width: width, height: height), scale: layout.scale)
+                }
             }
         }
     }

@@ -19,11 +19,13 @@ struct InkStroke: Identifiable, Sendable {
     private(set) var width: CGFloat
     private(set) var points: [CGPoint]
     let shape: SnipShape?
+    private(set) var textNote: StudioTextAnnotation?
     private(set) var lineStyle: SnipLineStyle
     private var quarterTurns = 0
     private var committedOutline: CommittedOutline?
 
     var bounds: CGRect { committedOutline?.bounds ?? outline.boundingBoxOfPath }
+    var origin: CGPoint { points[0] }
 
     init(color: CGColor, width: CGFloat, at point: CGPoint,
          shape: SnipShape? = nil, lineStyle: SnipLineStyle = .solid) {
@@ -32,6 +34,11 @@ struct InkStroke: Identifiable, Sendable {
         points = [point]
         self.shape = shape
         self.lineStyle = lineStyle
+    }
+
+    fileprivate init(note: StudioTextAnnotation, color: CGColor, at origin: CGPoint) {
+        self.init(color: color, width: 1, at: origin)
+        textNote = note
     }
 
     mutating func extend(to point: CGPoint) {
@@ -72,6 +79,14 @@ struct InkStroke: Identifiable, Sendable {
         return copy
     }
 
+    fileprivate func replacingText(with note: StudioTextAnnotation, color: CGColor) -> InkStroke {
+        var copy = self
+        copy.textNote = note
+        copy.color = color
+        copy.committedOutline = nil
+        return copy
+    }
+
     fileprivate func restyled(color: CGColor?, width: CGFloat?, lineStyle: SnipLineStyle?) -> InkStroke? {
         let newColor = color ?? self.color
         let newWidth = width ?? self.width
@@ -98,6 +113,7 @@ struct InkStroke: Identifiable, Sendable {
     private var unrotatedOutline: CGPath {
         let path = CGMutablePath()
         let first = points[0]
+        if let textNote { return textNote.makeOutline(at: first) }
         if let shape { return shapeOutline(shape, from: first, to: points[points.count - 1]) }
         if points.count == 1 {
             let radius = width / 2
@@ -121,8 +137,9 @@ struct InkStroke: Identifiable, Sendable {
             maximum.x = max(maximum.x, point.x)
             maximum.y = max(maximum.y, point.y)
         }
-        let x = minimum.x + (maximum.x - minimum.x) / 2
-        let y = minimum.y + (maximum.y - minimum.y) / 2
+        let textBounds = textNote?.bounds(at: start)
+        let x = textBounds?.midX ?? minimum.x + (maximum.x - minimum.x) / 2
+        let y = textBounds?.midY ?? minimum.y + (maximum.y - minimum.y) / 2
         switch quarterTurns {
         case 1: return CGAffineTransform(a: 0, b: 1, c: -1, d: 0, tx: x + y, ty: y - x)
         case 2: return CGAffineTransform(a: -1, b: 0, c: 0, d: -1, tx: 2 * x, ty: 2 * y)
@@ -215,6 +232,7 @@ enum EditorDocumentError: LocalizedError {
     case cropFailed
     case renderFailed
     case encodeFailed
+    case unsupportedText
 
     var errorDescription: String? {
         switch self {
@@ -224,6 +242,7 @@ enum EditorDocumentError: LocalizedError {
         case .cropFailed: "The selected area could not be cropped."
         case .renderFailed: "The edited snip could not be rendered."
         case .encodeFailed: "The snip could not be encoded as a PNG."
+        case .unsupportedText: "Enter text that the selected font can display. Bitmap-only emoji and unsupported characters can’t be applied as editable text."
         }
     }
 }
@@ -238,12 +257,13 @@ final class EditorDocument: ObservableObject {
     private var redoHistory: [AnnotationEdit] = []
     private var imageRevision = UUID()
     private var savedRevision: UUID?
+    var hasPendingTextChanges = false
 
     var hasImage: Bool { image != nil }
     var canUndo: Bool { !undoHistory.isEmpty }
     var canRedo: Bool { !redoHistory.isEmpty }
     var isDrawing: Bool { draftStroke != nil }
-    var hasUnsavedChanges: Bool { hasImage && savedRevision != contentRevision }
+    var hasUnsavedChanges: Bool { hasImage && (hasPendingTextChanges || savedRevision != contentRevision) }
     var contentRevision: UUID { undoHistory.last?.revision ?? imageRevision }
 
     func replaceImage(_ source: NSImage, alreadySaved: Bool) throws {
@@ -259,6 +279,7 @@ final class EditorDocument: ObservableObject {
             throw EditorDocumentError.imageTooLarge
         }
         draftStroke = nil
+        hasPendingTextChanges = false
         undoHistory.removeAll()
         redoHistory.removeAll()
         imageRevision = UUID()
@@ -293,6 +314,21 @@ final class EditorDocument: ObservableObject {
 
     func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
         beginAnnotation(at: point, color: color, width: width)
+    }
+
+    func applyText(_ note: StudioTextAnnotation, at origin: CGPoint, color: CGColor, updating id: UUID?) throws {
+        guard image != nil else { throw EditorDocumentError.noImage }
+        guard let layout = note.layout(at: origin), !layout.hasUnsupportedGlyphs, !layout.outline.isEmpty else {
+            throw EditorDocumentError.unsupportedText
+        }
+        if let id {
+            guard let existing = annotation(withID: id), let previousNote = existing.textNote else { return }
+            guard previousNote != note || !CFEqual(existing.color, color) else { return }
+            _ = updateAnnotation(id: id) { $0.replacingText(with: note, color: color) }
+        } else {
+            var stroke = InkStroke(note: note, color: color, at: origin)
+            if stroke.prepareForCommit() { commit(.insert(stroke)) }
+        }
     }
 
     func beginShape(at point: CGPoint, color: CGColor, width: CGFloat, shape: SnipShape, lineStyle: SnipLineStyle) {

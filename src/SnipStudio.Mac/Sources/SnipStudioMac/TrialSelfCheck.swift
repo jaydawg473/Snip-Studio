@@ -9,6 +9,8 @@ enum TrialSelfCheck {
     static func run() async -> Int32 {
         do {
             try await checkEditor()
+            try StudioTextAnnotationSelfCheck.run()
+            try StudioScrollStitcher.selfCheck()
             try await checkShapesAndEraser()
             try await checkCrop()
             try await checkObjectEditing()

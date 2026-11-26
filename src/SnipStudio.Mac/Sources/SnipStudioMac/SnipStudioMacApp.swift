@@ -40,6 +40,12 @@ struct SnipStudioMacApp: App {
         }
         .defaultSize(width: 465, height: 135)
         .windowResizability(.contentSize)
+
+        Window("Scrolling capture", id: "scrolling") {
+            StudioScrollingView(applicationDelegate: applicationDelegate)
+        }
+        .defaultSize(width: 490, height: 205)
+        .windowResizability(.contentMinSize)
     }
 }
 

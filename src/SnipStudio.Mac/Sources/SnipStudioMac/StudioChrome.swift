@@ -2,7 +2,39 @@ import AppKit
 import SwiftUI
 
 enum StudioTool {
-    case move, pen, highlight, shape, eraser, crop, textActions
+    case move, pen, highlight, shape, text, eraser, crop, textActions
+}
+
+struct StudioTextDraft {
+    let annotationID: UUID?
+    let origin: CGPoint
+    var note: StudioTextAnnotation
+    var color: Color
+}
+
+struct StudioInlineTextEditor: View {
+    @Binding var draft: StudioTextDraft
+    let frame: CGRect
+    let scale: CGFloat
+    @FocusState private var isFocused: Bool
+
+    var body: some View {
+        let fontSize = max(10, min(56, draft.note.pixelSize * scale))
+        let regular = Font.custom(draft.note.fontName, size: fontSize)
+            .weight(draft.note.bold ? .bold : .regular)
+        TextEditor(text: $draft.note.text)
+            .font(draft.note.italic ? regular.italic() : regular)
+            .foregroundStyle(draft.color)
+            .scrollContentBackground(.hidden)
+            .padding(2)
+            .background(Color(nsColor: .textBackgroundColor))
+            .overlay { RoundedRectangle(cornerRadius: 3).strokeBorder(StudioColors.primary, lineWidth: 1) }
+            .frame(width: frame.width, height: frame.height)
+            .position(x: frame.midX, y: frame.midY)
+            .focused($isFocused)
+            .onAppear { isFocused = true }
+            .accessibilityLabel("Editable text annotation")
+    }
 }
 
 extension SnipShape {

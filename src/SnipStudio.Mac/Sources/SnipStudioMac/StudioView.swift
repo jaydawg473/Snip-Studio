@@ -26,6 +26,9 @@ struct StudioView: View {
     @State private var shapeWidth: CGFloat = 3
     @State private var cropBounds = CGRect.null
     @State private var selectedAnnotationID: UUID?
+    @State private var textDraft: StudioTextDraft?
+    @State private var textStyle = StudioTextAnnotation(text: "")
+    @State private var textColor = Color.black
     @State private var showOptions = true
     @State private var zoomPercent: Int?
     @State private var displayedZoom = 100
@@ -40,8 +43,11 @@ struct StudioView: View {
     @State private var updateTask: Task<Void, Never>?
     @State private var updateMessage: String?
     @State private var updateURL: URL?
+    @State private var externalWorkingCopy: URL?
+    @State private var recentFiles = NSDocumentController.shared.recentDocumentURLs
 
     private var busy: Bool { captureTask != nil || recognitionInProgress || exportTask != nil }
+    private var fileActionsDisabled: Bool { busy || textDraft != nil }
     private var recognizedText: String { recognizedLines?.map(\.text).joined(separator: "\n") ?? "" }
     private var drawingColor: Color {
         switch tool {
@@ -71,12 +77,14 @@ struct StudioView: View {
                     inkColor: drawingColor,
                     inkWidth: drawingWidth,
                     zoom: zoomPercent.map { CGFloat($0) / 100 },
-                    allowsDrawing: tool != .move && tool != .textActions && tool != .crop,
+                    allowsDrawing: tool != .move && tool != .textActions && tool != .crop && tool != .text,
                     activeShape: tool == .shape ? shape : nil,
                     lineStyle: lineStyle,
                     erasesAnnotations: tool == .eraser,
                     cropSelection: tool == .crop ? $cropBounds : nil,
                     annotationSelection: tool == .move ? $selectedAnnotationID : nil,
+                    textDraft: tool == .text ? $textDraft : nil,
+                    onTextTap: tool == .text ? beginText : nil,
                     recognizedLines: tool == .textActions ? recognizedLines ?? [] : []
                 ) { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
             } else {
@@ -159,7 +167,7 @@ struct StudioView: View {
                     .frame(width: 86, alignment: .leading)
             }
             .buttonStyle(StudioButtonStyle(primary: true))
-            .disabled(busy)
+            .disabled(fileActionsDisabled)
             .help(videoMode ? "New recording (⌘N)" : "New snip (⌘N)")
 
             HStack(spacing: 0) {
@@ -167,7 +175,7 @@ struct StudioView: View {
                 iconButton("Video mode", symbol: "video", selected: videoMode) { chooseVideoMode() }
             }
             .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 6))
-            .disabled(busy)
+            .disabled(fileActionsDisabled)
 
             if !videoMode {
                 screenshotOptions(compact: compact)
@@ -176,15 +184,17 @@ struct StudioView: View {
             Spacer(minLength: 2)
             iconButton("Open image (⌘O)", symbol: "folder", action: openImage)
                 .keyboardShortcut("o", modifiers: .command)
-                .disabled(busy)
+                .disabled(fileActionsDisabled)
             iconButton("Paste image (⌘V)", symbol: "doc.on.clipboard", action: pasteImage)
                 .keyboardShortcut("v", modifiers: .command)
-                .disabled(busy)
+                .disabled(fileActionsDisabled)
             iconButton("Save PNG (⌘S)", symbol: "square.and.arrow.down", action: saveImage)
                 .keyboardShortcut("s", modifiers: .command)
-                .disabled(busy || !document.hasImage)
+                .disabled(fileActionsDisabled || !document.hasImage)
             iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
-                .disabled(busy || !document.hasImage)
+                .disabled(fileActionsDisabled || !document.hasImage)
+            iconButton("Share image", symbol: "square.and.arrow.up", action: shareImage)
+                .disabled(fileActionsDisabled || !document.hasImage)
             fileOptions
         }
         .padding(.horizontal, 12)
@@ -199,6 +209,8 @@ struct StudioView: View {
                         Label(mode.title, systemImage: mode.icon).tag(mode)
                     }
                 }
+                Divider()
+                Button("Scrolling capture…") { openWindow(id: "scrolling") }
             } label: {
                 if compact {
                     Image(systemName: captureMode.icon).font(.system(size: 16))
@@ -210,7 +222,7 @@ struct StudioView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Capture shape: \(captureMode.title)")
-            .disabled(busy)
+            .disabled(fileActionsDisabled)
 
             Menu {
                 Picker("Capture delay", selection: $captureDelay) {
@@ -226,20 +238,32 @@ struct StudioView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Capture delay")
-            .disabled(busy)
+            .disabled(fileActionsDisabled)
         }
     }
 
     private var fileOptions: some View {
         Menu {
             Button("Open video…") { openVideo() }
+            Menu("Open Recent") {
+                if recentFiles.isEmpty { Text("No recent files") }
+                ForEach(recentFiles.prefix(10), id: \.self) { url in
+                    Button {
+                        openRecent(url)
+                    } label: {
+                        Text(url.lastPathComponent)
+                    }
+                }
+            }
+            .disabled(fileActionsDisabled)
             Menu("Save image as…") {
                 ForEach(StudioFileFormat.allCases, id: \.self) { format in
                     Button(format.title) { saveImage(as: format) }
                 }
             }
-            .disabled(busy || !document.hasImage)
-            Button("Print image…") { printImage() }.disabled(busy || !document.hasImage)
+            .disabled(fileActionsDisabled || !document.hasImage)
+            Button("Print image…") { printImage() }.disabled(fileActionsDisabled || !document.hasImage)
+            Button("Import external editor copy…") { importWorkingCopy() }.disabled(fileActionsDisabled || externalWorkingCopy == nil)
             Divider()
             SettingsLink { Text("Settings…") }
             Button("Check for Updates…") { checkForUpdates() }.disabled(updateTask != nil)
@@ -277,6 +301,7 @@ struct StudioView: View {
             .menuStyle(.borderlessButton)
             .fixedSize()
             .help("Shapes")
+            toolButton(.text, label: "Add or edit text", symbol: "textformat")
             toolButton(.eraser, label: "Eraser", symbol: "eraser")
             toolButton(.crop, label: "Crop", symbol: "crop").disabled(busy)
             Divider().frame(height: 20).padding(.horizontal, 4)
@@ -286,11 +311,16 @@ struct StudioView: View {
                 .disabled(!document.canRedo)
             iconButton("Text actions", symbol: "wand.and.stars", selected: tool == .textActions, action: toggleTextActions)
                 .disabled(busy)
+            Divider().frame(height: 20).padding(.horizontal, 4)
+            Button { editInApp() } label: { Label("Edit in app", systemImage: "pencil") }
+                .buttonStyle(StudioButtonStyle())
+                .disabled(busy)
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 12)
         .frame(height: 36)
         .background(StudioColors.toolbar)
+        .disabled(textDraft != nil)
     }
 
     @ViewBuilder
@@ -385,6 +415,8 @@ struct StudioView: View {
             .padding(.horizontal, 12)
             .frame(height: 40)
             .background(StudioColors.options)
+        case .text:
+            textOptions
         }
     }
 
@@ -428,6 +460,46 @@ struct StudioView: View {
         .background(StudioColors.toolbar)
     }
 
+    private var textOptions: some View {
+        let note = textDraft?.note ?? textStyle
+        return HStack(spacing: 6) {
+            ColorPicker("Text color", selection: Binding(get: { textDraft?.color ?? textColor }, set: { color in
+                if textDraft == nil { textColor = color } else { textDraft?.color = color }
+            }))
+            .labelsHidden()
+            .help("Text color")
+            Menu {
+                ForEach(["Helvetica", "Menlo-Regular", "ArialMT", "TimesNewRomanPSMT"], id: \.self) { name in
+                    Button(NSFont(name: name, size: 12)?.displayName ?? name) { changeTextStyle { $0.fontName = name } }
+                }
+            } label: {
+                Text(NSFont(name: note.fontName, size: 12)?.displayName ?? note.fontName).lineLimit(1)
+            }
+            .frame(width: 119)
+            .menuStyle(.borderlessButton)
+            .help("Text font")
+            Stepper(value: Binding(get: { note.pixelSize }, set: { size in changeTextStyle { $0.pixelSize = size } }),
+                    in: StudioTextAnnotation.pixelSizeRange) {
+                Text("\(Int(note.pixelSize)) px").monospacedDigit()
+            }
+            .fixedSize()
+            .accessibilityLabel("Text size")
+            iconButton("Bold", symbol: "bold", selected: note.bold) { changeTextStyle { $0.bold.toggle() } }
+            iconButton("Italic", symbol: "italic", selected: note.italic) { changeTextStyle { $0.italic.toggle() } }
+            iconButton("Underline", symbol: "underline", selected: note.underline) { changeTextStyle { $0.underline.toggle() } }
+            Spacer(minLength: 0)
+            if textDraft != nil {
+                iconButton("Apply text", symbol: "checkmark", action: applyText)
+                    .disabled(note.text.isEmpty)
+                iconButton("Cancel text", symbol: "xmark", action: cancelText)
+                    .keyboardShortcut(.cancelAction)
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 40)
+        .background(StudioColors.options)
+    }
+
     private func selectionOptions(_ annotation: InkStroke) -> some View {
         HStack(spacing: 7) {
             iconButton("Rotate left", symbol: "rotate.left") {
@@ -443,13 +515,15 @@ struct StudioView: View {
             }), supportsOpacity: true)
             .labelsHidden()
             .help("Annotation color and opacity")
-            Stepper(value: Binding(get: { annotation.width }, set: { width in
-                document.updateAnnotation(id: annotation.id, width: width)
-            }), in: 1...30, step: 1) {
-                Text("\(Int(annotation.width)) px").monospacedDigit()
+            if annotation.textNote == nil {
+                Stepper(value: Binding(get: { annotation.width }, set: { width in
+                    document.updateAnnotation(id: annotation.id, width: width)
+                }), in: 1...30, step: 1) {
+                    Text("\(Int(annotation.width)) px").monospacedDigit()
+                }
+                .fixedSize()
+                .accessibilityLabel("Annotation width")
             }
-            .fixedSize()
-            .accessibilityLabel("Annotation width")
             if annotation.shape != nil {
                 Picker("Line style", selection: Binding(get: { annotation.lineStyle }, set: { style in
                     document.updateAnnotation(id: annotation.id, lineStyle: style)
@@ -524,6 +598,7 @@ struct StudioView: View {
         case .pen: status = "Draw on the screenshot."
         case .highlight: status = "Drag to highlight an area."
         case .shape: status = "Drag to draw a \(shape.rawValue)."
+        case .text: status = "Click the screenshot to add or edit text."
         case .eraser: status = "Erase annotations. Use Undo to restore them."
         case .crop:
             cropBounds = fullImageBounds
@@ -531,6 +606,44 @@ struct StudioView: View {
             status = "Drag the crop edges, then select Apply crop."
         case .textActions: break
         }
+    }
+
+    private func beginText(at origin: CGPoint) {
+        if let annotation = document.annotation(at: origin, tolerance: 3), let note = annotation.textNote {
+            textDraft = StudioTextDraft(annotationID: annotation.id, origin: annotation.origin, note: note,
+                                        color: Color(cgColor: annotation.color))
+        } else {
+            textDraft = StudioTextDraft(annotationID: nil, origin: origin, note: textStyle, color: textColor)
+        }
+        document.hasPendingTextChanges = true
+        status = "Use the checkmark to apply text or X to cancel."
+    }
+
+    private func changeTextStyle(_ change: (inout StudioTextAnnotation) -> Void) {
+        if var draft = textDraft {
+            change(&draft.note)
+            textDraft = draft
+        } else {
+            change(&textStyle)
+        }
+    }
+
+    private func applyText() {
+        guard let draft = textDraft, let color = NSColor(draft.color).usingColorSpace(.sRGB)?.cgColor else { return }
+        do {
+            try document.applyText(draft.note, at: draft.origin, color: color, updating: draft.annotationID)
+            textStyle = draft.note
+            textStyle.text = ""
+            textColor = draft.color
+            cancelText()
+            status = "Text applied. Use the Text tool to edit it again."
+        } catch { report(error) }
+    }
+
+    private func cancelText() {
+        textDraft = nil
+        document.hasPendingTextChanges = false
+        status = "Click the screenshot to add or edit text."
     }
 
     private var fullImageBounds: CGRect {
@@ -602,7 +715,7 @@ struct StudioView: View {
     }
 
     private func startNew() {
-        guard !busy else { return }
+        guard !fileActionsDisabled else { return }
         if videoMode {
             openWindow(id: "recording")
         } else {
@@ -621,11 +734,19 @@ struct StudioView: View {
         panel.allowedContentTypes = [.image]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openImage(at: url)
+    }
+
+    private func openImage(at url: URL, retainsWorkingCopy: Bool = false) {
         guard let image = NSImage(contentsOf: url) else {
             report(StudioError.imageUnreadable)
             return
         }
-        do { try load(image, alreadySaved: true) } catch { report(error) }
+        do {
+            try load(image, alreadySaved: true)
+            if retainsWorkingCopy { externalWorkingCopy = url }
+            recordRecent(url)
+        } catch { report(error) }
     }
 
     private func pasteImage() {
@@ -642,13 +763,34 @@ struct StudioView: View {
         panel.allowedContentTypes = [.movie]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        openRecentVideo(url)
+    }
+
+    private func openRecentVideo(_ url: URL) {
+        recordRecent(url)
         openWindow(id: "video-review", value: url)
+    }
+
+    private func openRecent(_ url: URL) {
+        guard !busy else { return }
+        if UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true {
+            openRecentVideo(url)
+        } else if confirmDiscard(document, title: "Replace the current screenshot?") {
+            openImage(at: url)
+        }
+    }
+
+    private func recordRecent(_ url: URL) {
+        let recent = NSDocumentController.shared
+        recent.noteNewRecentDocumentURL(url)
+        recentFiles = recent.recentDocumentURLs
     }
 
     private func load(_ image: NSImage, alreadySaved: Bool) throws {
         try document.replaceImage(image, alreadySaved: alreadySaved)
         openedImageRevision = alreadySaved ? document.contentRevision : nil
         recognizedLines = nil
+        externalWorkingCopy = nil
         zoomPercent = fitOnLoad ? nil : 100
         selectTool(.pen)
         status = "Screenshot ready."
@@ -786,6 +928,54 @@ struct StudioView: View {
         } catch { report(error) }
     }
 
+    private func shareImage() {
+        guard !busy, let origin = NSApp.keyWindow?.contentView else { return }
+        do {
+            let snapshot = try document.pngSnapshot()
+            status = "Preparing the screenshot to share…"
+            exportTask = Task { @MainActor [weak origin] in
+                defer { exportTask = nil }
+                do {
+                    let png = try await snapshot.pngData()
+                    try Task.checkCancellation()
+                    guard let origin, let image = NSImage(data: png) else { throw StudioError.imageUnreadable }
+                    let y = origin.isFlipped ? origin.bounds.minY + 35 : origin.bounds.maxY - 35
+                    let anchor = NSRect(x: origin.bounds.maxX - 60, y: y, width: 25, height: 20)
+                    NSSharingServicePicker(items: [image]).show(relativeTo: anchor, of: origin, preferredEdge: .minY)
+                    status = "Choose a sharing destination."
+                } catch is CancellationError {
+                    return
+                } catch { report(error) }
+            }
+        } catch { report(error) }
+    }
+
+    private func editInApp() {
+        guard !busy else { return }
+        do {
+            let snapshot = try document.pngSnapshot()
+            status = "Preparing an editable working copy…"
+            exportTask = Task { @MainActor in
+                defer { exportTask = nil }
+                do {
+                    let copy = try await StudioOriginalCapture.save(snapshot, workingCopy: true)
+                    try Task.checkCancellation()
+                    externalWorkingCopy = copy
+                    guard NSWorkspace.shared.open(copy) else { throw StudioError.externalEditorUnavailable }
+                    status = "Use Import external editor copy after saving your changes."
+                } catch is CancellationError {
+                    return
+                } catch { report(error) }
+            }
+        } catch { report(error) }
+    }
+
+    private func importWorkingCopy() {
+        guard !busy, let externalWorkingCopy,
+              confirmDiscard(document, title: "Replace the current screenshot?") else { return }
+        openImage(at: externalWorkingCopy, retainsWorkingCopy: true)
+    }
+
     private func exportImage(to url: URL? = nil, format: StudioFileFormat = .png) {
         guard !busy, document.hasImage else { return }
         if url == nil {
@@ -801,6 +991,7 @@ struct StudioView: View {
                 do {
                     if let url {
                         try await StudioFileExport.write(snapshot, as: format, to: url)
+                        if format != .pdf { recordRecent(url) }
                         document.markSaved(snapshot)
                         status = "Saved \(url.lastPathComponent)."
                         if document.hasUnsavedChanges {
@@ -860,13 +1051,14 @@ struct StudioView: View {
 }
 
 private enum StudioError: LocalizedError {
-    case imageUnreadable, noClipboardImage, copyFailed
+    case imageUnreadable, noClipboardImage, copyFailed, externalEditorUnavailable
 
     var errorDescription: String? {
         switch self {
         case .imageUnreadable: "Snip Studio could not read that image."
         case .noClipboardImage: "The clipboard doesn't contain an image."
         case .copyFailed: "The clipboard could not accept the result. Try copying again."
+        case .externalEditorUnavailable: "macOS could not open the working copy in an image editor."
         }
     }
 }
