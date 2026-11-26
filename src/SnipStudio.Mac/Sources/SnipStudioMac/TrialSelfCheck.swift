@@ -98,8 +98,8 @@ enum TrialSelfCheck {
         let roundTrip = directory.appendingPathComponent("converted.snipstudiomac")
         try await document.pngSnapshot().writeProject(to: roundTrip)
         let reopened = try await StudioProjectFile.load(from: roundTrip)
-        try require(reopened.annotations.count == 1 && reopened.annotations[0].lineStyle == "dotted" &&
-                    reopened.annotations[0].rotationDegrees == 35, "the Mac copy reopens with its editable Windows geometry")
+        try require(reopened.annotations == outline.annotations,
+                    "the Mac copy reopens with the same editable geometry, stroke color and fill color")
         let sourceBytes = try Data(contentsOf: input)
         try require(sourceBytes == outlineBytes, "opening and saving a Mac copy preserves the original Windows project bytes")
 

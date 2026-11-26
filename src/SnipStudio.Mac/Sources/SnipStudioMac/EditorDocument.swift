@@ -55,12 +55,13 @@ struct InkStroke: Identifiable, Sendable {
     }
 
     fileprivate init(projectRecord record: StudioProjectAnnotation) throws {
-        guard let first = record.points.first, let lineStyle = SnipLineStyle(rawValue: record.lineStyle) else {
+        guard let first = record.points.first, let lineStyle = SnipLineStyle(rawValue: record.lineStyle),
+              let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let color = CGColor(colorSpace: space, components: [record.red, record.green, record.blue, record.alpha]) else {
             throw EditorDocumentError.invalidProjectAnnotation
         }
         let shape = record.shape.flatMap(SnipShape.init(rawValue:))
         guard record.shape == nil || shape != nil else { throw EditorDocumentError.invalidProjectAnnotation }
-        let color = CGColor(red: record.red, green: record.green, blue: record.blue, alpha: record.alpha)
         self.init(color: color, width: record.width, at: first, shape: shape, lineStyle: lineStyle)
         points = record.points
         quarterTurns = record.quarterTurns
@@ -68,8 +69,11 @@ struct InkStroke: Identifiable, Sendable {
         emojiFrameSize = record.emojiFrameSize
         highlightBands = record.highlightBands
         textNote = record.text
-        if let fill = record.fill, fill.count == 4 {
-            fillColor = CGColor(red: fill[0], green: fill[1], blue: fill[2], alpha: fill[3])
+        if let fill = record.fill {
+            guard fill.count == 4, let restoredFill = CGColor(colorSpace: space, components: fill) else {
+                throw EditorDocumentError.invalidProjectAnnotation
+            }
+            fillColor = restoredFill
         }
         if let emoji = record.emoji {
             self.emoji = emoji
@@ -79,14 +83,24 @@ struct InkStroke: Identifiable, Sendable {
     }
 
     fileprivate func projectRecord() throws -> StudioProjectAnnotation {
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let components = color.converted(to: space, intent: .defaultIntent, options: nil)?.components,
-              components.count == 4 else { throw EditorDocumentError.invalidProjectAnnotation }
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { throw EditorDocumentError.invalidProjectAnnotation }
+        func components(inSRGB ink: CGColor) throws -> [CGFloat] {
+            let values: [CGFloat]?
+            if let current = ink.colorSpace, CFEqual(current, space) {
+                values = ink.components
+            } else {
+                values = ink.converted(to: space, intent: .defaultIntent, options: nil)?.components
+            }
+            guard let values, values.count == 4 else { throw EditorDocumentError.invalidProjectAnnotation }
+            return values
+        }
+        let components = try components(inSRGB: color)
+        let fill = try fillColor.map { try components(inSRGB: $0) }
         return StudioProjectAnnotation(points: points, red: components[0], green: components[1],
                                        blue: components[2], alpha: components[3], width: width,
                                        shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
                                        quarterTurns: quarterTurns, text: textNote,
-                                       fill: fillColor?.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+                                       fill: fill,
                                        emoji: emoji, rotationDegrees: rotationDegrees, emojiFrameSize: emojiFrameSize,
                                        highlightBands: highlightBands)
     }
