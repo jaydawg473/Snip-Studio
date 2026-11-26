@@ -16,11 +16,12 @@ struct SnipStudioMacApp: App {
     @NSApplicationDelegateAdaptor private var applicationDelegate: StudioApplicationDelegate
 
     var body: some Scene {
-        Window("Snip Studio", id: "studio") {
-            StudioView(applicationDelegate: applicationDelegate)
+        WindowGroup("Snip Studio", id: "studio", for: UUID.self) { $sessionID in
+            StudioView(applicationDelegate: applicationDelegate, sessionID: sessionID)
         }
         .defaultSize(width: 540, height: 310)
         .windowResizability(.contentMinSize)
+        .commands { StudioCommands(applicationDelegate: applicationDelegate) }
 
         Settings { StudioSettingsView() }
 
@@ -39,5 +40,35 @@ struct SnipStudioMacApp: App {
         }
         .defaultSize(width: 465, height: 135)
         .windowResizability(.contentSize)
+    }
+}
+
+private struct StudioCommands: Commands {
+    let applicationDelegate: StudioApplicationDelegate
+
+    @Environment(\.openWindow) private var openWindow
+    @FocusedValue(\.studioNewSnip) private var newSnip
+
+    var body: some Commands {
+        CommandGroup(replacing: .newItem) {
+            Button("New Snip or Recording") {
+                if let newSnip { newSnip() } else { openWindow(id: "studio") }
+            }
+            .keyboardShortcut("n", modifiers: .command)
+            Button("Close All Snips Without Saving…") {
+                applicationDelegate.closeAllSnipsWithoutSaving()
+            }
+        }
+    }
+}
+
+private struct StudioNewSnipKey: FocusedValueKey {
+    typealias Value = () -> Void
+}
+
+extension FocusedValues {
+    var studioNewSnip: (() -> Void)? {
+        get { self[StudioNewSnipKey.self] }
+        set { self[StudioNewSnipKey.self] = newValue }
     }
 }

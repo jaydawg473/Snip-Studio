@@ -4,9 +4,14 @@ import SwiftUI
 @MainActor
 func confirmDiscard(_ document: EditorDocument?, title: String) -> Bool {
     guard document?.hasUnsavedChanges == true else { return true }
+    return confirmDiscard(title: title, detail: "Choose Cancel to keep editing or save the screenshot as a PNG.")
+}
+
+@MainActor
+private func confirmDiscard(title: String, detail: String) -> Bool {
     let alert = NSAlert()
     alert.messageText = title
-    alert.informativeText = "Choose Cancel to keep editing or save the screenshot as a PNG."
+    alert.informativeText = detail
     alert.addButton(withTitle: "Cancel").keyEquivalent = "\u{1b}"
     alert.addButton(withTitle: "Discard").keyEquivalent = ""
     return alert.runModal() == .alertSecondButtonReturn
@@ -14,8 +19,32 @@ func confirmDiscard(_ document: EditorDocument?, title: String) -> Bool {
 
 @MainActor
 final class StudioApplicationDelegate: NSObject, NSApplicationDelegate {
-    fileprivate weak var editorWindow: StudioWindowDelegate?
+    private let editors = NSHashTable<StudioWindowDelegate>.weakObjects()
+    private var pendingSnips: [(id: UUID, image: NSImage)] = []
     var hasActiveRecording = false
+    var captureInProgress = false
+    var clipboardGeneration = UUID()
+
+    fileprivate func register(_ editor: StudioWindowDelegate) {
+        editors.add(editor)
+    }
+
+    fileprivate func unregister(_ editor: StudioWindowDelegate) {
+        editors.remove(editor)
+    }
+
+    func storePendingSnip(_ image: NSImage) -> UUID {
+        // Cap captures that SwiftUI did not deliver to a window. Open documents own their images separately.
+        if pendingSnips.count == 4 { pendingSnips.removeFirst() }
+        let id = UUID()
+        pendingSnips.append((id, image))
+        return id
+    }
+
+    func takePendingSnip(_ id: UUID) -> NSImage? {
+        guard let index = pendingSnips.firstIndex(where: { $0.id == id }) else { return nil }
+        return pendingSnips.remove(at: index).image
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if hasActiveRecording {
@@ -26,7 +55,40 @@ final class StudioApplicationDelegate: NSObject, NSApplicationDelegate {
             alert.runModal()
             return .terminateCancel
         }
-        return confirmDiscard(editorWindow?.document, title: "Quit without saving?") ? .terminateNow : .terminateCancel
+        guard editors.allObjects.contains(where: { $0.document?.hasUnsavedChanges == true }) else {
+            return .terminateNow
+        }
+        return confirmDiscard(title: "Quit without saving?", detail: "Any unsaved changes to open snips will be lost.")
+            ? .terminateNow : .terminateCancel
+    }
+
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        menu.autoenablesItems = false
+        let closeSnips = menu.addItem(withTitle: "Close All Snips Without Saving…",
+                                      action: #selector(closeAllSnipsFromDock(_:)), keyEquivalent: "")
+        closeSnips.target = self
+        closeSnips.isEnabled = !openSnips.isEmpty
+        return menu
+    }
+
+    @objc func closeAllSnipsWithoutSaving() {
+        let snips = openSnips
+        guard !snips.isEmpty else { return }
+        if snips.contains(where: { $0.document?.hasUnsavedChanges == true }) {
+            guard confirmDiscard(title: "Close all snips without saving?",
+                                 detail: "Any unsaved changes to these snips will be lost.") else { return }
+        }
+        // This deliberate batch action already confirmed discarding any unsaved work.
+        for editor in snips { editor.window?.close() }
+    }
+
+    @objc private func closeAllSnipsFromDock(_ sender: Any?) {
+        closeAllSnipsWithoutSaving()
+    }
+
+    private var openSnips: [StudioWindowDelegate] {
+        editors.allObjects.filter { $0.window != nil && $0.document?.hasImage == true }
     }
 }
 
@@ -74,6 +136,7 @@ final class StudioCloseProtectionView: NSView {
 @MainActor
 fileprivate final class StudioWindowDelegate: NSObject, NSWindowDelegate {
     weak var document: EditorDocument?
+    private(set) weak var window: NSWindow?
     private weak var applicationDelegate: StudioApplicationDelegate?
     private weak var originalDelegate: (any NSWindowDelegate)?
 
@@ -84,9 +147,10 @@ fileprivate final class StudioWindowDelegate: NSObject, NSWindowDelegate {
 
     func install(on window: NSWindow) {
         guard window.delegate !== self else { return }
+        self.window = window
         originalDelegate = window.delegate
         window.delegate = self
-        applicationDelegate?.editorWindow = self
+        applicationDelegate?.register(self)
     }
 
     func remove(from window: NSWindow) {
@@ -106,9 +170,8 @@ fileprivate final class StudioWindowDelegate: NSObject, NSWindowDelegate {
     }
 
     private func unregisterWindow() {
-        if applicationDelegate?.editorWindow === self {
-            applicationDelegate?.editorWindow = nil
-        }
+        applicationDelegate?.unregister(self)
+        window = nil
     }
 
     // Preserve SwiftUI's optional window delegate callbacks.

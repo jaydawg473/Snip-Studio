@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 @MainActor
 struct StudioView: View {
     let applicationDelegate: StudioApplicationDelegate
+    let sessionID: UUID?
     @Environment(\.openWindow) private var openWindow
     @StateObject private var document = EditorDocument()
     @AppStorage(StudioSettings.autoCopy) private var autoCopy = true
@@ -112,6 +113,11 @@ struct StudioView: View {
         .sheet(isPresented: $reviewText) {
             textReview
         }
+        .focusedSceneValue(\.studioNewSnip, startNew)
+        .task {
+            guard let sessionID, let capturedImage = applicationDelegate.takePendingSnip(sessionID) else { return }
+            do { try finishCapture(with: capturedImage) } catch { report(error) }
+        }
         .onDisappear {
             captureTask?.cancel()
             exportTask?.cancel()
@@ -138,6 +144,14 @@ struct StudioView: View {
     }
 
     private var captureBar: some View {
+        GeometryReader { geometry in
+            captureRow(compact: geometry.size.width < 620)
+        }
+        .frame(height: 54)
+        .background(StudioColors.toolbar)
+    }
+
+    private func captureRow(compact: Bool) -> some View {
         HStack(spacing: 6) {
             Button { startNew() } label: {
                 Label("New", systemImage: "plus")
@@ -145,7 +159,6 @@ struct StudioView: View {
                     .frame(width: 86, alignment: .leading)
             }
             .buttonStyle(StudioButtonStyle(primary: true))
-            .keyboardShortcut("n", modifiers: .command)
             .disabled(busy)
             .help(videoMode ? "New recording (⌘N)" : "New snip (⌘N)")
 
@@ -157,7 +170,7 @@ struct StudioView: View {
             .disabled(busy)
 
             if !videoMode {
-                screenshotOptions
+                screenshotOptions(compact: compact)
             }
 
             Spacer(minLength: 2)
@@ -175,11 +188,10 @@ struct StudioView: View {
             fileOptions
         }
         .padding(.horizontal, 12)
-        .frame(height: 54)
-        .background(StudioColors.toolbar)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var screenshotOptions: some View {
+    private func screenshotOptions(compact: Bool) -> some View {
         HStack(spacing: 6) {
             Menu {
                 Picker("Capture mode", selection: $captureMode) {
@@ -188,12 +200,16 @@ struct StudioView: View {
                     }
                 }
             } label: {
-                Label(captureMode.title, systemImage: captureMode.icon)
-                    .font(.system(size: 12))
+                if compact {
+                    Image(systemName: captureMode.icon).font(.system(size: 16))
+                        .accessibilityLabel("Capture shape: \(captureMode.title)")
+                } else {
+                    Label(captureMode.title, systemImage: captureMode.icon).font(.system(size: 12))
+                }
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("Capture shape")
+            .help("Capture shape: \(captureMode.title)")
             .disabled(busy)
 
             Menu {
@@ -538,11 +554,19 @@ struct StudioView: View {
     }
 
     private func capture() {
-        guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
+        guard !busy else { return }
+        guard !applicationDelegate.captureInProgress else {
+            status = "Finish the capture in the other editor first."
+            return
+        }
+        applicationDelegate.captureInProgress = true
         let mode = captureMode
         let delay = captureDelay
         captureTask = Task { @MainActor in
-            defer { captureTask = nil }
+            defer {
+                applicationDelegate.captureInProgress = false
+                captureTask = nil
+            }
             do {
                 for seconds in (0..<delay).reversed() {
                     status = "Capture starts in \(seconds + 1)s."
@@ -550,8 +574,13 @@ struct StudioView: View {
                 }
                 status = mode == .region || mode == .window ? "Select what to capture." : "Capturing the screen…"
                 if let image = try await CaptureService.capture(mode) {
-                    try load(image, alreadySaved: false)
-                    if saveOriginals { saveOriginalCapture() }
+                    if document.hasImage {
+                        let newSession = applicationDelegate.storePendingSnip(image)
+                        openWindow(id: "studio", value: newSession)
+                        status = "Opened the capture in a new editor."
+                    } else {
+                        try finishCapture(with: image)
+                    }
                 } else {
                     status = "Capture canceled."
                 }
@@ -573,11 +602,17 @@ struct StudioView: View {
     }
 
     private func startNew() {
+        guard !busy else { return }
         if videoMode {
             openWindow(id: "recording")
         } else {
             capture()
         }
+    }
+
+    private func finishCapture(with image: NSImage) throws {
+        try load(image, alreadySaved: false)
+        if saveOriginals { saveOriginalCapture() }
     }
 
     private func openImage() {
@@ -649,6 +684,7 @@ struct StudioView: View {
 
     private func copyText(_ text: String) {
         automaticClipboardTask?.cancel()
+        applicationDelegate.clipboardGeneration = UUID()
         do {
             let item = NSPasteboardItem()
             guard item.setString(text, forType: .string) else { throw StudioError.copyFailed }
@@ -660,6 +696,7 @@ struct StudioView: View {
     private func copyRecognizedTable() {
         guard let recognizedLines, !recognizedLines.isEmpty else { return }
         automaticClipboardTask?.cancel()
+        applicationDelegate.clipboardGeneration = UUID()
         do {
             let result = try OCRTableClipboard.write(recognizedLines)
             status = "Copied \(result.rowCount) rows × \(result.columnCount) columns."
@@ -679,13 +716,15 @@ struct StudioView: View {
             return
         }
         guard autoCopy, let snapshot = try? document.pngSnapshot() else { return }
+        let generation = UUID()
+        applicationDelegate.clipboardGeneration = generation
         let expectedChangeCount = NSPasteboard.general.changeCount
         automaticClipboardTask = Task { @MainActor in
             do {
                 try await Task.sleep(for: .milliseconds(160))
                 let png = try await snapshot.pngData()
                 try Task.checkCancellation()
-                guard document.contentRevision == revision,
+                guard applicationDelegate.clipboardGeneration == generation, document.contentRevision == revision,
                       NSPasteboard.general.changeCount == expectedChangeCount else { return }
                 try copyPNG(png)
             } catch is CancellationError {
@@ -749,7 +788,11 @@ struct StudioView: View {
 
     private func exportImage(to url: URL? = nil, format: StudioFileFormat = .png) {
         guard !busy, document.hasImage else { return }
-        if url == nil { automaticClipboardTask?.cancel() }
+        if url == nil {
+            automaticClipboardTask?.cancel()
+            applicationDelegate.clipboardGeneration = UUID()
+        }
+        let clipboardGeneration = applicationDelegate.clipboardGeneration
         do {
             let snapshot = try document.pngSnapshot()
             status = url == nil ? "Preparing image for the clipboard…" : "Saving \(format.title)…"
@@ -766,6 +809,10 @@ struct StudioView: View {
                     } else {
                         let png = try await snapshot.pngData()
                         try Task.checkCancellation()
+                        guard applicationDelegate.clipboardGeneration == clipboardGeneration else {
+                            status = "A newer clipboard action took precedence."
+                            return
+                        }
                         try copyPNG(png)
                         status = "Image copied."
                     }
