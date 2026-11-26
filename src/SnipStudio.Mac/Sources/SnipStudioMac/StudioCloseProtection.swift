@@ -15,9 +15,18 @@ func confirmDiscard(_ document: EditorDocument?, title: String) -> Bool {
 @MainActor
 final class StudioApplicationDelegate: NSObject, NSApplicationDelegate {
     fileprivate weak var editorWindow: StudioWindowDelegate?
+    var hasActiveRecording = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        confirmDiscard(editorWindow?.document, title: "Quit without saving?") ? .terminateNow : .terminateCancel
+        if hasActiveRecording {
+            let alert = NSAlert()
+            alert.messageText = "Stop recording before quitting."
+            alert.informativeText = "Open Record video and select Stop to save the recording."
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+            return .terminateCancel
+        }
+        return confirmDiscard(editorWindow?.document, title: "Quit without saving?") ? .terminateNow : .terminateCancel
     }
 }
 

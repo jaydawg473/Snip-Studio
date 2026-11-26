@@ -29,5 +29,15 @@ struct SnipStudioMacApp: App {
         }
         .defaultSize(width: 900, height: 640)
         .windowResizability(.contentMinSize)
+
+        Window("Record video", id: "recording") {
+            if #available(macOS 15.0, *) {
+                StudioRecordingView(applicationDelegate: applicationDelegate)
+            } else {
+                Text("Video recording requires macOS 15 or later.").padding(24)
+            }
+        }
+        .defaultSize(width: 465, height: 135)
+        .windowResizability(.contentSize)
     }
 }

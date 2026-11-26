@@ -19,6 +19,7 @@ jobs:
         run: |
           swift --version
           plutil -lint src/SnipStudio.Mac/Info.plist
+          plutil -lint src/SnipStudio.Mac/Trial.entitlements
           bash -n src/SnipStudio.Mac/stage-app.sh
           bash -n src/SnipStudio.Mac/package-trial.sh
       - name: Build and validate app bundle layout

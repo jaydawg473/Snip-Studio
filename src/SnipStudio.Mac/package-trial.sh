@@ -32,7 +32,8 @@ bundle="$stage/Snip Studio.app"
 mkdir "$stage"
 bash "$project/stage-app.sh" "$bundle"
 
-codesign --options runtime --timestamp --sign "$SNIPSTUDIO_SIGNING_IDENTITY" "$bundle"
+codesign --options runtime --timestamp --entitlements "$project/Trial.entitlements" \
+    --sign "$SNIPSTUDIO_SIGNING_IDENTITY" "$bundle"
 codesign --verify --strict --verbose=2 "$bundle"
 "$bundle/Contents/MacOS/SnipStudioMac" --self-check
 

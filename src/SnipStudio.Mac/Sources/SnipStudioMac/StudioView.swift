@@ -11,6 +11,7 @@ struct StudioView: View {
     @AppStorage(StudioSettings.saveOriginals) private var saveOriginals = true
     @AppStorage(StudioSettings.fitOnLoad) private var fitOnLoad = true
     @State private var captureMode = CaptureMode.region
+    @State private var videoMode = false
     @State private var captureDelay = 0
     @State private var captureTask: Task<Void, Never>?
     @State private var tool = StudioTool.pen
@@ -138,7 +139,7 @@ struct StudioView: View {
 
     private var captureBar: some View {
         HStack(spacing: 6) {
-            Button { capture() } label: {
+            Button { startNew() } label: {
                 Label("New", systemImage: "plus")
                     .font(.system(size: 14, weight: .semibold))
                     .frame(width: 86, alignment: .leading)
@@ -146,8 +147,40 @@ struct StudioView: View {
             .buttonStyle(StudioButtonStyle(primary: true))
             .keyboardShortcut("n", modifiers: .command)
             .disabled(busy)
-            .help("New snip (⌘N)")
+            .help(videoMode ? "New recording (⌘N)" : "New snip (⌘N)")
 
+            HStack(spacing: 0) {
+                iconButton("Screenshot mode", symbol: "camera", selected: !videoMode) { videoMode = false }
+                iconButton("Video mode", symbol: "video", selected: videoMode) { chooseVideoMode() }
+            }
+            .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 6))
+            .disabled(busy)
+
+            if !videoMode {
+                screenshotOptions
+            }
+
+            Spacer(minLength: 2)
+            iconButton("Open image (⌘O)", symbol: "folder", action: openImage)
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(busy)
+            iconButton("Paste image (⌘V)", symbol: "doc.on.clipboard", action: pasteImage)
+                .keyboardShortcut("v", modifiers: .command)
+                .disabled(busy)
+            iconButton("Save PNG (⌘S)", symbol: "square.and.arrow.down", action: saveImage)
+                .keyboardShortcut("s", modifiers: .command)
+                .disabled(busy || !document.hasImage)
+            iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
+                .disabled(busy || !document.hasImage)
+            fileOptions
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 54)
+        .background(StudioColors.toolbar)
+    }
+
+    private var screenshotOptions: some View {
+        HStack(spacing: 6) {
             Menu {
                 Picker("Capture mode", selection: $captureMode) {
                     ForEach([CaptureMode.region, .window, .fullScreen, .allDisplays], id: \.self) { mode in
@@ -178,44 +211,31 @@ struct StudioView: View {
             .fixedSize()
             .help("Capture delay")
             .disabled(busy)
-
-            Spacer(minLength: 2)
-            iconButton("Open image (⌘O)", symbol: "folder", action: openImage)
-                .keyboardShortcut("o", modifiers: .command)
-                .disabled(busy)
-            iconButton("Paste image (⌘V)", symbol: "doc.on.clipboard", action: pasteImage)
-                .keyboardShortcut("v", modifiers: .command)
-                .disabled(busy)
-            iconButton("Save PNG (⌘S)", symbol: "square.and.arrow.down", action: saveImage)
-                .keyboardShortcut("s", modifiers: .command)
-                .disabled(busy || !document.hasImage)
-            iconButton("Copy image", symbol: "doc.on.doc") { exportImage() }
-                .disabled(busy || !document.hasImage)
-            Menu {
-                Button("Open video…") { openVideo() }
-                Menu("Save image as…") {
-                    ForEach(StudioFileFormat.allCases, id: \.self) { format in
-                        Button(format.title) { saveImage(as: format) }
-                    }
-                }
-                .disabled(busy || !document.hasImage)
-                Button("Print image…") { printImage() }.disabled(busy || !document.hasImage)
-                Divider()
-                SettingsLink { Text("Settings…") }
-                Button("Check for Updates…") { checkForUpdates() }.disabled(updateTask != nil)
-                Button("Snip Studio Help") { openHelp() }
-            } label: {
-                Image(systemName: "ellipsis").font(.system(size: 17))
-                    .accessibilityLabel("More file actions")
-            }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .help("More file actions")
         }
-        .padding(.horizontal, 12)
-        .frame(height: 54)
-        .background(StudioColors.toolbar)
+    }
+
+    private var fileOptions: some View {
+        Menu {
+            Button("Open video…") { openVideo() }
+            Menu("Save image as…") {
+                ForEach(StudioFileFormat.allCases, id: \.self) { format in
+                    Button(format.title) { saveImage(as: format) }
+                }
+            }
+            .disabled(busy || !document.hasImage)
+            Button("Print image…") { printImage() }.disabled(busy || !document.hasImage)
+            Divider()
+            SettingsLink { Text("Settings…") }
+            Button("Check for Updates…") { checkForUpdates() }.disabled(updateTask != nil)
+            Button("Snip Studio Help") { openHelp() }
+        } label: {
+            Image(systemName: "ellipsis").font(.system(size: 17))
+                .accessibilityLabel("More file actions")
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("More file actions")
     }
 
     private var editingBar: some View {
@@ -540,6 +560,23 @@ struct StudioView: View {
             } catch {
                 report(error)
             }
+        }
+    }
+
+    private func chooseVideoMode() {
+        if #available(macOS 15.0, *) {
+            videoMode = true
+            if !document.hasImage { status = "Select New to choose a recording source." }
+        } else {
+            errorMessage = "Video recording requires macOS 15 or later. Existing videos can still open for review."
+        }
+    }
+
+    private func startNew() {
+        if videoMode {
+            openWindow(id: "recording")
+        } else {
+            capture()
         }
     }
 
