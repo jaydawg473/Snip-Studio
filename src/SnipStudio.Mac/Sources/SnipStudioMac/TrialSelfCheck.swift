@@ -11,6 +11,8 @@ enum TrialSelfCheck {
             try await checkEditor()
             try StudioTextAnnotationSelfCheck.run()
             try StudioScrollStitcher.selfCheck()
+            try await StudioProjectFile.selfCheck()
+            try await checkRasterPatches()
             try await checkShapesAndEraser()
             try await checkCrop()
             try await checkObjectEditing()
@@ -24,6 +26,29 @@ enum TrialSelfCheck {
             FileHandle.standardError.write(Data("Mac trial check failed: \(error)\n".utf8))
             return 1
         }
+    }
+
+    private static func checkRasterPatches() async throws {
+        let background = try whiteBitmap(width: 30, height: 20)
+        guard let source = background.makeImage() else { throw CheckFailure("create raster patch fixture") }
+        let document = EditorDocument()
+        try document.replaceImage(NSImage(cgImage: source, size: CGSize(width: 30, height: 20)), alreadySaved: true)
+        let cut = CGRect(x: 2, y: 3, width: 9, height: 6)
+        let cutApplied = try await document.patchRaster([cut], opaque: false)
+        try require(cutApplied && document.hasUnsavedChanges, "transparent area removal creates an undoable edit")
+        var exported = try await decodedPNG(from: document)
+        let removed = try pixel(in: exported, x: 4, y: 5)
+        let untouched = try pixel(in: exported, x: 4, y: 14)
+        try require(removed[3] == 0, "pixels in the removed area are transparent")
+        try require(untouched[3] == 255, "the opposite image row stays opaque")
+        document.undo()
+        try require(!document.hasUnsavedChanges, "Undo restores original raster identity")
+        let redactApplied = try await document.patchRaster([cut], opaque: true)
+        try require(redactApplied, "redaction applies")
+        exported = try await decodedPNG(from: document)
+        let redacted = try pixel(in: exported, x: 4, y: 5)
+        try require(redacted == [0, 0, 0, 255], "redaction overwrites the actual exported color and alpha channels")
+        print("PASS: pixels removed and redacted in output and Undo restores source")
     }
 
     private static func checkObjectEditing() async throws {

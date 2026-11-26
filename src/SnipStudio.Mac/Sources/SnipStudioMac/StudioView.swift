@@ -38,6 +38,8 @@ struct StudioView: View {
     @State private var openedImageRevision: UUID?
     @State private var recognizedLines: [RecognizedLine]?
     @State private var reviewText = false
+    @State private var reviewedContacts: [OCRContact] = []
+    @State private var reviewRedactions = false
     @State private var status = "Ready."
     @State private var errorMessage: String?
     @State private var updateTask: Task<Void, Never>?
@@ -65,35 +67,10 @@ struct StudioView: View {
         }
     }
     private static let zoomPresets = [25, 50, 75, 100, 125, 150, 200, 300, 400]
+    private static let projectType = UTType(exportedAs: "com.automationforge.snipstudio.editable-mac")
 
     var body: some View {
-        VStack(spacing: 0) {
-            captureBar
-            if document.hasImage {
-                editingBar
-                if showOptions { optionsBar }
-                SnipCanvas(
-                    document: document,
-                    inkColor: drawingColor,
-                    inkWidth: drawingWidth,
-                    zoom: zoomPercent.map { CGFloat($0) / 100 },
-                    allowsDrawing: tool != .move && tool != .textActions && tool != .crop && tool != .text,
-                    activeShape: tool == .shape ? shape : nil,
-                    lineStyle: lineStyle,
-                    erasesAnnotations: tool == .eraser,
-                    cropSelection: tool == .crop ? $cropBounds : nil,
-                    annotationSelection: tool == .move ? $selectedAnnotationID : nil,
-                    textDraft: tool == .text ? $textDraft : nil,
-                    onTextTap: tool == .text ? beginText : nil,
-                    recognizedLines: tool == .textActions ? recognizedLines ?? [] : []
-                ) { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
-            } else {
-                Text("Press ⌘N to take a screenshot.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            statusBar
-        }
+        workspace
         .background(StudioColors.canvas)
         .frame(minWidth: 520, minHeight: document.hasImage ? 320 : 260)
         .background {
@@ -121,6 +98,14 @@ struct StudioView: View {
         .sheet(isPresented: $reviewText) {
             textReview
         }
+        .sheet(isPresented: $reviewRedactions) {
+            if let image = document.image {
+                StudioRedactionReview(image: image, contacts: reviewedContacts) { contacts in
+                    let size = CGSize(width: image.width, height: image.height)
+                    patchRaster(contacts.map { $0.pixelRegion(in: size) }, opaque: true)
+                }
+            }
+        }
         .focusedSceneValue(\.studioNewSnip, startNew)
         .task {
             guard let sessionID, let capturedImage = applicationDelegate.takePendingSnip(sessionID) else { return }
@@ -145,10 +130,51 @@ struct StudioView: View {
             recognizedLines = nil
             if tool == .crop {
                 cropBounds = fullImageBounds
+            } else if tool == .removeArea {
+                selectTool(.removeArea)
             } else if tool == .textActions {
                 selectTool(.pen)
             }
         }
+    }
+
+    private var workspace: some View {
+        VStack(spacing: 0) {
+            captureBar
+            if document.hasImage {
+                editingBar
+                if showOptions { optionsBar }
+                editorCanvas
+            } else {
+                Text("Press ⌘N to take a screenshot.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            statusBar
+        }
+    }
+
+    private var editorCanvas: SnipCanvas {
+        let textTap: ((CGPoint) -> Void)? = tool == .text ? { beginText(at: $0) } : nil
+        let zoom = zoomPercent.map { CGFloat($0) / 100 }
+        let inkEnabled = tool == .pen || tool == .highlight || tool == .shape || tool == .eraser
+        let ocrLines: [RecognizedLine] = tool == .textActions ? recognizedLines ?? [] : []
+        return SnipCanvas(
+            document: document,
+            inkColor: drawingColor,
+            inkWidth: drawingWidth,
+            zoom: zoom,
+            allowsDrawing: inkEnabled,
+            activeShape: tool == .shape ? shape : nil,
+            lineStyle: lineStyle,
+            erasesAnnotations: tool == .eraser,
+            cropSelection: tool == .crop || tool == .removeArea ? $cropBounds : nil,
+            annotationSelection: tool == .move ? $selectedAnnotationID : nil,
+            textDraft: tool == .text ? $textDraft : nil,
+            onTextTap: textTap,
+            recognizedLines: ocrLines,
+            onZoomChanged: { scale in displayedZoom = max(1, Int((scale * 100).rounded())) }
+        )
     }
 
     private var captureBar: some View {
@@ -262,6 +288,7 @@ struct StudioView: View {
                 }
             }
             .disabled(fileActionsDisabled || !document.hasImage)
+            Button("Save editable Mac snip…") { saveProject() }.disabled(fileActionsDisabled || !document.hasImage)
             Button("Print image…") { printImage() }.disabled(fileActionsDisabled || !document.hasImage)
             Button("Import external editor copy…") { importWorkingCopy() }.disabled(fileActionsDisabled || externalWorkingCopy == nil)
             Divider()
@@ -304,6 +331,7 @@ struct StudioView: View {
             toolButton(.text, label: "Add or edit text", symbol: "textformat")
             toolButton(.eraser, label: "Eraser", symbol: "eraser")
             toolButton(.crop, label: "Crop", symbol: "crop").disabled(busy)
+            toolButton(.removeArea, label: "Remove area", symbol: "rectangle.dashed").disabled(busy)
             Divider().frame(height: 20).padding(.horizontal, 4)
             iconButton("Undo annotation", symbol: "arrow.uturn.backward", action: document.undo)
                 .disabled(!document.canUndo)
@@ -376,10 +404,17 @@ struct StudioView: View {
                 }
                 .buttonStyle(StudioButtonStyle())
                 .disabled(recognizedText.isEmpty || exportTask != nil)
-                Button { reviewText = true } label: {
-                    Label("Review text…", systemImage: "text.alignleft")
+                Menu {
+                    Button("Email addresses and phone numbers") { redactContacts() }
+                    Button("Email addresses") { redactContacts(kind: .email) }
+                    Button("Phone numbers") { redactContacts(kind: .phone) }
+                } label: {
+                    Label("Quick redact", systemImage: "rectangle.and.pencil.and.ellipsis")
                 }
-                .buttonStyle(StudioButtonStyle())
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .disabled(recognizedText.isEmpty || busy)
+                iconButton("Review text", symbol: "text.alignleft") { reviewText = true }
                 .disabled(recognizedText.isEmpty)
                 Spacer(minLength: 0)
                 iconButton("Close text actions", symbol: "xmark") { selectTool(.pen) }
@@ -389,6 +424,9 @@ struct StudioView: View {
             .background(StudioColors.options)
         case .eraser:
             HStack {
+                Button("Erase all annotations") { document.eraseAllAnnotations() }
+                    .buttonStyle(StudioButtonStyle())
+                    .disabled(document.strokes.isEmpty)
                 Text("Click or drag over an annotation to erase it.")
                     .font(.system(size: 12))
                 Spacer(minLength: 0)
@@ -397,14 +435,16 @@ struct StudioView: View {
             .padding(.horizontal, 12)
             .frame(height: 40)
             .background(StudioColors.options)
-        case .crop:
+        case .crop, .removeArea:
             HStack(spacing: 6) {
-                Button { applyCrop() } label: {
-                    Label("Apply crop", systemImage: "checkmark")
+                Button {
+                    if tool == .crop { applyCrop() } else { patchRaster([cropBounds], opaque: false) }
+                } label: {
+                    Label(tool == .crop ? "Apply crop" : "Remove selected area", systemImage: "checkmark")
                 }
                 .buttonStyle(StudioButtonStyle())
                 .keyboardShortcut(.defaultAction)
-                .disabled(cropBounds.isEmpty || cropBounds == fullImageBounds || busy)
+                .disabled(cropBounds.isEmpty || (tool == .crop && cropBounds == fullImageBounds) || busy)
                 Button { selectTool(.pen) } label: {
                     Label("Cancel", systemImage: "xmark")
                 }
@@ -604,6 +644,11 @@ struct StudioView: View {
             cropBounds = fullImageBounds
             zoomPercent = nil
             status = "Drag the crop edges, then select Apply crop."
+        case .removeArea:
+            let full = fullImageBounds
+            cropBounds = full.insetBy(dx: full.width / 4, dy: full.height / 4).integral.intersection(full)
+            zoomPercent = nil
+            status = "Adjust the rectangle to choose which source pixels to remove."
         case .textActions: break
         }
     }
@@ -731,10 +776,33 @@ struct StudioView: View {
     private func openImage() {
         guard !busy, confirmDiscard(document, title: "Replace the current screenshot?") else { return }
         let panel = NSOpenPanel()
-        panel.allowedContentTypes = [.image]
+        panel.allowedContentTypes = [.image, Self.projectType]
         panel.allowsMultipleSelection = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        openImage(at: url)
+        openImageOrProject(url)
+    }
+
+    private func openImageOrProject(_ url: URL) {
+        if url.pathExtension.caseInsensitiveCompare(StudioProjectFile.filenameExtension) == .orderedSame {
+            openProject(url)
+        } else {
+            openImage(at: url)
+        }
+    }
+
+    private func openProject(_ url: URL) {
+        status = "Opening editable Mac snip…"
+        exportTask = Task { @MainActor in
+            defer { exportTask = nil }
+            do {
+                let contents = try await StudioProjectFile.load(from: url)
+                try await document.openProject(contents)
+                presentLoadedImage(alreadySaved: true)
+                recordRecent(url)
+            } catch is CancellationError {
+                return
+            } catch { report(error) }
+        }
     }
 
     private func openImage(at url: URL, retainsWorkingCopy: Bool = false) {
@@ -776,7 +844,7 @@ struct StudioView: View {
         if UTType(filenameExtension: url.pathExtension)?.conforms(to: .movie) == true {
             openRecentVideo(url)
         } else if confirmDiscard(document, title: "Replace the current screenshot?") {
-            openImage(at: url)
+            openImageOrProject(url)
         }
     }
 
@@ -788,6 +856,10 @@ struct StudioView: View {
 
     private func load(_ image: NSImage, alreadySaved: Bool) throws {
         try document.replaceImage(image, alreadySaved: alreadySaved)
+        presentLoadedImage(alreadySaved: alreadySaved)
+    }
+
+    private func presentLoadedImage(alreadySaved: Bool) {
         openedImageRevision = alreadySaved ? document.contentRevision : nil
         recognizedLines = nil
         externalWorkingCopy = nil
@@ -845,6 +917,31 @@ struct StudioView: View {
         } catch { report(error) }
     }
 
+    private func redactContacts(kind: OCRContact.Kind? = nil) {
+        reviewedContacts = (recognizedLines?.flatMap(\.contacts) ?? []).filter { kind == nil || $0.kind == kind }
+        guard !reviewedContacts.isEmpty else {
+            status = "No matching email addresses or phone numbers were recognized."
+            return
+        }
+        reviewRedactions = true
+    }
+
+    private func patchRaster(_ regions: [CGRect], opaque: Bool) {
+        guard !busy, !regions.isEmpty else { return }
+        status = opaque ? "Applying redactions…" : "Removing selected pixels…"
+        exportTask = Task { @MainActor in
+            defer { exportTask = nil }
+            do {
+                if try await document.patchRaster(regions, opaque: opaque) {
+                    selectTool(.pen)
+                    status = opaque ? "Redactions applied. Review the screenshot before sharing." : "Area removed. Use Undo to restore it."
+                }
+            } catch is CancellationError {
+                return
+            } catch { report(error) }
+        }
+    }
+
     private func copy(_ item: NSPasteboardItem) throws {
         let clipboard = NSPasteboard.general
         clipboard.clearContents()
@@ -899,6 +996,29 @@ struct StudioView: View {
 
     private func saveImage() {
         saveImage(as: .png)
+    }
+
+    private func saveProject() {
+        guard !fileActionsDisabled, document.hasImage else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [Self.projectType]
+        panel.nameFieldStringValue = "Snip.\(StudioProjectFile.filenameExtension)"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            let snapshot = try document.pngSnapshot()
+            status = "Saving editable Mac snip…"
+            exportTask = Task { @MainActor in
+                defer { exportTask = nil }
+                do {
+                    try await snapshot.writeProject(to: url)
+                    document.markSaved(snapshot)
+                    recordRecent(url)
+                    status = document.hasUnsavedChanges ? "Saved an earlier revision. Newer edits are unsaved." : "Editable Mac snip saved."
+                } catch is CancellationError {
+                    status = "Save canceled."
+                } catch { report(error) }
+            }
+        } catch { report(error) }
     }
 
     private func saveImage(as format: StudioFileFormat) {

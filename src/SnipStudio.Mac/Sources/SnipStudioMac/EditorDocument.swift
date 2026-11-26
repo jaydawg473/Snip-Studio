@@ -41,6 +41,30 @@ struct InkStroke: Identifiable, Sendable {
         textNote = note
     }
 
+    fileprivate init(projectRecord record: StudioProjectAnnotation) throws {
+        guard let first = record.points.first, let lineStyle = SnipLineStyle(rawValue: record.lineStyle) else {
+            throw EditorDocumentError.invalidProjectAnnotation
+        }
+        let shape = record.shape.flatMap(SnipShape.init(rawValue:))
+        guard record.shape == nil || shape != nil else { throw EditorDocumentError.invalidProjectAnnotation }
+        let color = CGColor(red: record.red, green: record.green, blue: record.blue, alpha: record.alpha)
+        self.init(color: color, width: record.width, at: first, shape: shape, lineStyle: lineStyle)
+        points = record.points
+        quarterTurns = record.quarterTurns
+        textNote = record.text
+        guard prepareForCommit() else { throw EditorDocumentError.invalidProjectAnnotation }
+    }
+
+    fileprivate func projectRecord() throws -> StudioProjectAnnotation {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let components = color.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+              components.count == 4 else { throw EditorDocumentError.invalidProjectAnnotation }
+        return StudioProjectAnnotation(points: points, red: components[0], green: components[1],
+                                       blue: components[2], alpha: components[3], width: width,
+                                       shape: shape?.rawValue, lineStyle: lineStyle.rawValue,
+                                       quarterTurns: quarterTurns, text: textNote)
+    }
+
     mutating func extend(to point: CGPoint) {
         guard points.last != point else { return }
         committedOutline = nil
@@ -233,6 +257,8 @@ enum EditorDocumentError: LocalizedError {
     case renderFailed
     case encodeFailed
     case unsupportedText
+    case invalidProjectAnnotation
+    case rasterChanged
 
     var errorDescription: String? {
         switch self {
@@ -243,6 +269,8 @@ enum EditorDocumentError: LocalizedError {
         case .renderFailed: "The edited snip could not be rendered."
         case .encodeFailed: "The snip could not be encoded as a PNG."
         case .unsupportedText: "Enter text that the selected font can display. Bitmap-only emoji and unsupported characters can’t be applied as editable text."
+        case .invalidProjectAnnotation: "The editable snip contains an annotation that could not be restored safely."
+        case .rasterChanged: "The screenshot changed before this action finished. Try again."
         }
     }
 }
@@ -275,6 +303,18 @@ final class EditorDocument: ObservableObject {
               raster.width > 0, raster.height > 0 else {
             throw EditorDocumentError.unreadableImage
         }
+        try replace(raster: raster, annotations: [], alreadySaved: alreadySaved)
+    }
+
+    func openProject(_ contents: StudioProjectContents) async throws {
+        let annotations = try await Task.detached(priority: .userInitiated) {
+            try contents.annotations.map(InkStroke.init(projectRecord:))
+        }.value
+        try Task.checkCancellation()
+        try replace(raster: contents.image, annotations: annotations, alreadySaved: true)
+    }
+
+    private func replace(raster: CGImage, annotations: [InkStroke], alreadySaved: Bool) throws {
         guard raster.width <= 64_000_000 / raster.height else {
             throw EditorDocumentError.imageTooLarge
         }
@@ -285,7 +325,7 @@ final class EditorDocument: ObservableObject {
         imageRevision = UUID()
         rasterRevision = imageRevision
         savedRevision = alreadySaved ? imageRevision : nil
-        strokes.removeAll()
+        strokes = annotations
         image = raster
     }
 
@@ -308,8 +348,50 @@ final class EditorDocument: ObservableObject {
         // The canvas and exporter clip surviving objects to the cropped raster's bounds.
         let original = RasterState(image: image, revision: rasterRevision, strokes: strokes)
         let result = RasterState(image: cropped, revision: UUID(), strokes: remaining)
-        commit(.crop(before: original, after: result))
+        commit(.raster(before: original, after: result))
         return true
+    }
+
+    @discardableResult
+    func patchRaster(_ regions: [CGRect], opaque: Bool) async throws -> Bool {
+        guard let source = image else { throw EditorDocumentError.noImage }
+        let stamp = rasterRevision
+        let bounds = CGRect(x: 0, y: 0, width: source.width, height: source.height)
+        let rects = regions.compactMap { region -> CGRect? in
+            let clipped = region.standardized.intersection(bounds)
+            guard !clipped.isEmpty, clipped.minX.isFinite, clipped.minY.isFinite,
+                  clipped.maxX.isFinite, clipped.maxY.isFinite else { return nil }
+            return clipped.integral
+        }
+        guard !rects.isEmpty else { return false }
+        let result = try await Task.detached(priority: .userInitiated) {
+            guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+                  let context = CGContext(data: nil, width: source.width, height: source.height,
+                                          bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+                throw EditorDocumentError.renderFailed
+            }
+            context.draw(source, in: bounds)
+            context.setFillColor(CGColor(gray: 0, alpha: 1))
+            for rect in rects {
+                let flipped = CGRect(x: rect.minX, y: bounds.height - rect.maxY, width: rect.width, height: rect.height)
+                if opaque { context.fill(flipped) } else { context.clear(flipped) }
+            }
+            guard let rendered = context.makeImage() else { throw EditorDocumentError.renderFailed }
+            return rendered
+        }.value
+        try Task.checkCancellation()
+        guard rasterRevision == stamp else { throw EditorDocumentError.rasterChanged }
+        cancelStroke()
+        let original = RasterState(image: source, revision: rasterRevision, strokes: strokes)
+        let edited = RasterState(image: result, revision: UUID(), strokes: strokes)
+        commit(.raster(before: original, after: edited))
+        return true
+    }
+
+    func eraseAllAnnotations() {
+        cancelStroke()
+        if !strokes.isEmpty { commit(.eraseAll(strokes)) }
     }
 
     func beginStroke(at point: CGPoint, color: CGColor, width: CGFloat) {
@@ -421,7 +503,8 @@ final class EditorDocument: ObservableObject {
         case let .insert(stroke): strokes.append(stroke)
         case let .erase(index, _): strokes.remove(at: index)
         case let .replace(index, _, after): strokes[index] = after
-        case let .crop(_, after): setRaster(after)
+        case let .raster(_, after): setRaster(after)
+        case .eraseAll: strokes.removeAll()
         }
     }
 
@@ -439,7 +522,8 @@ final class EditorDocument: ObservableObject {
         case .insert: strokes.removeLast()
         case let .erase(index, stroke): strokes.insert(stroke, at: index)
         case let .replace(index, before, _): strokes[index] = before
-        case let .crop(before, _): setRaster(before)
+        case let .raster(before, _): setRaster(before)
+        case let .eraseAll(original): strokes = original
         }
     }
 
@@ -468,7 +552,8 @@ final class EditorDocument: ObservableObject {
         case insert(InkStroke)
         case erase(index: Int, stroke: InkStroke)
         case replace(index: Int, before: InkStroke, after: InkStroke)
-        case crop(before: RasterState, after: RasterState)
+        case raster(before: RasterState, after: RasterState)
+        case eraseAll([InkStroke])
     }
 
     private struct RasterState {
@@ -495,6 +580,10 @@ struct PngSnapshot: Sendable {
 
     func writePNG(to url: URL) async throws {
         try await encodePNG { try $0.write(to: url, options: .atomic) }
+    }
+
+    func writeProject(to url: URL) async throws {
+        try await StudioProjectFile.save(image: image, annotations: strokes.map { try $0.projectRecord() }, to: url)
     }
 
     private func encodePNG<Result: Sendable>(_ consume: @escaping @Sendable (Data) throws -> Result) async throws -> Result {

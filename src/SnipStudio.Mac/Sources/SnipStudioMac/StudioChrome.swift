@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 enum StudioTool {
-    case move, pen, highlight, shape, text, eraser, crop, textActions
+    case move, pen, highlight, shape, text, eraser, crop, removeArea, textActions
 }
 
 struct StudioTextDraft {

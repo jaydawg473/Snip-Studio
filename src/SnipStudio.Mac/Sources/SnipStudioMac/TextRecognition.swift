@@ -1,9 +1,27 @@
 import CoreGraphics
+import Foundation
 import Vision
+
+struct OCRContact: Identifiable, Sendable {
+    enum Kind: Hashable, Sendable { case email, phone }
+
+    let id = UUID()
+    let kind: Kind
+    let value: String
+    // Vision reports approximate word bounds in normalized, bottom-left coordinates.
+    let bounds: CGRect
+}
 
 struct RecognizedLine: Sendable {
     let text: String
     let bounds: CGRect
+    let contacts: [OCRContact]
+
+    init(text: String, bounds: CGRect, contacts: [OCRContact] = []) {
+        self.text = text
+        self.bounds = bounds
+        self.contacts = contacts
+    }
 }
 
 enum TextRecognition {
@@ -21,12 +39,37 @@ enum TextRecognition {
             let handler = VNImageRequestHandler(cgImage: image, orientation: .up)
             try handler.perform([request])
 
+            let detector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue |
+                                                NSTextCheckingResult.CheckingType.phoneNumber.rawValue)
             let lines = (request.results ?? []).compactMap { observation -> RecognizedLine? in
-                guard let text = observation.topCandidates(1).first?.string else { return nil }
-                return RecognizedLine(text: text, bounds: observation.boundingBox)
+                guard let candidate = observation.topCandidates(1).first else { return nil }
+                return RecognizedLine(text: candidate.string, bounds: observation.boundingBox,
+                                      contacts: detector.map { contacts(in: candidate, with: $0) } ?? [])
             }
             return orderRows(lines)
         }.value
+    }
+
+    private static func contacts(in candidate: VNRecognizedText, with detector: NSDataDetector) -> [OCRContact] {
+        let text = candidate.string
+        let imageBounds = CGRect(x: 0, y: 0, width: 1, height: 1)
+        return detector.matches(in: text, range: NSRange(location: 0, length: text.utf16.count)).compactMap { match in
+            let kind: OCRContact.Kind
+            switch match.resultType {
+            case .link where match.url?.scheme?.lowercased() == "mailto": kind = .email
+            case .phoneNumber where match.phoneNumber != nil: kind = .phone
+            default: return nil
+            }
+            guard let range = Range(match.range, in: text), !range.isEmpty,
+                  let observation = try? candidate.boundingBox(for: range) else { return nil }
+            let bounds = observation.boundingBox
+            guard bounds.minX.isFinite, bounds.minY.isFinite, bounds.maxX.isFinite, bounds.maxY.isFinite else {
+                return nil
+            }
+            let clipped = bounds.intersection(imageBounds)
+            guard !clipped.isNull, !clipped.isEmpty else { return nil }
+            return OCRContact(kind: kind, value: String(text[range]), bounds: clipped)
+        }
     }
 
     static func orderRows(_ lines: [RecognizedLine]) -> [RecognizedLine] {
